@@ -1,3 +1,4 @@
+#include "rfid/reader/rf_workspace.h"
 #include "ble_hci.h"
 #include "ble_advdata.h"
 #include "ble_advertising.h"
@@ -16,6 +17,7 @@
 #include "peer_manager_handler.h"
 
 #include "app_timer.h"
+#include "bsp_wdt.h"
 #include "app_util_platform.h"
 
 #include "syssleep.h"
@@ -23,6 +25,7 @@
 #include "dataframe.h"
 #include "hw_connect.h"
 #include "settings.h"
+#include "tag_emulation.h"
 
 #define NRF_LOG_MODULE_NAME ble_main
 #include "nrf_log.h"
@@ -68,8 +71,8 @@ NRF_LOG_MODULE_REGISTER();
 #define ADC_RES_12BIT                  16383 //!< Maximum digital value for 14-bit ADC conversion.
 #define ADC_PRE_SCALING_COMPENSATION   12    //!< The ADC is configured to use VDD with 1/3 prescaling as input. And hence the result of conversion is to be multiplied by 3 to get the actual value of the battery voltage.
 #define ADC_CHANNEL                    0
-#define ADC_BUF_SIZE                   2048
-#define ADC_BUF_COUNT                  2
+#define ADC_BUF_SIZE                   RF_LF_ADC_SAMPLES
+#define ADC_BUF_COUNT                  RF_LF_ADC_BANKS
 
 
 /**@brief Macro to convert the result of ADC conversion in millivolts.
@@ -90,7 +93,7 @@ BLE_ADVERTISING_DEF(m_advertising);                                             
 
 uint16_t          batt_lvl_in_milli_volts = 0;
 uint8_t           percentage_batt_lvl = 0;
-static nrf_saadc_value_t adc_buf[ADC_BUF_COUNT][ADC_BUF_SIZE];
+static bool rf_only_boot;
 static uint16_t   m_conn_handle          = BLE_CONN_HANDLE_INVALID;                 /**< Handle of the current connection. */
 static uint16_t   m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;            /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 lf_adc_callback_t m_lf_adc_callback      = NULL;
@@ -118,6 +121,7 @@ static uint32_t next_free_buf_index(void) {
  * @details This function will set up the ble connect passkey.
  */
 void set_ble_connect_key(uint8_t *key) {
+    if (rf_only_boot) return;
     static uint8_t passkey[BLE_PAIRING_KEY_LEN];
     memcpy(passkey, key, BLE_PAIRING_KEY_LEN);
     m_static_pin_option.gap_opt.passkey.p_passkey = passkey;
@@ -184,7 +188,7 @@ static void nus_data_handler(ble_nus_evt_t *p_evt) {
     if (p_evt->type == BLE_NUS_EVT_RX_DATA) {
         NRF_LOG_DEBUG("Received data from BLE NUS.");
         NRF_LOG_HEXDUMP_DEBUG(p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
-        data_frame_receive((uint8_t *)(p_evt->params.rx_data.p_data), p_evt->params.rx_data.length);
+        data_frame_receive_from(DATA_SOURCE_BLE, p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
     }
 }
 /**@snippet [Handling the data received over BLE] */
@@ -194,27 +198,31 @@ void nus_data_response(uint8_t *p_data, uint16_t length) {
     NRF_LOG_HEXDUMP_DEBUG(p_data, length);
 
     ret_code_t err_code;
+    const uint16_t connection = m_conn_handle;
+    if (!data_frame_reply_valid()) return;
     uint16_t remain = length;
     uint16_t count = 0;
+    uint32_t progress = app_timer_cnt_get();
+    bsp_wdt_feed();
     do {
         remain = MIN(m_ble_nus_max_data_len, remain);
-        err_code = ble_nus_data_send(&m_nus, p_data + count, &remain, m_conn_handle);
+        err_code = ble_nus_data_send(&m_nus, p_data + count, &remain, connection);
         // NRF_LOG_INFO("Data send length(amount): %d", remain);
         if (err_code == NRF_SUCCESS) {
             count += remain;
             remain = length - count;
+            progress = app_timer_cnt_get();
+            bsp_wdt_feed();
         }
         // NRF_LOG_INFO("Data send length(count): %d", count);
-        if (err_code == NRF_ERROR_BUSY) {
-            continue;
-        }
-        if ((err_code != NRF_ERROR_INVALID_STATE) &&
-                (err_code != NRF_ERROR_RESOURCES) &&
-                (err_code != NRF_ERROR_NOT_FOUND)) {
+        if (err_code == NRF_ERROR_INVALID_STATE || err_code == NRF_ERROR_NOT_FOUND) return;
+        if (err_code == NRF_ERROR_BUSY || err_code == NRF_ERROR_RESOURCES) {
+            if (app_timer_cnt_diff_compute(app_timer_cnt_get(), progress) >= APP_TIMER_TICKS(250)) return;
+        } else {
             APP_ERROR_CHECK(err_code);
         }
 
-    } while (count != length && g_is_ble_connected);
+    } while (count != length && g_is_ble_connected && m_conn_handle == connection && data_frame_reply_valid());
 }
 
 bool is_nus_working(void) {
@@ -421,6 +429,7 @@ static void ble_evt_handler(ble_evt_t const *p_ble_evt, void *p_context) {
             // LED indication will be changed when advertising starts.
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
             g_is_ble_connected = false;
+            data_frame_disconnect(DATA_SOURCE_BLE);
             // call sleep_timer_start *after* unsetting g_is_ble_connected
             sleep_timer_start(SLEEP_DELAY_MS_BLE_DISCONNECTED);
             break;
@@ -560,6 +569,7 @@ static void advertising_init(void) {
 /**@brief Clear bond information from persistent storage.
  */
 void delete_bonds_all(void) {
+    if (rf_only_boot) return;
     ret_code_t err_code;
 
     NRF_LOG_INFO("Erase bonds!");
@@ -588,6 +598,7 @@ static void whitelist_set(pm_peer_id_list_skip_t skip) {
 /**@brief Function for starting advertising.
  */
 void advertising_start(bool erase_bonds) {
+    if (rf_only_boot) return;
     if (erase_bonds == true && settings_get_ble_pairing_enable_first_load()) {
         // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
         // So we don't call `ble_advertising_start()` after `delete_bonds_all()`.
@@ -607,6 +618,23 @@ void advertising_start(bool erase_bonds) {
 void advertising_stop(void) {
     sd_ble_gap_adv_stop(m_advertising.adv_handle);
 }
+
+bool advertising_stop_checked(void) {
+    if (g_is_ble_connected) return false;
+    return sd_ble_gap_adv_stop(m_advertising.adv_handle) == NRF_SUCCESS;
+}
+
+bool advertising_pause(bool *resume) {
+    *resume = false;
+    if (g_is_ble_connected) return false;
+    if (rf_only_boot) return true;
+    ret_code_t ret = sd_ble_gap_adv_stop(m_advertising.adv_handle);
+    *resume = ret == NRF_SUCCESS;
+    /* INVALID_STATE means this valid advertising set was already stopped.
+     * RF wakes deliberately never start advertising. */
+    return ret == NRF_SUCCESS || ret == NRF_ERROR_INVALID_STATE;
+}
+
 
 /**@brief Function for handling Peer Manager events.
  *
@@ -685,7 +713,7 @@ static void peer_manager_init(void) {
 void saadc_event_handler(nrfx_saadc_evt_t const *p_event) {
     if (p_event->type == NRFX_SAADC_EVT_DONE && m_lf_adc_callback != NULL) {
         ret_code_t err_code;
-        err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], ADC_BUF_SIZE);
+        err_code = nrfx_saadc_buffer_convert(rf_lf_adc_workspace(next_free_buf_index()), ADC_BUF_SIZE);
         APP_ERROR_CHECK(err_code);
 
         m_lf_adc_callback(p_event->data.done.p_buffer, p_event->data.done.size);
@@ -734,7 +762,8 @@ static void battery_level_meas_timeout_handler(void *p_context) {
     percentage_batt_lvl = BATVOL2PERCENT(batt_lvl_in_milli_volts);
 
     // if battery service is notification enable, we can send msg to device.
-    err_code = ble_bas_battery_level_update(&m_bas, percentage_batt_lvl, BLE_CONN_HANDLE_ALL);
+    err_code = rf_only_boot ? NRF_SUCCESS :
+        ble_bas_battery_level_update(&m_bas, percentage_batt_lvl, BLE_CONN_HANDLE_ALL);
     if ((err_code != NRF_SUCCESS) &&
             (err_code != NRF_ERROR_INVALID_STATE) &&
             (err_code != NRF_ERROR_RESOURCES) &&
@@ -770,6 +799,14 @@ void create_battery_timer(void) {
 void ble_slave_init(void) {
     adc_configure();                    // ADC initialization
     create_battery_timer();             // Create a battery power update timer
+    if (NRF_POWER->RESETREAS == POWER_RESETREAS_NFC_Msk && tag_emulation_rf_only_safe()) {
+        /* Keep SoftDevice/timers/ADC available without enabling the BLE stack
+         * or CC310/TRNG/Peer Manager during this RF boot. Controls that could
+         * select a crypto-dependent profile are blocked until a full restart. */
+        rf_only_boot = true;
+        APP_ERROR_CHECK(nrf_sdh_enable_request());
+        return;
+    }
     ble_stack_init();                   // BLE protocol stack initialization
     gap_params_init();                  // GAP parameter initialization
     gatt_init();                        // Gatt protocol initialization
@@ -778,6 +815,8 @@ void ble_slave_init(void) {
     conn_params_init();                 // Connection parameter initialization
     peer_manager_init();                // Peer manager Initialization
 }
+
+bool ble_slave_rf_only(void) { return rf_only_boot; }
 
 void register_lf_adc_callback(lf_adc_callback_t cb) {
     m_lf_adc_callback = cb;
@@ -795,10 +834,10 @@ void register_lf_adc_callback(lf_adc_callback_t cb) {
     err_code = nrfx_saadc_channel_init(ADC_CHANNEL, &ch);
     APP_ERROR_CHECK(err_code);
 
-    err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], ADC_BUF_SIZE);
+    err_code = nrfx_saadc_buffer_convert(rf_lf_adc_workspace(next_free_buf_index()), ADC_BUF_SIZE);
     APP_ERROR_CHECK(err_code);
 
-    err_code = nrfx_saadc_buffer_convert(&adc_buf[next_free_buf_index()][0], ADC_BUF_SIZE);
+    err_code = nrfx_saadc_buffer_convert(rf_lf_adc_workspace(next_free_buf_index()), ADC_BUF_SIZE);
     APP_ERROR_CHECK(err_code);
 }
 

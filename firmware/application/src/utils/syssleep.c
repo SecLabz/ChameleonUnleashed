@@ -7,6 +7,7 @@
 #include "nrf_log_default_backends.h"
 
 
+
 APP_TIMER_DEF(m_app_sleep_timer);       //The timer for equipment sleep
 static volatile bool m_system_off_enter = false;
 

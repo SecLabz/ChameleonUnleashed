@@ -1,6 +1,10 @@
 #include <stdint.h>
 #include "rfid_main.h"
 #include "rgb_marquee.h"
+#if defined(PROJECT_CHAMELEON_ULTRA)
+#include "nfca_session.h"
+#include "hf_radio.h"
+#endif
 
 //The current mode of the device
 device_mode_t rfid_state = DEVICE_MODE_NONE;
@@ -39,9 +43,15 @@ void reader_mode_enter(void) {
  */
 void tag_mode_enter(void) {
     if (rfid_state != DEVICE_MODE_TAG) {
+#if defined(PROJECT_CHAMELEON_ULTRA)
+        // A running reader still needs the original field discharge interval.
+        bool reader_was_active = rfid_state == DEVICE_MODE_READER || m_is_field_on;
+#endif
         rfid_state = DEVICE_MODE_TAG;
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
+        nfca_session_close();
+        hf_radio_release();
         // Safety check: turn off field if it's on
         if (m_is_field_on) {
             pcd_14a_reader_antenna_off();
@@ -64,7 +74,9 @@ void tag_mode_enter(void) {
         nrf_gpio_pin_set(HF_ANT_SEL);       // hf ant switch to emulation mode
         // give time for fields to shutdown, else we get spurious LF detection triggered in LF emul
         // need at least about 30ms on dev kit
-        bsp_delay_ms(60);
+        if (reader_was_active) {
+            bsp_delay_ms(60);
+        }
 #endif
 
         // to run tag emulation

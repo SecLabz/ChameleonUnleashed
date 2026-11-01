@@ -45,10 +45,10 @@ static uint16_t crc_table[256] = {
  *
  */
 void calc_14a_crc_lut(uint8_t *data, int length, uint8_t *output) {
-    //Take the clever, compulsory pointer type conversion
-    uint16_t *crc = (uint16_t *)output;
-    //Give the initial value of polynomial
-    *crc = 0x6363;
-    //Then start checking the table of each byte
-    while (length--) *crc = (*crc >> 8) ^ crc_table[(*crc & 0xFF) ^ *data++];
+    uint16_t crc = 0x6363;
+    while (length-- > 0) {
+        crc = (crc >> 8) ^ crc_table[(crc & 0xff) ^ *data++];
+    }
+    output[0] = crc & 0xff;
+    output[1] = crc >> 8;
 }

@@ -191,6 +191,7 @@ void pcd_14a_reader_antenna_off(void);
 
 // Device register
 uint8_t read_register_single(uint8_t Address);
+void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len);
 void write_register_single(uint8_t Address, uint8_t value);
 void clear_register_mask(uint8_t reg, uint8_t mask);
 void set_register_mask(uint8_t reg, uint8_t mask);
@@ -227,6 +228,7 @@ void pcd_14a_reader_parity_off(void);
 
 // 14443-A tag operation
 uint8_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag);
+uint8_t pcd_14a_reader_scan_poll(picc_14a_tag_t *tag);
 uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag);
 uint8_t pcd_14a_reader_ats_request(uint8_t *pAts, uint16_t *szAts, uint16_t szAtsBitMax);
 uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t resp_max_bit);
@@ -254,6 +256,7 @@ uint16_t szDataSendBits, uint8_t *pDataSend, uint8_t *pDataRecv, uint16_t *pszDa
 
 // UID & UFUID tag operation
 uint8_t pcd_14a_reader_gen1a_unlock(void);
+uint8_t pcd_14a_reader_magic_unlock(bool second);
 uint8_t pcd_14a_reader_gen1a_uplock(void);
 
 // CRC calculate

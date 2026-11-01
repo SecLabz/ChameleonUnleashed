@@ -1257,6 +1257,11 @@ static int get_information_size_by_tag_type(tag_specific_type_t type) {
     return sizeof(nfc_tag_14a_coll_res_entity_t) + sizeof(nfc_tag_mf0_ntag_configure_t) + (get_total_pages_by_tag_type(type) * NFC_TAG_MF0_NTAG_DATA_SIZE);
 }
 
+int nfc_tag_mf0_ntag_image_size(tag_specific_type_t type) {
+    if (nfc_tag_mf0_ntag_get_nr_pages_by_tag_type(type) < 0) return -1;
+    return get_information_size_by_tag_type(type);
+}
+
 /** @brief MF0/NTAG callback before saving data
  * @param type detailed label type
  * @param buffer data buffer
@@ -1295,10 +1300,11 @@ int nfc_tag_mf0_ntag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *bu
             .cb_reset = nfc_tag_mf0_ntag_reset_handler,
         };
         nfc_tag_14a_set_handler(&handler_for_14a);
-        ulc_3des_init();
+        /* Recover the NFCT TX-buffer quirk between fields, as for Classic. */
+        nfc_tag_14a_set_reset_enable(true);
+        if (type == TAG_TYPE_MF0ICU2) ulc_3des_init();
         NRF_LOG_INFO("HF ntag data load finish.");
     } else {
-        ASSERT(buffer->length == info_size);
         NRF_LOG_ERROR("nfc_tag_mf0_ntag_information_t too big.");
     }
     return info_size;

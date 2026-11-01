@@ -18,6 +18,7 @@
 #include "syssleep.h"
 #include "tag_emulation.h"
 #include "tag_persistence.h"
+#include "utils/hfclk.h"
 
 #define NRF_LOG_MODULE_NAME tag_em410x
 #include "nrf_log.h"
@@ -32,6 +33,7 @@ extern bool g_usb_led_marquee_enable;
 
 // Whether it is currently in the low -frequency card number of broadcasting
 static volatile bool m_is_lf_emulating = false;
+bool lf_tag_125khz_is_emulating(void) { return m_is_lf_emulating; }
 // Cache tag type
 static tag_specific_type_t m_tag_type = TAG_TYPE_UNDEFINED;
 
@@ -163,14 +165,9 @@ static void lf_sense_enable(void) {
     // which rules out coherent demodulation or phase-lock-based approaches,
     // but does not preclude the differential-phase encodings supported here.
     //
-    // Paired release in lf_sense_disable(). SD reference-counts HFXO requests,
-    // so this coexists with BLE. Both functions run from thread context
-    // (tag_mode_enter/tag_emulation_sense_end) where SVCs are safe.
-    sd_clock_hfclk_request();
-    uint32_t hfclk_running = 0;
-    while (!hfclk_running) {
-        sd_clock_hfclk_is_running(&hfclk_running);
-    }
+    // Keep LF ownership distinct from USB, even if HFXO already runs.
+    APP_ERROR_CHECK(app_hfclk_acquire(HFCLK_LF));
+    APP_ERROR_CHECK(app_hfclk_wait());
 
     lpcomp_init();
     pwm_init();  // use precise hardware pwm to broadcast card id
@@ -184,7 +181,7 @@ static void lf_sense_disable(void) {
     nrfx_lpcomp_uninit();
     m_pwm_seq = NULL;
     m_is_lf_emulating = false;
-    sd_clock_hfclk_release();
+    APP_ERROR_CHECK(app_hfclk_release(HFCLK_LF));
 }
 
 static enum {
@@ -216,6 +213,7 @@ void lf_tag_125khz_sense_switch(bool enable) {
         lf_sense_disable();
     }
 }
+
 
 /** @brief lf card data loader
  * @param type     Refined tag type
@@ -254,9 +252,7 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
 
     if (type == TAG_TYPE_VIKING && buffer->length >= LF_VIKING_TAG_ID_SIZE) {
         m_tag_type = type;
-        void *codec = viking.alloc();
-        m_pwm_seq = viking.modulator(codec, buffer->buffer);
-        viking.free(codec);
+        m_pwm_seq = viking.modulator(NULL, buffer->buffer);
         NRF_LOG_INFO("load lf viking data finish.");
         return LF_VIKING_TAG_ID_SIZE;
     }

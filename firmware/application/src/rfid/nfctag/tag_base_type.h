@@ -89,8 +89,14 @@ typedef enum {
     TAG_TYPE_NTAG_212,
     // MIFARE Plus series        1200
     // DESFire series            1300
+    TAG_TYPE_DESFIRE = 1300,
 
-    // ST25TA series             2000
+    // ISO15693                   1500
+    TAG_TYPE_SLIX_L = 1500,
+    TAG_TYPE_SLIX,
+
+    // ST25TB512-AT              2000
+    TAG_TYPE_ST25TB512_AT = 2000,
 
     // HF14A-4 series            3000
     TAG_TYPE_HF14A_4 = 3000,
@@ -125,7 +131,8 @@ typedef enum {
         TAG_TYPE_MIFARE_4096, TAG_TYPE_NTAG_213, TAG_TYPE_NTAG_215,   \
         TAG_TYPE_NTAG_216, TAG_TYPE_MF0ICU1, TAG_TYPE_MF0ICU2,        \
         TAG_TYPE_MF0UL11, TAG_TYPE_MF0UL21, TAG_TYPE_NTAG_210,        \
-        TAG_TYPE_NTAG_212, TAG_TYPE_HF14A_4, TAG_TYPE_SEOS
+        TAG_TYPE_NTAG_212, TAG_TYPE_SLIX_L, TAG_TYPE_SLIX,     \
+        TAG_TYPE_ST25TB512_AT, TAG_TYPE_HF14A_4, TAG_TYPE_SEOS, TAG_TYPE_DESFIRE
 
 typedef struct {
     tag_specific_type_t tag_hf;

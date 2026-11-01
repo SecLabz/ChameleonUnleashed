@@ -15,8 +15,6 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-#define PAC_BUFFER_SIZE (6144)
-
 static circular_buffer cb;
 
 // SAADC callback — push raw ADC samples to circular buffer.
@@ -49,7 +47,7 @@ bool pac_read(uint8_t *data, uint32_t timeout_ms) {
     start_lf_125khz_radio();
     bsp_delay_ms(10);
 
-    cb_init(&cb, PAC_BUFFER_SIZE, sizeof(uint16_t));
+    cb_init(&cb, LF_ADC_BUFFER_SIZE, sizeof(uint16_t));
     init_pac_hw();
 
     bool ok = false;

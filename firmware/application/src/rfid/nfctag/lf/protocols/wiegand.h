@@ -85,5 +85,6 @@ typedef struct {
 } card_format_table_t;
 
 extern uint64_t pack(wiegand_card_t *card);
+bool wiegand_card_valid(const wiegand_card_t *card);
 extern wiegand_card_t *unpack(uint8_t format_hint, uint8_t length, uint64_t hi, uint64_t lo);
 extern wiegand_card_t *wiegand_card_alloc();

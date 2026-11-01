@@ -830,7 +830,7 @@ static const card_format_table_t formats[] = {
     {IND29, pack_ind29, unpack_ind29, 29, {0, 0x1FFF, 0xFFFF, 0, 0}},            // Indala 29-bit
     {ATSW30, pack_atsw30, unpack_atsw30, 30, {1, 0xFFF, 0xFFFF, 0, 0}},          // ATS Wiegand 30-bit
     {ADT31, pack_adt31, unpack_adt31, 31, {0, 0xF, 0x7FFFFF, 0, 0}},             // HID ADT 31-bit
-    {HCP32, pack_hcp32, unpack_hcp32, 32, {0, 0, 0x3FFF, 0, 0}},                 // HID Check Point 32-bit
+    {HCP32, pack_hcp32, unpack_hcp32, 32, {0, 0, 0xFFFFFF, 0, 0}},                 // HID Check Point 32-bit
     {HPP32, pack_hpp32, unpack_hpp32, 32, {0, 0xFFF, 0x7FFFF, 0, 0}},            // HID Hewlett-Packard 32-bit
     {KASTLE, pack_kastle, unpack_kastle, 32, {1, 0xFF, 0xFFFF, 0x1F, 0}},        // Kastle 32-bit
     {KANTECH, pack_kantech, unpack_kantech, 32, {0, 0xFF, 0xFFFF, 0, 0}},        // Indala/Kantech KFS 32-bit
@@ -838,8 +838,8 @@ static const card_format_table_t formats[] = {
     {D10202, pack_d10202, unpack_d10202, 33, {1, 0x7F, 0xFFFFFF, 0, 0}},         // HID D10202 33-bit
     {H10306, pack_h10306, unpack_h10306, 34, {1, 0xFFFF, 0xFFFF, 0, 0}},         // HID H10306 34-bit
     {N10002, pack_n10002, unpack_n10002, 34, {1, 0xFFFF, 0xFFFF, 0, 0}},         // Honeywell/Northern N10002 34-bit
-    {OPTUS34, pack_optus, unpack_optus, 34, {0, 0x3FF, 0xFFFF, 0, 0}},           // Indala Optus 34-bit
-    {SMP34, pack_smartpass, unpack_smartpass, 34, {0, 0x3FF, 0xFFFF, 0x7, 0}},   // Cardkey Smartpass 34-bit
+    {OPTUS34, pack_optus, unpack_optus, 34, {0, 0x7FF, 0xFFFF, 0, 0}},           // Indala Optus 34-bit
+    {SMP34, pack_smartpass, unpack_smartpass, 34, {0, 0x1FFF, 0xFFFF, 0x7, 0}},   // Cardkey Smartpass 34-bit
     {BQT34, pack_bqt34, unpack_bqt34, 34, {1, 0xFF, 0xFFFFFF, 0, 0}},            // BQT 34-bit
     {C1K35S, pack_c1k35s, unpack_c1k35s, 35, {1, 0xFFF, 0xFFFFF, 0, 0}},         // HID Corporate 1000 35-bit Std
     {C15001, pack_c15001, unpack_c15001, 36, {1, 0xFF, 0xFFFF, 0, 0x3FF}},       // HID KeyScan 36-bit
@@ -851,8 +851,20 @@ static const card_format_table_t formats[] = {
     {P10004, pack_p10004, unpack_p10004, 37, {0, 0x1FFF, 0x3FFFF, 0, 0}},        // HID P10004 37-bit PCSC
     {HGEN37, pack_hgeneric37, unpack_hgeneric37, 37, {1, 0, 0xFFFFFFFF, 0, 0}},  // HID Generic 37-bit
     {MDI37, pack_mdi37, unpack_mdi37, 37, {1, 0xF, 0x1FFFFFFF, 0, 0}},           // PointGuard MDI 37-bit
-    {ACTPHID, pack_actprox, unpack_actprox, 36, {1, 0xFF, 0xFFFF, 0x3FF, 0}},   // HID ACTProx 36-bit
+    {ACTPHID, pack_actprox, unpack_actprox, 36, {1, 0xFF, 0xFFFF, 0, 0x3FF}},   // HID ACTProx 36-bit
 };
+
+bool wiegand_card_valid(const wiegand_card_t *card) {
+    for (unsigned i = 0; i < ARRAY_SIZE(formats); i++) {
+        if (formats[i].format == card->format) {
+            const card_format_descriptor_t *fields = &formats[i].fields;
+            return card->facility_code <= fields->max_fc &&
+                card->card_number <= fields->max_cn &&
+                card->issue_level <= fields->max_il && card->oem <= fields->max_oem;
+        }
+    }
+    return false;
+}
 
 uint64_t pack(wiegand_card_t *card) {
     for (int i = 0; i < ARRAY_SIZE(formats); i++) {

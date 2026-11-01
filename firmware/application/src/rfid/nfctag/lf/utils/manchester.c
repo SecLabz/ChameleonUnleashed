@@ -3,6 +3,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MANCHESTER_MIN_CONTRAST_ADC 512
+
+bool manchester_sample_bit(const uint16_t *samples, uint16_t clock_cycles, bool *bit) {
+    unsigned first = 0;
+    unsigned second = 0;
+    unsigned window = clock_cycles / 4;
+    for (unsigned i = 0; i < window; i++) {
+        first += samples[clock_cycles / 8 + i];
+        second += samples[clock_cycles * 5 / 8 + i];
+    }
+    first /= window;
+    second /= window;
+    unsigned difference = first > second ? first - second : second - first;
+    if (difference < MANCHESTER_MIN_CONTRAST_ADC) {
+        return false;
+    }
+    *bit = first > second;
+    return true;
+}
+
 void manchester_reset(manchester *m) {
     m->sync = true;
 }

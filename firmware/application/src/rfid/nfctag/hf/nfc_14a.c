@@ -12,10 +12,13 @@ NRF_LOG_MODULE_REGISTER();
 #include "crc_utils.h"
 #include "nfc_mf1.h"
 #include "byte_mirror.h"
+#include "nfc_14a_frame_codec.h"
 
 #include "rfid_main.h"
 #include "syssleep.h"
 #include "tag_emulation.h"
+static uint16_t reader_fsd = 32;
+uint16_t nfc_tag_14a_get_fsd(void) { return reader_fsd; }
 
 
 #if NFC_TAG_14A_RX_PARITY_AUTO_DEL_ENABLE
@@ -151,6 +154,11 @@ bool nfc_tag_14a_checks_crc(uint8_t *pbtData, size_t szLen) {
 * @retval :The length of the bitstream assembly results buffer. Note that it is the length of the bit.
 */
 uint8_t nfc_tag_14a_wrap_frame(const uint8_t *pbtTx, const size_t szTxBits, const uint8_t *pbtTxPar, uint8_t *pbtFrame) {
+    if (szTxBits >= 16 && (szTxBits & 7) == 0) {
+        nfc_14a_pack_bytes(pbtTx, pbtTxPar, szTxBits / 8, pbtFrame);
+        return szTxBits + szTxBits / 8;
+    }
+
     uint8_t btData;
     uint32_t uiBitPos;
     uint32_t uiDataPos = 0;
@@ -213,6 +221,11 @@ uint8_t nfc_tag_14a_wrap_frame(const uint8_t *pbtTx, const size_t szTxBits, cons
 * @retval :The data length of the bitstream packaging, note that the length of the data area is the length of the data area.retval / 8
 */
 uint8_t nfc_tag_14a_unwrap_frame(const uint8_t *pbtFrame, const size_t szFrameBits, uint8_t *pbtRx, uint8_t *pbtRxPar) {
+    if (szFrameBits >= 9 && szFrameBits % 9 == 0) {
+        nfc_14a_unpack_bytes(pbtFrame, szFrameBits / 9, pbtRx, pbtRxPar);
+        return (szFrameBits / 9) * 8;
+    }
+
     uint8_t btFrame;
     uint8_t btData;
     uint8_t uiBitPos;
@@ -346,7 +359,7 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
     // Compute the number of bits currently received
     uint16_t szDataBits = (NRF_NFCT->RXD.AMOUNT & (NFCT_RXD_AMOUNT_RXDATABITS_Msk | NFCT_RXD_AMOUNT_RXDATABYTES_Msk));
     // The resource that may be used in anti -collision
-    nfc_tag_14a_coll_res_reference_t *auto_coll_res = m_tag_handler.get_coll_res != NULL ? m_tag_handler.get_coll_res() : NULL;
+    nfc_tag_14a_coll_res_reference_t *auto_coll_res = NULL;
 
     // I don't know why, here the CPU must run empty for a period of time before the data can be received normally.
     // If you have any problems with the receiving data, please try to restore this. This is a problem found in 2021, but it disappeared again in 2022
@@ -365,6 +378,9 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
     if (m_sniff_cb != NULL) {
         m_sniff_cb(p_data, szDataBits);
     }
+    if (m_sniff_passive) {
+        return;
+    }
     // Manually draw frame, separate data and strange school inspection
 #if !NFC_TAG_14A_RX_PARITY_AUTO_DEL_ENABLE
     if (szDataBits >= 9) {
@@ -372,6 +388,20 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
         szDataBits = nfc_tag_14a_unwrap_frame(p_data, szDataBits, p_data, NULL);
     }
 #endif
+
+    /* Proprietary exchanges do not use anticollision resources. Short
+     * wakeup/backdoor frames still pass through the normal dispatcher. */
+    if (m_tag_state_14a == NFC_TAG_STATE_14A_PROPRIETARY && szDataBits > 8) {
+        if (m_tag_handler.cb_state != NULL) {
+            m_tag_handler.cb_state(p_data, szDataBits);
+        } else {
+            m_tag_state_14a = NFC_TAG_STATE_14A_IDLE;
+        }
+        return;
+    }
+    if (m_tag_handler.get_coll_res != NULL) {
+        auto_coll_res = m_tag_handler.get_coll_res();
+    }
 
     // Start processing the received data, if it is a special frame, you can hand over the data to this link
     if (szDataBits <= 8) {
@@ -563,6 +593,9 @@ void nfc_tag_14a_data_process(uint8_t *p_data) {
                 }
                 // RATS instruction
                 if (p_data[0] == NFC_TAG_14A_CMD_RATS && nfc_tag_14a_checks_crc(p_data, 4)) {
+                    unsigned fsdi = p_data[1] >> 4;
+                    if (fsdi > 8) break;
+                    reader_fsd = ats_fsdi_table[fsdi];
                     // Reset T=CL layer state for the new session
                     if (m_tag_handler.cb_reset != NULL) {
                         m_tag_handler.cb_reset();
@@ -699,9 +732,12 @@ void nfc_tag_14a_event_callback(nrfx_nfct_evt_t const *p_event) {
                 uint32_t amt  = NRF_NFCT->TXD.AMOUNT;
                 uint16_t tx_bytes = (amt >> NFCT_TXD_AMOUNT_TXDATABYTES_Pos)
                                     & (NFCT_TXD_AMOUNT_TXDATABYTES_Msk >> NFCT_TXD_AMOUNT_TXDATABYTES_Pos);
-                if (amt > 0 && tx_bytes <= MAX_NFC_TX_BUFFER_SIZE) {
+                if (tx_bytes <= MAX_NFC_TX_BUFFER_SIZE) {
                     m_tx_sniff_cb(m_nfc_tx_buffer, amt);
                 }
+            }
+            if (m_tag_handler.cb_tx_start != NULL) {
+                m_tag_handler.cb_tx_start();
             }
             break;
         }
@@ -774,6 +810,7 @@ void nfc_tag_14a_set_handler(nfc_tag_14a_handler_t *handler) {
         m_tag_handler.cb_reset = handler->cb_reset;
         m_tag_handler.cb_state = handler->cb_state;
         m_tag_handler.get_coll_res = handler->get_coll_res;
+        m_tag_handler.cb_tx_start = handler->cb_tx_start;
     }
 }
 

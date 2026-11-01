@@ -11,6 +11,7 @@
 #include "mf1_crypto1.h"
 #else
 #include "crypto1_helper.h"
+#include "mf1_emulator_crypto.h"
 #endif
 
 #define NRF_LOG_MODULE_NAME tag_mf1
@@ -263,6 +264,15 @@ static uint8_t KeyInUse;
 static uint8_t AuthenticatedSector;
 static uint8_t m_data_block_buffer[MEM_BYTES_PER_BLOCK];
 
+/* Preparation runs after nonce TX starts, outside the response deadline. */
+static uint8_t m_pending_nonce[4];
+static bool m_auth_answers_pending;
+static bool m_auth_setup_pending;
+#ifndef NFC_MF1_FAST_SIM
+static mf1_read_stream_t m_read_stream;
+#endif
+static void nfc_tag_mf1_tx_start(void);
+
 // MifareClassic crypto1 setup use fixed uid by cascade level
 #define UID_BY_CASCADE_LEVEL (m_shadow_coll_res.uid + (*m_shadow_coll_res.size - NFC_TAG_14A_UID_SINGLE_SIZE))
 
@@ -293,7 +303,7 @@ uint8_t GetAccessCondition(uint8_t Block) {
         Block &= 3;
     else {
         Block &= 15;
-        if (Block & 15)
+        if (Block == 15)
             Block = 3;
         else if (Block <= 4)
             Block = 0;
@@ -611,31 +621,16 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                             // Generate random number
                             nfc_tag_mf1_random_nonce(CardNonce, false);
 
-                            // Calculate the card reader in advance according to the card random number
-                            for (uint8_t i = 0; i < sizeof(ReaderResponse); i++) {
-                                ReaderResponse[i] = CardNonce[i];
-                            }
-#ifdef NFC_MF1_FAST_SIM
-                            Crypto1PRNG(ReaderResponse, 64);
-#else
-                            mf1_prng_by_bytes(ReaderResponse, 64);
-#endif
-
-                            // Calculate our response based on the response from the card reader
-                            for (uint8_t i = 0; i < sizeof(CardResponse); i++) {
-                                CardResponse[i] = ReaderResponse[i];
-                            }
-#ifdef NFC_MF1_FAST_SIM
-                            Crypto1PRNG(CardResponse, 32);
-#else
-                            mf1_prng_by_bytes(CardResponse, 32);
-#endif
+                            memcpy(m_pending_nonce, CardNonce, sizeof(m_pending_nonce));
+                            m_auth_answers_pending = true;
+                            m_auth_setup_pending = true;
 
                             // Record verification log
                             append_mf1_auth_log_step1(KeyInUse, false, BlockAuth, CardNonce);
 
                             // Use random card random numbers to respond, and hopes to obtain further authentication from the reader in the next frame.
                             m_mf1_state = MF1_STATE_AUTHENTICATING;
+                            nfc_tag_14a_set_state(NFC_TAG_STATE_14A_PROPRIETARY);
 
                             // The first verification, responding to a clear random number, without CRC
                             m_tag_tx_buffer.tx_raw_buffer[0] = CardNonce[0];
@@ -643,26 +638,6 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                             m_tag_tx_buffer.tx_raw_buffer[2] = CardNonce[2];
                             m_tag_tx_buffer.tx_raw_buffer[3] = CardNonce[3];
 
-#ifdef NFC_MF1_FAST_SIM
-                            Crypto1Setup(
-                                // Select A or B secrets based on the current instruction type
-                                KeyInUse ? m_tag_trailer_info->key_b : m_tag_trailer_info->key_a,
-                                // Passing the current anti -collision UID
-                                UID_BY_CASCADE_LEVEL,
-                                // Passing into a clear random number, this random number will be used to decrypt subsequent communication
-                                CardNonce
-                            );
-#else
-                            // Set the Crypto1 key flow and discard the previous encryption state
-                            crypto1_deinit(pcs);
-                            // Load key flow
-                            crypto1_init(pcs,
-                                         // Select A or B secrets based on the current instruction type
-                                         bytes_to_num(KeyInUse ? m_tag_trailer_info->key_b : m_tag_trailer_info->key_a, 6)
-                                        );
-                            // Set key flow
-                            crypto1_word(pcs, bytes_to_num(UID_BY_CASCADE_LEVEL, 4) ^ bytes_to_num(CardNonce, 4), 0);
-#endif
                             // Responsible for clear -scale random number to read the card reader
                             nfc_tag_14a_tx_bytes(m_tag_tx_buffer.tx_raw_buffer, 4, false);
                             break;
@@ -735,35 +710,24 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
             if (szDataBits == 64) {
                 //NR + AR responded to the card reader
                 append_mf1_auth_log_step2(p_data, &p_data[4]);
+                bool auth_ok;
 #ifdef NFC_MF1_FAST_SIM
-                // Reader delivers an encrypted nonce. We use it to setup the crypto1 LFSR in nonlinear feedback mode. Furthermore it delivers an encrypted answer. Decrypt and check it
                 Crypto1Auth(&p_data[0]);
                 Crypto1ByteArray(&p_data[4], 4);
+                auth_ok = memcmp(&p_data[4], ReaderResponse, sizeof(ReaderResponse)) == 0;
 #else
-                // NR, a random number generated by a card reader
-                uint32_t nr = bytes_to_num(p_data, 4);
-                // AR, is the encrypted data that we responded in the first step of the card encryption
-                uint32_t ar = bytes_to_num(&p_data[4], 4);
-                // --- crypto
-                crypto1_word(pcs, nr, 1);
-                num_to_bytes(ar ^ crypto1_word(pcs, 0, 0), 4, &p_data[4]);
+                auth_ok = mf1_emulator_authenticate(pcs, p_data, ReaderResponse, CardResponse,
+                                                    m_tag_tx_buffer.tx_raw_buffer,
+                                                    m_tag_tx_buffer.tx_bit_parity);
 #endif
-                uint8_t Acc = abTrailerAccessConditions[ GetAccessCondition(3) ][ KEY_A ];
                 // Was the random number of the return of the card reader was sent by us
                 // Also prevent authentication with Key B if it is readable using Key A
-                if ((p_data[4] == ReaderResponse[0]) && (p_data[5] == ReaderResponse[1]) && (p_data[6] == ReaderResponse[2]) && (p_data[7] == ReaderResponse[3])
-                    && (KeyInUse != KEY_B || (Acc & ACC_TRAILER_READ_KEYB) == 0)
-                ) {
+                if (auth_ok && (KeyInUse != KEY_B ||
+                    (abTrailerAccessConditions[GetAccessCondition(3)][KEY_A] & ACC_TRAILER_READ_KEYB) == 0)) {
                     // The reader has passed the authentication.The estimated calculation card response data and generating the puppet test position.
-                    m_tag_tx_buffer.tx_raw_buffer[0] = CardResponse[0];
-                    m_tag_tx_buffer.tx_raw_buffer[1] = CardResponse[1];
-                    m_tag_tx_buffer.tx_raw_buffer[2] = CardResponse[2];
-                    m_tag_tx_buffer.tx_raw_buffer[3] = CardResponse[3];
-                    //Encryption and calculation of the puppet school inspection
 #ifdef NFC_MF1_FAST_SIM
+                    memcpy(m_tag_tx_buffer.tx_raw_buffer, CardResponse, sizeof(CardResponse));
                     Crypto1ByteArrayWithParity(m_tag_tx_buffer.tx_raw_buffer, m_tag_tx_buffer.tx_bit_parity, 4);
-#else
-                    mf_crypto1_encrypt(pcs, m_tag_tx_buffer.tx_raw_buffer, 4, m_tag_tx_buffer.tx_bit_parity);
 #endif
                     // The verification is successful, and you need to enter the state that has been successfully verified
                     m_mf1_state = MF1_STATE_AUTHENTICATED;
@@ -791,7 +755,16 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
 #ifdef NFC_MF1_FAST_SIM
                 Crypto1ByteArray(p_data, 4);
 #else
-                mf_crypto1_decryptEx(pcs, p_data, 4, p_data);
+                bool cached_read = m_read_stream.valid;
+                m_read_stream.valid = false;
+                if (cached_read) {
+                    for (unsigned i = 0; i < 4; i++) {
+                        p_data[i] ^= m_read_stream.command[i];
+                    }
+                    *pcs = m_read_stream.after_command;
+                } else {
+                    mf_crypto1_decryptEx(pcs, p_data, 4, p_data);
+                }
 #endif
                 // After the decryption is completed, check whether the CRC is correct, and we must ensure that the data coming over is correct!
                 if (nfc_tag_14a_checks_crc(p_data, 4)) {
@@ -842,7 +815,16 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
 #ifdef NFC_MF1_FAST_SIM
                             Crypto1ByteArrayWithParity(m_tag_tx_buffer.tx_raw_buffer, m_tag_tx_buffer.tx_bit_parity, NFC_TAG_MF1_FRAME_SIZE);
 #else
-                            mf_crypto1_encrypt(pcs, m_tag_tx_buffer.tx_raw_buffer, NFC_TAG_MF1_FRAME_SIZE, m_tag_tx_buffer.tx_bit_parity);
+                            if (cached_read) {
+                                for (unsigned i = 0; i < NFC_TAG_MF1_FRAME_SIZE; i++) {
+                                    uint8_t plain = m_tag_tx_buffer.tx_raw_buffer[i];
+                                    m_tag_tx_buffer.tx_raw_buffer[i] = plain ^ m_read_stream.response[i];
+                                    m_tag_tx_buffer.tx_bit_parity[i] = oddparity8(plain) ^ m_read_stream.response_filter[i];
+                                }
+                                *pcs = m_read_stream.after_read;
+                            } else {
+                                mf_crypto1_encrypt(pcs, m_tag_tx_buffer.tx_raw_buffer, NFC_TAG_MF1_FRAME_SIZE, m_tag_tx_buffer.tx_bit_parity);
+                            }
 #endif
                             // Combined Qiqi School Check Data Frame
                             m_tag_tx_buffer.tx_frame_bit_size = nfc_tag_14a_wrap_frame(m_tag_tx_buffer.tx_raw_buffer, 144, m_tag_tx_buffer.tx_bit_parity, m_tag_tx_buffer.tx_warp_frame);
@@ -971,31 +953,16 @@ void nfc_tag_mf1_state_handler(uint8_t *p_data, uint16_t szDataBits) {
                             // Generate random number
                             nfc_tag_mf1_random_nonce(CardNonce, true);
 
-                            // Calculate the card reader response based on the card random number
-                            for (uint8_t i = 0; i < sizeof(ReaderResponse); i++) {
-                                ReaderResponse[i] = CardNonce[i];
-                            }
-#ifdef NFC_MF1_FAST_SIM
-                            Crypto1PRNG(ReaderResponse, 64);
-#else
-                            mf1_prng_by_bytes(ReaderResponse, 64);
-#endif
-
-                            // Calculate our response based on the response from the card reader
-                            for (uint8_t i = 0; i < sizeof(CardResponse); i++) {
-                                CardResponse[i] = ReaderResponse[i];
-                            }
-#ifdef NFC_MF1_FAST_SIM
-                            Crypto1PRNG(CardResponse, 32);
-#else
-                            mf1_prng_by_bytes(CardResponse, 32);
-#endif
+                            memcpy(m_pending_nonce, CardNonce, sizeof(m_pending_nonce));
+                            m_auth_answers_pending = true;
+                            m_auth_setup_pending = false;
 
                             // Record nested verification information
                             append_mf1_auth_log_step1(KeyInUse, true, BlockAuth, CardNonce);
 
                             //Use random card random numbers to respond, and hopes to obtain further authentication from the reader in the next frame.
                             m_mf1_state = MF1_STATE_AUTHENTICATING;
+                            nfc_tag_14a_set_state(NFC_TAG_STATE_14A_PROPRIETARY);
 
                             // Copy a random number of a label to the buffer area
                             m_tag_tx_buffer.tx_raw_buffer[0] = CardNonce[0];
@@ -1220,10 +1187,50 @@ nfc_tag_14a_coll_res_reference_t *get_saved_mifare_coll_res() {
     return &m_shadow_coll_res;
 }
 
+/* TX_FRAMEEND rearms RX after this bounded preparation. */
+static void nfc_tag_mf1_tx_start(void) {
+    if (m_auth_answers_pending) {
+        m_auth_answers_pending = false;
+        memcpy(ReaderResponse, m_pending_nonce, sizeof(ReaderResponse));
+#ifdef NFC_MF1_FAST_SIM
+        Crypto1PRNG(ReaderResponse, 64);
+        memcpy(CardResponse, ReaderResponse, sizeof(CardResponse));
+        Crypto1PRNG(CardResponse, 32);
+        if (m_auth_setup_pending) {
+            Crypto1Setup(KeyInUse ? m_tag_trailer_info->key_b : m_tag_trailer_info->key_a,
+                         UID_BY_CASCADE_LEVEL, m_pending_nonce);
+        }
+#else
+        mf1_prng_by_bytes(ReaderResponse, 64);
+        memcpy(CardResponse, ReaderResponse, sizeof(CardResponse));
+        mf1_prng_by_bytes(CardResponse, 32);
+        if (m_auth_setup_pending) {
+            crypto1_init(pcs, bytes_to_num(KeyInUse ? m_tag_trailer_info->key_b :
+                                          m_tag_trailer_info->key_a, 6));
+            mf1_emulator_crypto_word(pcs, bytes_to_num(UID_BY_CASCADE_LEVEL, 4) ^
+                                         bytes_to_num(m_pending_nonce, 4), 0);
+        }
+#endif
+        m_auth_setup_pending = false;
+    }
+#ifndef NFC_MF1_FAST_SIM
+    if (m_mf1_state == MF1_STATE_AUTHENTICATED) {
+        mf1_emulator_prepare_read(pcs, &m_read_stream);
+    } else {
+        m_read_stream.valid = false;
+    }
+#endif
+}
+
 /**
  * @brief Reconcile when the parameter label needs to be reset
  */
 void nfc_tag_mf1_reset_handler() {
+    m_auth_answers_pending = false;
+    m_auth_setup_pending = false;
+#ifndef NFC_MF1_FAST_SIM
+    m_read_stream.valid = false;
+#endif
     m_mf1_state = MF1_STATE_UNAUTHENTICATED;
     m_gen1a_state = GEN1A_STATE_DISABLE;
     nfc_tag_14a_set_state(NFC_TAG_STATE_14A_IDLE);
@@ -1273,6 +1280,9 @@ int nfc_tag_mf1_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer)
     // Make sure that external capacity is enough to convert to an information structure
     int info_size = get_information_size_by_tag_type(type);
     if (buffer->length >= info_size) {
+#ifndef NFC_MF1_FAST_SIM
+        mf1_emulator_crypto_prepare();
+#endif
         //Convert the data buffer to MF1 structure type
         m_tag_information = (nfc_tag_mf1_information_t *)buffer->buffer;
         // The specific type of MF1 that is emulated by the cache
@@ -1282,6 +1292,7 @@ int nfc_tag_mf1_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer)
             .get_coll_res = get_mifare_coll_res,
             .cb_state = nfc_tag_mf1_state_handler,
             .cb_reset = nfc_tag_mf1_reset_handler,
+            .cb_tx_start = nfc_tag_mf1_tx_start,
         };
         nfc_tag_14a_set_handler(&handler_for_14a);
         NRF_LOG_INFO("HF mf1 config 'field_off_do_reset' = %d", m_tag_information->config.field_off_do_reset);

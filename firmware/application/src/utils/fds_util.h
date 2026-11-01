@@ -2,7 +2,11 @@
 #define FDS_UTIL_H__
 
 #include "fds.h"
+#include <stddef.h>
 
+
+uint32_t fds_hash_bytes(uint32_t hash, const uint8_t *bytes, size_t size);
+uint32_t fds_hash_sync(uint16_t id, uint16_t key, uint32_t hash);
 
 bool fds_read_sync(uint16_t id, uint16_t key, uint16_t *length, uint8_t *buffer);
 bool fds_write_sync(uint16_t id, uint16_t key, uint16_t length, void *buffer);

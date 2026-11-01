@@ -2,6 +2,7 @@
 #define NFC_14A_H
 
 #include "tag_emulation.h"
+uint16_t nfc_tag_14a_get_fsd(void);
 
 #define MAX_NFC_RX_BUFFER_SIZE  257
 #define MAX_NFC_TX_BUFFER_SIZE  512  /* must hold PCB + max APDU response */
@@ -85,7 +86,7 @@ typedef struct {
 typedef void (*nfc_tag_14a_reset_handler_t)(void);
 
 /* Sniff callback — called for every received frame before the tag handler.
- * data    : raw frame bytes (after parity strip)
+ * data    : DMA frame bytes, including parity when automatic deletion is off
  * szBits  : number of bits received */
 typedef void (*nfc_tag_14a_sniff_cb_t)(const uint8_t *data, uint16_t szBits);
 
@@ -112,6 +113,8 @@ typedef struct {
     nfc_tag_14a_reset_handler_t cb_reset;
     nfc_tag_14a_state_handler_t cb_state;
     nfc_tag_14a_coll_handler_t get_coll_res;
+    /* Bounded preparation after TX starts, before RX is rearmed. */
+    nfc_tag_14a_reset_handler_t cb_tx_start;
 } nfc_tag_14a_handler_t;
 
 // Different or verification code

@@ -9,8 +9,10 @@
 
 #include "rfid_main.h"
 #include "rc522.h"
+#include "mf1_capture_stats.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
+#include "app_timer.h"
 #include "app_status.h"
 #include "hex_utils.h"
 #include "crc_utils.h"
@@ -37,6 +39,8 @@ static bool m_reader_is_init = false;
 // Communication timeout
 static uint16_t g_com_timeout_ms = DEF_COM_TIMEOUT;
 static autotimer *g_timeout_auto_timer;
+static bool m_short_wakeup_wait;
+static bool m_scan_polling;
 
 // RC522 SPI
 #define SPI_INSTANCE  0 /**< SPI instance index. */
@@ -192,6 +196,10 @@ void pcd_14a_reader_init(void) {
         errCode = nrf_drv_spi_init(&s_spiHandle, &spiConfig, NULL, NULL);
         APP_ERROR_CHECK(errCode);
 
+        // Software RF users can leave a completed SPI byte at handover.
+        (void)NRF_SPI0->RXD;
+        NRF_SPI0->EVENTS_READY = 0;
+
         // Initialized timer
         // This timer is not released after the initialization of the timer, and it always needs to take up
         g_timeout_auto_timer = bsp_obtain_timer(0);
@@ -259,6 +267,24 @@ uint16_t pcd_14a_reader_timeout_get() {
     return g_com_timeout_ms;
 }
 
+/* The first wake-up after an unfinished authentication can be ignored. Use
+ * the RTC counter for short retries; the BSP timer advances only every 10 ms. */
+static bool wait_for_irq(uint8_t wait_for, uint8_t *irq) {
+    uint32_t wait_started = mf1_capture_clock();
+    uint32_t started_ticks = m_short_wakeup_wait ? app_timer_cnt_get() : 0;
+    bsp_set_timer(g_timeout_auto_timer, 0);
+    bool not_timeout;
+    do {
+        *irq = read_register_single(ComIrqReg);
+        not_timeout = m_short_wakeup_wait
+            ? app_timer_cnt_diff_compute(app_timer_cnt_get(), started_ticks) < APP_TIMER_TICKS(1)
+            : NO_TIMEOUT_1MS(g_timeout_auto_timer, g_com_timeout_ms);
+    } while (not_timeout && !(*irq & wait_for));
+    mf1_capture_stats.wait_cycles += mf1_capture_elapsed(wait_started);
+    if (mf1_capture_stats.enabled && !not_timeout) mf1_capture_stats.timeouts++;
+    return not_timeout;
+}
+
 /**
 * @brief  : Through RC522 and ISO14443 cartoon communication
 * @param  : Command: RC522 command word
@@ -305,12 +331,7 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
     // Reset the length of the received data
     *pOutLenBit         = 0;
 
-    bsp_set_timer(g_timeout_auto_timer, 0);         // Before starting the operation, return to zero over time counting
-
-    do {
-        n = read_register_single(ComIrqReg);                // Read the communication interrupt register to determine whether the current IO task is completed!
-        not_timeout = NO_TIMEOUT_1MS(g_timeout_auto_timer, g_com_timeout_ms);
-    } while (not_timeout && (!(n & waitFor)));  // Exit conditions: timeout interruption, interrupt with empty command commands
+    not_timeout = wait_for_irq(waitFor, &n);
     // NRF_LOG_INFO("N = %02x\n", n);
 
     if (Command == PCD_TRANSCEIVE) {
@@ -542,12 +563,7 @@ uint8_t pcd_14a_reader_bytes_transfer_flags(uint8_t Command, uint8_t *pIn, uint8
     // Reset the length of the received data
     *pOutLenBit         = 0;
 
-    bsp_set_timer(g_timeout_auto_timer, 0);         // Before starting the operation, return to zero over time counting
-
-    do {
-        n = read_register_single(ComIrqReg);                // Read the communication interrupt register to determine whether the current IO task is completed!
-        not_timeout = NO_TIMEOUT_1MS(g_timeout_auto_timer, g_com_timeout_ms);
-    } while (not_timeout && (!(n & waitFor)));  // Exit conditions: timeout interruption, interrupt with empty command commands
+    not_timeout = wait_for_irq(waitFor, &n);
     // NRF_LOG_INFO("N = %02x\n", n);
 
     if (Command == PCD_TRANSCEIVE) {
@@ -857,6 +873,14 @@ uint8_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag) {
     return status;
 }
 
+uint8_t pcd_14a_reader_scan_poll(picc_14a_tag_t *tag) {
+    bool previous = m_scan_polling;
+    m_scan_polling = true;
+    uint8_t status = pcd_14a_reader_scan_auto(tag);
+    m_scan_polling = previous;
+    return status;
+}
+
 /**
 * @brief  : Get selection response
 * @param  : PATS: The preservation area of ATS
@@ -898,9 +922,14 @@ uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t r
     // we may need several tries if we did send an unknown command or a wrong authentication before...
     do {
         // Broadcast for a card, WUPA (0x52) will force response from all cards in the field and Receive the ATQA
+        if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
+        bool previous_wait = m_short_wakeup_wait;
+        // Keep the original timeout from the third attempt for slower cards.
+        m_short_wakeup_wait = retry < 2;
         status = pcd_14a_reader_bits_transfer(wupa, 7, NULL, resp, resp_par, &len, resp_max_bit);
+        m_short_wakeup_wait = previous_wait;
         // NRF_LOG_INFO("pcd_14a_reader_atqa_request len: %d\n", len);
-    } while (len != 16 && (retry++ < 10));
+    } while (len != 16 && !m_scan_polling && (retry++ < 10));
 
     // normal ATQA It is 2 bytes, that is, 16bit,
     // We need to judge whether the data received is correct
@@ -921,9 +950,10 @@ uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t r
 *
 * @retval : Status value Hf_tag_ok, unlocked successfully, other state values indicate unlocking failure
 */
-uint8_t pcd_14a_reader_gen1a_unlock(void) {
+uint8_t pcd_14a_reader_magic_unlock(bool second) {
     // Initialize variables
-    uint8_t unlock, status;
+    uint8_t unlock;
+    uint8_t status;
     uint16_t rx_length = 0;
     uint8_t recvbuf[1] = { 0x00 };
 
@@ -938,6 +968,10 @@ uint8_t pcd_14a_reader_gen1a_unlock(void) {
         return STATUS_HF_ERR_STAT;
     }
 
+    if (!second) {
+        return STATUS_HF_TAG_OK;
+    }
+
     // Step in the second step, send a complete byte 0x43
     unlock = PICC_MAGICWUPC2;
     status = pcd_14a_reader_bytes_transfer(PCD_TRANSCEIVE, &unlock, 1, recvbuf, &rx_length, U8ARR_BIT_LEN(recvbuf));
@@ -949,6 +983,11 @@ uint8_t pcd_14a_reader_gen1a_unlock(void) {
     // There is no problem with unlocking twice. We default this unlock operation successfully!
     return STATUS_HF_TAG_OK;
 }
+
+uint8_t pcd_14a_reader_gen1a_unlock(void) {
+    return pcd_14a_reader_magic_unlock(true);
+}
+
 
 /**
 * @brief  : Perform the UFUID card and block the back door instructions to make it a normal card without responding to the back door instruction
@@ -1144,7 +1183,7 @@ uint8_t pcd_14a_reader_mf1_write(uint8_t addr, uint8_t *p) {
 #define MIFARE_ULC_AUTH_2        0xAF
 #define MIFARE_ULTRALIGHT_WRITE  0xA2
 
-static void ulc_reader_rng(uint8_t *buf, uint8_t len) {
+static bool ulc_reader_rng(uint8_t *buf, uint8_t len) {
     uint8_t got = 0;
     uint32_t guard = 0;
     while (got < len) {
@@ -1159,10 +1198,10 @@ static void ulc_reader_rng(uint8_t *buf, uint8_t len) {
             }
         }
         if (++guard > 200000) {
-            while (got < len) buf[got++] = (uint8_t)rand();
-            break;
+            return false;
         }
     }
+    return true;
 }
 
 uint8_t pcd_14a_reader_mf0_ulc_auth(uint8_t *key) {
@@ -1170,7 +1209,13 @@ uint8_t pcd_14a_reader_mf0_ulc_auth(uint8_t *key) {
     uint16_t rx_bits = 0;
     uint8_t buf[24];
     uint8_t iv[8] = { 0 };
-    uint8_t ek_rndb[8], rndb[8], rnda[8], token_plain[16], token[16], resp_enc[8], rnda_back[8];
+    uint8_t ek_rndb[8];
+    uint8_t rndb[8];
+    uint8_t rnda[8];
+    uint8_t token_plain[16];
+    uint8_t token[16];
+    uint8_t resp_enc[8];
+    uint8_t rnda_back[8];
 
     buf[0] = MIFARE_ULC_AUTH_1;
     buf[1] = 0x00;
@@ -1182,12 +1227,19 @@ uint8_t pcd_14a_reader_mf0_ulc_auth(uint8_t *key) {
     if (rx_bits != (11 * 8) || buf[0] != MIFARE_ULC_AUTH_2) {
         return STATUS_HF_ERR_STAT;
     }
+    uint8_t crc[2];
+    crc_14a_calculate(buf, 9, crc);
+    if (memcmp(buf + 9, crc, 2)) {
+        return STATUS_HF_ERR_CRC;
+    }
     memcpy(ek_rndb, &buf[1], 8);
 
     ulc_tdes_dec_cbc(rndb, ek_rndb, 8, key, iv);
     ulc_rol8(rndb);
 
-    ulc_reader_rng(rnda, 8);
+    if (!ulc_reader_rng(rnda, 8)) {
+        return STATUS_HF_ERR_STAT;
+    }
 
     memcpy(&token_plain[0], rnda, 8);
     memcpy(&token_plain[8], rndb, 8);
@@ -1200,8 +1252,12 @@ uint8_t pcd_14a_reader_mf0_ulc_auth(uint8_t *key) {
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
-    if (rx_bits != (11 * 8)) {
+    if (rx_bits != (11 * 8) || buf[0] != 0) {
         return STATUS_MF_ERR_AUTH;
+    }
+    crc_14a_calculate(buf, 9, crc);
+    if (memcmp(buf + 9, crc, 2)) {
+        return STATUS_HF_ERR_CRC;
     }
     memcpy(resp_enc, &buf[1], 8);
 

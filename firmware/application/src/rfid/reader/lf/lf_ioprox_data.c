@@ -15,8 +15,6 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-#define IOPROX_BUFFER_SIZE (6144)
-
 static circular_buffer cb;
 
 // Generation counters used to disarm the SAADC callback without a mutex.
@@ -88,7 +86,7 @@ bool ioprox_read(uint8_t *data, uint8_t format_hint, uint32_t timeout_ms) {
     codec = ioprox.alloc();
     ioprox.decoder.start(codec, format_hint);
 
-    cb_init(&cb, IOPROX_BUFFER_SIZE, sizeof(uint16_t));
+    cb_init(&cb, LF_ADC_BUFFER_SIZE, sizeof(uint16_t));
     init_ioprox_hw();
 
     p_at = bsp_obtain_timer(0);

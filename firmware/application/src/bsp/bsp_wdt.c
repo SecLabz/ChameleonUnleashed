@@ -14,8 +14,6 @@ static void wdt_event_handler(void) {
 
 void bsp_wdt_init(void) {
     ret_code_t err_code;
-//    err_code = nrf_drv_clock_init();    // already done by usb_cdc_init() -> app_usbd_init()
-//    APP_ERROR_CHECK(err_code);
     nrf_drv_wdt_config_t config = NRF_DRV_WDT_DEAFULT_CONFIG; // typo is in the SDK...
     err_code = nrf_drv_wdt_init(&config, wdt_event_handler);
     APP_ERROR_CHECK(err_code);

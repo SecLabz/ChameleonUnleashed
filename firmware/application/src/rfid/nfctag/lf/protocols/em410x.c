@@ -180,7 +180,7 @@ void em410x_decoder_start(em410x_codec *d, uint8_t format) {
 
 bool em410x_decode_feed(em410x_codec *d, bool bit) {
     d->raw <<= 1;
-    d->raw_length++;
+    if (d->raw_length < EM_RAW_SIZE) d->raw_length++;
     if (bit) {
         d->raw |= 0x01;
     }
@@ -234,6 +234,7 @@ bool em410x_decoder_feed(em410x_codec *d, uint16_t interval) {
         d->raw_length = 0;
         d->total_length = 0;
         d->epilogue = 0;
+        manchester_reset(d->modem);
         return false;
     }
     for (int i = 0; i < bitlen; i++) {

@@ -2,71 +2,48 @@
 
 #include "bsp_delay.h"
 #include "bsp_time.h"
-#include "circular_buffer.h"
+#include "bsp_wdt.h"
 #include "lf_125khz_radio.h"
-#include "lf_reader_data.h"
+#include "nrfx_saadc.h"
 #include "protocols/viking.h"
-#include "protocols/protocols.h"
+#include "rf_workspace.h"
 
-#define NRF_LOG_MODULE_NAME viking_reader
-#include "nrf_log.h"
-#include "nrf_log_ctrl.h"
-#include "nrf_log_default_backends.h"
-NRF_LOG_MODULE_REGISTER();
+#define VIKING_FIELD_SETTLE_MS 75
 
-#define VIKING_BUFFER_SIZE (128)
+static uint16_t *samples;
+static volatile size_t sample_count;
+static volatile bool capturing;
 
-static circular_buffer cb;
-
-// GPIO interrupt recovery function is used to detect the descending edge
-static void viking_gpio_int0_cb(void) {
-    uint32_t cntr = get_lf_counter_value();
-    uint16_t val = 0;
-    if (cntr > 0xff) {
-        val = 0xff;
-    } else {
-        val = cntr & 0xff;
+static void viking_saadc_cb(nrf_saadc_value_t *values, size_t count) {
+    for (size_t i = 0; capturing && i < count && sample_count < RF_LF_CAPTURE_SAMPLES; i++) {
+        int value = values[i];
+        if (value < 0) {
+            value = 0;
+        }
+        if (value > 16383) {
+            value = 16383;
+        }
+        samples[sample_count++] = (uint16_t)value;
     }
-    cb_push_back(&cb, &val);
-    clear_lf_counter_value();
-}
-
-static void init_viking_hw(void) {
-    register_rio_callback(viking_gpio_int0_cb);
-    lf_125khz_radio_gpiote_enable();
-}
-
-static void uninit_viking_hw(void) {
-    lf_125khz_radio_gpiote_disable();
-    unregister_rio_callback();
 }
 
 bool viking_read(uint8_t *data, uint32_t timeout_ms) {
-    void *codec = viking.alloc();
-    viking.decoder.start(codec, 0);
-
-    cb_init(&cb, VIKING_BUFFER_SIZE, sizeof(uint16_t));
-    init_viking_hw();
+    // The comparator loses short transitions at RF/32. Capture the envelope
+    // with DMA instead; USB interrupt latency cannot change its sample timing.
+    samples = rf_lf_workspace();
+    sample_count = 0;
+    autotimer *timer = bsp_obtain_timer(0);
     start_lf_125khz_radio();
-
-    bool ok = false;
-    autotimer *p_at = bsp_obtain_timer(0);
-    while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
-        uint16_t val = 0;
-        while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms) && cb_pop_front(&cb, &val)) {
-            if (viking.decoder.feed(codec, val)) {
-                memcpy(data, viking.get_data(codec), viking.data_size);
-                ok = true;
-                break;
-            }
-        }
+    uint32_t settle_ms = timeout_ms < VIKING_FIELD_SETTLE_MS ? timeout_ms : VIKING_FIELD_SETTLE_MS;
+    bsp_delay_ms(settle_ms);
+    capturing = true;
+    lf_125khz_radio_saadc_enable(viking_saadc_cb);
+    while (sample_count < RF_LF_CAPTURE_SAMPLES && NO_TIMEOUT_1MS(timer, timeout_ms)) {
+        bsp_wdt_feed();
     }
-
-    bsp_return_timer(p_at);
+    capturing = false;
+    lf_125khz_radio_saadc_disable();
     stop_lf_125khz_radio();
-    uninit_viking_hw();
-    cb_free(&cb);
-
-    viking.free(codec);
-    return ok;
+    bsp_return_timer(timer);
+    return viking_decode_samples(samples, sample_count, data);
 }

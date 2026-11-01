@@ -54,27 +54,39 @@ bool fds_is_exists(uint16_t id, uint16_t key) {
  * After execution, length is updated to the real flash record size
  */
 bool fds_read_sync(uint16_t id, uint16_t key, uint16_t *length, uint8_t *buffer) {
-    ret_code_t          err_code;       //The results of the operation
-    fds_flash_record_t  flash_record;   // Pointing to the actual information in Flash
-    fds_record_desc_t   record_desc;    // Recorded handle
-    if (fds_find_record(id, key, &record_desc)) {
-        err_code = fds_record_open(&record_desc, &flash_record);            //Open the record so that it is marked as the open state
-        APP_ERROR_CHECK(err_code);
-        if (flash_record.p_header->length_words * 4 <= *length) {        // Read the data in Flash here to the given RAM
-            // Make sure that the buffer will not overflow, read this record
-            memcpy(buffer, flash_record.p_data, flash_record.p_header->length_words * 4);
-            NRF_LOG_INFO("FDS read success.");
-            *length = flash_record.p_header->length_words * 4;
-            return true;
-        } else {
-            NRF_LOG_INFO("FDS buffer too small, can't run memcpy, fds size = %d, buffer size = %d", flash_record.p_header->length_words * 4, *length);
-        }
-        err_code = fds_record_close(&record_desc);                          // Close the file after the operation is completed
-        APP_ERROR_CHECK(err_code);
+    fds_record_desc_t desc;
+    if (!fds_find_record(id, key, &desc)) {
+        *length = 0;
+        return false;
     }
-    //If the correct data is not loaded, this record may not exist
-    *length = 0;
-    return false;
+    fds_flash_record_t record;
+    ret_code_t error = fds_record_open(&desc, &record);
+    APP_ERROR_CHECK(error);
+    size_t size = record.p_header->length_words * 4;
+    bool fits = size <= *length;
+    if (fits) memcpy(buffer, record.p_data, size);
+    error = fds_record_close(&desc);
+    APP_ERROR_CHECK(error);
+    *length = fits ? size : 0;
+    return fits;
+}
+
+uint32_t fds_hash_bytes(uint32_t hash, const uint8_t *bytes, size_t size) {
+    hash = (hash ^ size) * 16777619u;
+    for (size_t i = 0; i < size; i++) hash = (hash ^ bytes[i]) * 16777619u;
+    return hash;
+}
+
+uint32_t fds_hash_sync(uint16_t id, uint16_t key, uint32_t hash) {
+    fds_record_desc_t desc;
+    if (!fds_find_record(id, key, &desc)) return fds_hash_bytes(hash, NULL, 0);
+    fds_flash_record_t record;
+    ret_code_t error = fds_record_open(&desc, &record);
+    APP_ERROR_CHECK(error);
+    hash = fds_hash_bytes(hash, record.p_data, record.p_header->length_words * 4);
+    error = fds_record_close(&desc);
+    APP_ERROR_CHECK(error);
+    return hash;
 }
 
 /**

@@ -50,6 +50,7 @@
 #define DATA_CMD_SET_SLEEP_TIMEOUT              (1040)
 #define DATA_CMD_GET_LONG_PRESS_THRESHOLD       (1041)
 #define DATA_CMD_SET_LONG_PRESS_THRESHOLD       (1042)
+#define DATA_CMD_SLOT_SNAPSHOT                  (1043)
 
 //
 // ******************************************************************
@@ -75,6 +76,23 @@
 #define DATA_CMD_MF0_ULC_READ                   (2019)
 #define DATA_CMD_MF0_ULC_WRITE                  (2021)
 #define DATA_CMD_MF0_ULC_SET_KEY                (2022)
+#define DATA_CMD_MF1_COLLECT_OBSERVATIONS       (2023)
+#define DATA_CMD_MF1_CAPTURE_SESSION            (2026)
+#define DATA_CMD_MF1_READ_SECTOR                (2027)
+#define DATA_CMD_MF1_DARKSIDE_STEP              (2029)
+#define DATA_CMD_NFCA_WRITE_USER_UNIT           (2030)
+#define DATA_CMD_TYPE2_AUTH_READ                (2031)
+#define DATA_CMD_MF1_MAGIC_PROBE                (2032)
+#define DATA_CMD_MF1_UID_SET                    (2033)
+#define DATA_CMD_MF1_TRAILER_SET                (2034)
+#define DATA_CMD_DESFIRE_READER                 (2035)
+#define DATA_CMD_MF1_BLOCK0_SET                  (2038)
+#define DATA_CMD_MF1_MAINTENANCE                 (2039)
+#define DATA_CMD_MF1_UID_SPECIAL                (2041)
+#define DATA_CMD_MF1_INSPECT                     (2040)
+#define DATA_CMD_DESFIRE_GET_IMAGE              (4320)
+#define DATA_CMD_DESFIRE_SET_IMAGE              (4321)
+#define DATA_CMD_TYPE2_READ                     (2028)
 #define DATA_CMD_HF14A_SCAN_KEEP                (2016)  /* scan+RATS, keep field alive for APDU exchange */
 #define DATA_CMD_HF14A_AUTH_TRACE               (2017)  /* full anticoll + Crypto1 auth, every frame returned for inspection */
 #define DATA_CMD_MF1_MANIPULATE_VALUE_BLOCK     (2011)
@@ -86,8 +104,29 @@
 #define DATA_CMD_HF14A_SET_FIELD_ON             (2100)
 #define DATA_CMD_HF14A_SET_FIELD_OFF            (2101)
 
+#define DATA_CMD_HF15_INVENTORY                 (2300)
+#define DATA_CMD_HF15_GET_SYSTEM_INFO           (2301)
+#define DATA_CMD_HF15_READ_BLOCK                (2302)
+/* 2303 is reserved; do not reuse this command ID. */
+#define DATA_CMD_HF14B_SCAN                     (2304)
+#define DATA_CMD_ST25TB_INFO                    (2305)
+#define DATA_CMD_ST25TB_READ_BLOCK              (2306)
+#define DATA_CMD_ST25TB_DUMP                    (2307)
+#define DATA_CMD_ST25TB_TEAROFF                 (2310)
+#define DATA_CMD_ST25TB_WRITE_BLOCK             (2311)
+#define DATA_CMD_HF15_DUMP                      (2308)
+#define DATA_CMD_HF15_SECURITY                  (2309)
+#define DATA_CMD_SLIX_PRIVACY_SCAN              (2312)
+#define DATA_CMD_HF15_WRITE_BLOCK               (2313)
+#define DATA_CMD_HF15_RAW                       (2314)
+
+#define DATA_CMD_HF15_GET_IMAGE                 (4300)
+#define DATA_CMD_HF15_SET_IMAGE                 (4301)
+
 #define DATA_CMD_HF14A_GET_CONFIG               (2200)
 #define DATA_CMD_HF14A_SET_CONFIG               (2201)
+#define DATA_CMD_HF14A_SNIFF_LIVE               (2036)
+#define DATA_CMD_HF15_SNIFF_LIVE                (2037)
 #define DATA_CMD_HF14A_SNIFF                    (2020)
 
 //
@@ -174,6 +213,8 @@
 #define DATA_CMD_SEOS_READ_EMU_DATA             (4042)
 #define DATA_CMD_SEOS_WRITE_EMU_DATA            (4043)
 #define DATA_CMD_SEOS_WRITE_EMU_KEYS            (4044)
+#define DATA_CMD_ST25TB_GET_SLOT_IMAGE          (4310)
+#define DATA_CMD_ST25TB_SET_SLOT_IMAGE          (4311)
 //
 // ******************************************************************
 
@@ -212,5 +253,6 @@
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)
 #define DATA_CMD_LF_SNIFF                       (3031)
+#define DATA_CMD_LF_T55XX                       (3033)
 
 #endif

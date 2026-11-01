@@ -7,7 +7,6 @@
 #include "nrf.h"
 
 #include "app_timer.h"
-#include "app_usbd.h"
 #include "app_util_platform.h"
 #include "nrf_delay.h"
 #include "nrf_drv_gpiote.h"
@@ -27,6 +26,9 @@
 NRF_LOG_MODULE_REGISTER();
 
 #include "app_cmd.h"
+#include "hf_sniff.h"
+#include "app_buttons.h"
+#include "app_status.h"
 #include "ble_main.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
@@ -35,15 +37,24 @@ NRF_LOG_MODULE_REGISTER();
 #include "fds_util.h"
 #include "hex_utils.h"
 #include "rfid_main.h"
+#include "nfc_st25tb.h"
+#if defined(PROJECT_CHAMELEON_ULTRA)
+#include "nfc_15.h"
+#endif
 #include "syssleep.h"
 #include "tag_emulation.h"
 #include "usb_main.h"
+#include "net/api.h"
+#include "net/web_tearoff.h"
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
+#include "wake_boot.h"
+#include "utils/hfclk.h"
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "rc522.h"
+#include "nfca_session.h"
 #endif
 
 // Defining soft timers
@@ -51,13 +62,14 @@ APP_TIMER_DEF(m_button_check_timer); // Timer for button debounce
 
 static uint32_t m_last_btn_press = 0;
 
-static bool m_is_btn_long_press = false;
+static volatile bool m_is_btn_long_press = false;
 
-static bool m_is_b_btn_press = false;
-static bool m_is_a_btn_press = false;
+static volatile bool m_is_b_btn_press = false;
+static volatile bool m_is_a_btn_press = false;
 
-static bool m_is_b_btn_release = false;
-static bool m_is_a_btn_release = false;
+static volatile bool m_is_b_btn_release = false;
+static volatile bool m_is_a_btn_release = false;
+static volatile bool m_button_check_pending;
 
 static bool m_system_off_processing = false;
 
@@ -67,11 +79,13 @@ volatile bool m_is_field_on = false;
 // cpu reset reason
 static uint32_t m_reset_source;
 static uint32_t m_gpregret_val;
+static bool m_usb_started;
 
 #define GPREGRET_CLEAR_VALUE_DEFAULT (0xFFFFFFFFUL)
 #define RESET_ON_LF_FIELD_EXISTS_Msk (1UL)
+/* Application marker for a button handoff; distinct from the bootloader CRC token. */
+#define FULL_BOOT_GPREGRET2 (1UL << 1)
 
-extern bool g_is_low_battery_shutdown;
 
 
 /**@brief Function for assert macro callback.
@@ -183,13 +197,21 @@ static void field_generator_rainbow_loop(void) {
 
 /**@brief Button Matrix Events
  */
+bool app_buttons_pending(void) {
+    return nrf_gpio_pin_read(BUTTON_1) || nrf_gpio_pin_read(BUTTON_2) ||
+           m_button_check_pending || m_is_a_btn_press || m_is_b_btn_press ||
+           m_is_a_btn_release || m_is_b_btn_release;
+}
+
 static void button_pin_handler(nrf_drv_gpiote_pin_t pin, nrf_gpiote_polarity_t action) {
     device_mode_t mode = get_device_mode();
     // Allow button operations in both tag and reader mode
     if (mode == DEVICE_MODE_TAG || mode == DEVICE_MODE_READER) {
         static nrf_drv_gpiote_pin_t pin_static;                                  // Use static internal variables to store the GPIO where the current event occurred
         pin_static = pin;                                                        // Cache the button that currently triggers the event into an internal variable
-        app_timer_start(m_button_check_timer, APP_TIMER_TICKS(50), &pin_static); // Start timer anti-shake
+        if (app_timer_start(m_button_check_timer, APP_TIMER_TICKS(50), &pin_static) == NRF_SUCCESS) {
+            m_button_check_pending = true;
+        }
     }
 }
 
@@ -198,6 +220,7 @@ static void button_pin_handler(nrf_drv_gpiote_pin_t pin, nrf_gpiote_polarity_t a
  * @return None
  */
 static void timer_button_event_handle(void *arg) {
+    m_button_check_pending = false;
     // if button press during shutdown, it's only to wake up quickly
     if (m_system_off_processing) {
         m_system_off_processing = false;
@@ -210,15 +233,15 @@ static void timer_button_event_handle(void *arg) {
     // Check here if the current GPIO is at the pressed level
     if (nrf_gpio_pin_read(pin) == 1) {
         if (pin == BUTTON_1) {
-            // If button is disabled, we can't dispatch key event.
-            if (settings_get_button_press_config('b') != SettingsButtonDisable) {
+            // RF-only boots always allow a physical handoff to full controls.
+            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_B_PRESS");
                 m_is_b_btn_press = true;
                 m_last_btn_press = app_timer_cnt_get();
             }
         }
         if (pin == BUTTON_2) {
-            if (settings_get_button_press_config('a') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_A_PRESS");
                 m_is_a_btn_press = true;
                 m_last_btn_press = app_timer_cnt_get();
@@ -233,8 +256,8 @@ static void timer_button_event_handle(void *arg) {
         bool is_long_press = ticks > APP_TIMER_TICKS(settings_get_long_press_threshold());
 
         if (pin == BUTTON_1 && m_is_b_btn_press == true) {
-            // If button is disabled, we can't dispatch key event.
-            if (settings_get_button_press_config('b') != SettingsButtonDisable) {
+            // RF-only boots always allow a physical handoff to full controls.
+            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
                 m_is_b_btn_release = true;
                 m_is_b_btn_press = false;
                 if (!is_long_press) {
@@ -246,7 +269,7 @@ static void timer_button_event_handle(void *arg) {
             }
         }
         if (pin == BUTTON_2 && m_is_a_btn_press == true) {
-            if (settings_get_button_press_config('a') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
                 m_is_a_btn_release = true;
                 m_is_a_btn_press = false;
                 if (!is_long_press) {
@@ -422,7 +445,9 @@ static void system_off_enter(void) {
     // Go to system-off mode (this function will not return; wakeup will cause a reset).
     // Note that if you insert jlink or drive a Debug, you may report an error when entering the low power consumption.
     // When starting debugging, we should disable low power consumption state values, or simply not enter low power consumption
+    (void)wake_boot_prepare_off();
     ret = sd_power_system_off();
+    APP_ERROR_CHECK_BOOL(wake_boot_cancel_off());
 
     // OK, here is very important. If you open the log output and enable RTT, you will not check the error of the low power mode
 #if !(NRF_LOG_ENABLED && NRF_LOG_BACKEND_RTT_ENABLED)
@@ -446,6 +471,7 @@ static void check_wakeup_src(void) {
 
     sd_power_gpregret_get(1, &m_gpregret_val);
     sd_power_gpregret_clr(1, GPREGRET_CLEAR_VALUE_DEFAULT);
+    m_gpregret_val = wake_boot_app_regret(m_gpregret_val);
 
 
     /*
@@ -463,7 +489,8 @@ static void check_wakeup_src(void) {
     uint8_t dir = slot > 3 ? 1 : 0;
     uint8_t color = get_color_by_slot(slot);
 
-    if (m_reset_source & NRF_POWER_RESETREAS_OFF_MASK) {
+    if ((m_reset_source & NRF_POWER_RESETREAS_OFF_MASK) ||
+        (m_reset_source == POWER_RESETREAS_SREQ_Msk && m_gpregret_val == FULL_BOOT_GPREGRET2)) {
         NRF_LOG_INFO("WakeUp from button");
         advertising_start(false); // Turn on Bluetooth radio
 
@@ -506,15 +533,8 @@ static void check_wakeup_src(void) {
         // It is currently the wake-up system of the emulation card event, we can make the strong lights on the field first
         TAG_FIELD_LED_ON();
 
-        uint8_t animation_config = settings_get_animation_config();
-        if (animation_config == SettingsAnimationModeFull) {
-            // In the case of field wake-up, only one round of RGB is swept as the power-on animation
-            rgb_marquee_sweep_to(color, !dir, dir ? slot : 7 - slot);
-        } else if (animation_config == SettingsAnimationModeSymmetric) {
-            rgb_marquee_symmetric_out(color, slot);
-        } else {
-            set_slot_light_color(color);
-        }
+        // Retain indication without delaying RF activation.
+        set_slot_light_color(color);
         light_up_by_slot();
 
         // We can only run tag emulation at field wakeup source.
@@ -837,6 +857,7 @@ static void btn_fn_copy_ic_uid(void) {
 /**@brief Execute the corresponding logic based on the functional settings of the buttons.
  */
 static void run_button_function_by_settings(settings_button_function_t sbf) {
+    if (sbf != SettingsButtonShowBattery && sbf != SettingsButtonDisable) web_session_end();
     switch (sbf) {
         case SettingsButtonCycleSlot:
             cycle_slot(false);
@@ -851,6 +872,8 @@ static void run_button_function_by_settings(settings_button_function_t sbf) {
             break;
         case SettingsButtonNfcFieldGenerator:
             if (!m_is_field_on) {
+                nfc_st25tb_sense_switch(false);
+                nfc_tag_15_sense_switch(false);
                 // Initialize reader hardware if not already in reader mode
                 device_mode_t current_mode = get_device_mode();
                 if (current_mode != DEVICE_MODE_READER) {
@@ -891,6 +914,11 @@ static void run_button_function_by_settings(settings_button_function_t sbf) {
                     pcd_14a_reader_uninit();
                     nrf_gpio_pin_clear(READER_POWER);   // reader power disable
                     nrf_gpio_pin_set(HF_ANT_SEL);       // hf ant switch back to tag mode
+                    tag_slot_specific_type_t types;
+                    tag_emulation_get_specific_types_by_slot(tag_emulation_get_slot(), &types);
+                    if (types.tag_hf == TAG_TYPE_ST25TB512_AT ||
+                            types.tag_hf == TAG_TYPE_SLIX_L || types.tag_hf == TAG_TYPE_SLIX)
+                        tag_emulation_sense_switch(TAG_SENSE_HF, true);
                 }
 
                 // Restore normal LED
@@ -914,12 +942,26 @@ static void run_button_function_by_settings(settings_button_function_t sbf) {
     }
 }
 
+/* Leave RF-only startup before a button can change profiles or invoke crypto. */
+static void restart_full_boot(void) {
+    tag_emulation_sense_end();
+    tag_emulation_save();
+    APP_ERROR_CHECK(sd_power_gpregret_clr(1, GPREGRET_CLEAR_VALUE_DEFAULT));
+    APP_ERROR_CHECK(sd_power_gpregret_set(1, FULL_BOOT_GPREGRET2));
+    APP_ERROR_CHECK(sd_nvic_SystemReset());
+}
+
 /**@brief button press event process
  */
 extern bool g_usb_led_marquee_enable;
 static void button_press_process(void) {
     // Make sure that one of the AB buttons has a click event
     if (m_is_b_btn_release || m_is_a_btn_release) {
+        if (ble_slave_rf_only()) {
+            restart_full_boot();
+            return;
+        }
+        hf_sniff_stop();
         if (m_is_a_btn_release) {
             if (!m_is_btn_long_press) {
                 run_button_function_by_settings(settings_get_button_press_config('a'));
@@ -984,6 +1026,7 @@ static void blink_usb_led_status(void) {
 }
 
 static void lesc_event_process(void) {
+    if (ble_slave_rf_only()) return;
     if (settings_get_ble_pairing_enable_first_load()) {
         ret_code_t err_code;
         err_code = nrf_ble_lesc_request_handler();
@@ -997,9 +1040,32 @@ static void ble_passkey_init(void) {
     }
 }
 
+static bool rng_seed_before_ble(void) {
+    /* No CC310/TRNG initialization follows on this strictly admitted path.
+     * Obtain fresh hardware entropy before the SoftDevice takes over RNG,
+     * avoiding its initial random-pool fill. Other boots keep TRNG first. */
+    if (NRF_POWER->RESETREAS == POWER_RESETREAS_NFC_Msk && tag_emulation_rf_only_safe()) {
+        rng_drv_and_srand_init();
+        return true;
+    }
+    return false;
+}
+
+static void usb_start_when_ready(void) {
+    /* Initial USB clock/controller setup must not compete with the first RF
+     * exchange. In the restricted boot, enumerate after the field is gone.
+     * Once started, USB remains available for diagnostics and recovery. */
+    if (!m_usb_started && (!ble_slave_rf_only() ||
+            (!g_is_tag_emulating && !nrfx_nfct_field_check()))) {
+        usb_start();
+        m_usb_started = true;
+    }
+}
+
 /**@brief Application main function.
  */
 int main(void) {
+    NRF_NVMC->ICACHECNF = NVMC_ICACHECNF_CACHEEN_Msk;
     hw_connect_init();        // Remember to initialize the pins first
 
     fds_util_init();          // Initialize fds tool
@@ -1010,10 +1076,14 @@ int main(void) {
     gpio_te_init();           // Initialize GPIO matrix library
     app_timers_init();        // Initialize soft timer
     power_management_init();  // Power management initialization
-    usb_cdc_init();           // USB cdc emulation initialization
+    usb_init();              // Initialize USB clock and power drivers
+    bool rng_seeded = rng_seed_before_ble();
     ble_slave_init();         // Bluetooth protocol stack initialization
+    /* NFCT needs HFXO before activation, even with USB and PWM stopped. */
+    APP_ERROR_CHECK(app_hfclk_acquire(HFCLK_NFC));
+    APP_ERROR_CHECK(app_hfclk_wait());
 
-    rng_drv_and_srand_init(); // Random number generator initialization
+    if (!rng_seeded) rng_drv_and_srand_init();
     bsp_timer_init();         // Initialize timeout timer
     bsp_timer_start();        // Start BSP TIMER and prepare it for processing business logic
     button_init();            // Button initialization for handling business logic
@@ -1030,12 +1100,13 @@ int main(void) {
     tag_mode_enter();         // Enter card emulation mode by default
 
     // usbd event listener
-    APP_ERROR_CHECK(app_usbd_power_events_enable());
+    usb_start_when_ready();
 
     bsp_wdt_init();
     // Enter main loop.
     NRF_LOG_INFO("Chameleon working");
     while (1) {
+        usb_start_when_ready();
         // process lesc event
         lesc_event_process();
         // Button event process
@@ -1044,6 +1115,8 @@ int main(void) {
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // Field generator rainbow animation
         field_generator_rainbow_loop();
+        nfca_session_poll();
+        hf_sniff_poll();
 #endif
 
         // Led blink at usb status (only if field generator is off)
@@ -1051,17 +1124,36 @@ int main(void) {
             blink_usb_led_status();
         }
 
+        // USB event process
+        if (m_usb_started) usb_poll();
+        web_tearoff_poll();
         // Data pack process
         data_frame_process();
         // Log print process
         while (NRF_LOG_PROCESS());
-        // USB event process
-        while (app_usbd_event_queue_process());
         // WDT refresh
         bsp_wdt_feed();
+#if defined(PROJECT_CHAMELEON_ULTRA)
+        if (m_is_field_on) {
+            nfc_st25tb_sense_switch(false);
+            nfc_tag_15_sense_switch(false);
+        }
+        if (!m_is_field_on && usb_cdc_tx_ready()) nfc_tag_15_poll();
+        bool st25tb_field_active = !m_is_field_on && nfc_st25tb_service();
+#endif
         // No task to process, system sleep enter.
         // If system idle sometime, we can enter deep sleep state.
         // Some task process done, we can enter cpu sleep state.
+#if defined(PROJECT_CHAMELEON_ULTRA)
+        if (hf_sniff_active()) {
+            hf_sniff_poll();
+        } else if (!st25tb_field_active) {
+            sleep_system_run(system_off_enter,
+                             nfc_tag_15_active() && usb_cdc_tx_ready()
+                                 ? nfc_tag_15_poll : nrf_pwr_mgmt_run);
+        }
+#else
         sleep_system_run(system_off_enter, nrf_pwr_mgmt_run);
+#endif
     }
 }

@@ -37,4 +37,7 @@
 #define     STATUS_CMD_ERR                          (0x75)  // Execution of command failed
 
 
+/* Another transport owns an opt-in web operation; legacy idle behavior is unchanged. */
+#define STATUS_BUSY (0x76)
+
 #endif

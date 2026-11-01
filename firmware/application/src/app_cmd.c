@@ -14,22 +14,34 @@
 #include "settings.h"
 #include "delayed_reset.h"
 #include "netdata.h"
+#include "net/api.h"
+#include "net/slot_api.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
 #include "lf_em4x05_data.h"
+#include "lf_t55xx.h"
 #include "rc522.h"
 #include "mf1_crapto1.h"
+#include "mf1_capture_stats.h"
+#include "nfca_session.h"
+#include "desfire_reader.h"
+#include "nfc_desfire.h"
+#include "nfca_commands.h"
+#include "hf_reader.h"
+#include "hf_radio.h"
 #include "parity.h"
 #endif
 #include "nfc_14a.h"
-/* Forward declarations for functions added to nfc_14a.c/h in this PR.
- * These are declared here to avoid build failure if nfc_14a.h is not yet
- * updated on the build system. */
-extern void nfc_tag_14a_set_tx_sniff_cb(void (*cb)(const uint8_t *, uint16_t));
-extern void nfc_tag_14a_clear_tx_sniff_cb(void);
-extern void nfc_tag_14a_set_sniff_passive(bool passive);
+#include "hf_sniff.h"
 #include "nfc_14a_4.h"
+#if defined(PROJECT_CHAMELEON_ULTRA)
+#include "nfc_st25tb.h"
+#if defined(PROJECT_CHAMELEON_ULTRA)
+#include "nfc_15.h"
+#endif
+#include "st25tb/model.h"
+#endif
 
 #define NRF_LOG_MODULE_NAME app_cmd
 #include "nrf_log.h"
@@ -90,6 +102,13 @@ static data_frame_tx_t *cmd_processor_change_device_mode(uint16_t cmd, uint16_t 
 static data_frame_tx_t *cmd_processor_get_device_mode(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t resp_data = (get_device_mode() == DEVICE_MODE_READER);
     return data_frame_make(cmd, STATUS_SUCCESS, sizeof(resp_data), &resp_data);
+}
+
+static data_frame_tx_t *cmd_processor_slot_snapshot(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t output[512];
+    uint16_t size;
+    status = slot_snapshot_request(data, length, output, sizeof(output), &size);
+    return data_frame_make(cmd, status, size, output);
 }
 
 static data_frame_tx_t *cmd_processor_enter_bootloader(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -262,40 +281,25 @@ static data_frame_tx_t *cmd_processor_set_long_press_threshold(uint16_t cmd, uin
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 
-static data_frame_tx_t *cmd_processor_hf14a_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    picc_14a_tag_t taginfo;
-    status = pcd_14a_reader_scan_auto(&taginfo);
-    if (status != STATUS_HF_TAG_OK) {
-        return data_frame_make(cmd, status, 0, NULL);
-    }
-    // uidlen[1]|uid[uidlen]|atqa[2]|sak[1]|atslen[1]|ats[atslen]
-    // dynamic length, so no struct
-    uint8_t payload[1 + sizeof(taginfo.uid) + sizeof(taginfo.atqa) + sizeof(taginfo.sak) + 1 + 254];
-    uint16_t offset = 0;
-    payload[offset++] = taginfo.uid_len;
-    memcpy(&payload[offset], taginfo.uid, taginfo.uid_len);
-    offset += taginfo.uid_len;
-    memcpy(&payload[offset], taginfo.atqa, sizeof(taginfo.atqa));
-    offset += sizeof(taginfo.atqa);
-    payload[offset++] = taginfo.sak;
-    payload[offset++] = taginfo.ats_len;
-    memcpy(&payload[offset], taginfo.ats, taginfo.ats_len);
-    offset += taginfo.ats_len;
-    return data_frame_make(cmd, STATUS_HF_TAG_OK, offset, payload);
+static data_frame_tx_t *cmd_processor_hf_reader(uint16_t cmd, uint16_t status,
+        uint16_t length, uint8_t *data) {
+    uint8_t output[HF_READER_OUTPUT_BYTES];
+    uint16_t size;
+    status = hf_reader_command(cmd, length, data, output, sizeof(output), &size);
+    return data_frame_make(cmd, status, size, output);
+}
+
+static data_frame_tx_t *cmd_processor_nfca(uint16_t cmd, uint16_t status,
+    uint16_t length, uint8_t *data) {
+    uint8_t output[NFCA_COMMAND_OUTPUT_BYTES];
+    uint16_t output_length;
+    status = nfca_command(cmd, length, data, output, &output_length);
+    return data_frame_make(cmd, status, output_length, output);
 }
 
 static data_frame_tx_t *cmd_processor_mf1_detect_support(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     status = check_std_mifare_nt_support();
     return data_frame_make(cmd, status, 0, NULL);
-}
-
-static data_frame_tx_t *cmd_processor_mf1_detect_prng(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    uint8_t type;
-    status = check_prng_type((mf1_prng_type_t *)&type);
-    if (status != STATUS_HF_TAG_OK) {
-        return data_frame_make(cmd, status, 0, NULL);
-    }
-    return data_frame_make(cmd, STATUS_HF_TAG_OK, sizeof(type), &type);
 }
 
 // We have a reusable payload structure.
@@ -441,24 +445,6 @@ static data_frame_tx_t *cmd_processor_mf1_check_keys_of_sectors(uint16_t cmd, ui
     return data_frame_make(cmd, status, sizeof(out), (uint8_t *)&out);
 }
 
-static data_frame_tx_t *cmd_processor_mf1_check_keys_on_block(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    if (length < 9 || data[2] * 6 + 3 != length) {
-        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
-    }
-
-    mf1_toolbox_check_keys_on_block_in_t in = {
-        .block = data[0],
-        .key_type = data[1],
-        .keys_len = data[2],
-        .keys = (mf1_key_t *) &data[3]
-    };
-
-    mf1_toolbox_check_keys_on_block_out_t out;
-    status = mf1_toolbox_check_keys_on_block(&in, &out);
-
-    return data_frame_make(cmd, status, sizeof(out), (uint8_t *)&out);
-}
-
 static data_frame_tx_t *cmd_processor_mf1_hardnested_nonces_acquire(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     typedef struct {
         uint8_t slow;
@@ -497,27 +483,39 @@ static data_frame_tx_t *cmd_processor_mf1_hardnested_nonces_acquire(uint16_t cmd
     return data_frame_make(cmd, status, nonces[0] * 4.5, (uint8_t *)(nonces + 1));
 }
 
-static data_frame_tx_t *cmd_processor_mf1_read_one_block(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    typedef struct {
-        uint8_t type;
-        uint8_t block;
-        uint8_t key[6];
-    } PACKED payload_t;
-    if (length != sizeof(payload_t)) {
+static data_frame_tx_t *cmd_processor_desfire_reader(uint16_t cmd, uint16_t status,
+    uint16_t length, uint8_t *data) {
+    uint8_t output[512]; uint16_t count = 0;
+    status = desfire_reader_command(length, data, output, &count);
+    return data_frame_make(cmd, status, count, output);
+}
+
+static data_frame_tx_t *cmd_processor_desfire_image(uint16_t cmd, uint16_t status,
+    uint16_t length, uint8_t *data) {
+    uint8_t output[502]; uint16_t count = 0;
+    status = nfc_desfire_image_command(cmd == DATA_CMD_DESFIRE_SET_IMAGE, length, data, output, &count);
+    return data_frame_make(cmd, status, count, output);
+}
+
+static data_frame_tx_t *cmd_processor_nfca_session(uint16_t cmd,
+    uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != 1 || data[0] > 2) {
+        nfca_session_close();
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
-
-    payload_t *payload = (payload_t *)data;
-    uint8_t block[16] = { 0x00 };
-    status = auth_key_use_522_hw(payload->block, payload->type, payload->key);
-    if (status != STATUS_HF_TAG_OK) {
-        return data_frame_make(cmd, status, 0, NULL);
+    if (data[0] == 2) {
+        uint8_t active = nfca_session_active();
+        return data_frame_make(cmd, STATUS_SUCCESS, 1, &active);
     }
-    status = pcd_14a_reader_mf1_read(payload->block, block);
-    if (status != STATUS_HF_TAG_OK) {
-        return data_frame_make(cmd, status, 0, NULL);
+    if (data[0] == 0) {
+        nfca_session_close();
+        return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
     }
-    return data_frame_make(cmd, status, sizeof(block), block);
+    if (get_device_mode() != DEVICE_MODE_READER) {
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    }
+    nfca_session_open();
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
 }
 
 static data_frame_tx_t *cmd_processor_mf1_write_one_block(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -682,6 +680,9 @@ static data_frame_tx_t *cmd_processor_hf14a_set_field_off(uint16_t cmd, uint16_t
         return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
     }
 
+    if (!hf_radio_release()) {
+        return data_frame_make(cmd, STATUS_HF_ERR_STAT, 0, NULL);
+    }
     // Turn off the antenna
     pcd_14a_reader_antenna_off();
 
@@ -715,6 +716,12 @@ static data_frame_tx_t *cmd_processor_hf14a_raw(uint16_t cmd, uint16_t status, u
     } PACKED payload_t;
     payload_t *payload = (payload_t *)data;
     if (length < sizeof(payload_t)) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+
+    uint16_t bits = U16NTOHS(payload->data_bitlength);
+    if (bits > DEF_FIFO_LENGTH * 8 || length != sizeof(payload_t) + (bits + 7u) / 8u ||
+            (payload->options.append_crc && (bits % 8u || bits / 8u > DEF_FIFO_LENGTH - 2u))) {
         return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
     }
 
@@ -812,6 +819,13 @@ static data_frame_tx_t *cmd_processor_mf1_manipulate_value_block(uint16_t cmd, u
     }
 
     return data_frame_make(cmd, status, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_lf_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t output[LF_T55XX_PLAN_BYTES];
+    uint16_t output_length = 0;
+    status = lf_t55xx_command(data, length, output, &output_length);
+    return data_frame_make(cmd, status, output_length, output);
 }
 
 static data_frame_tx_t *cmd_processor_em410x_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
@@ -1156,6 +1170,29 @@ static data_frame_tx_t *cmd_processor_set_slot_data_default(uint16_t cmd, uint16
     status = tag_emulation_factory_data(payload->num_slot, tag_type) ? STATUS_SUCCESS : STATUS_NOT_IMPLEMENTED;
     return data_frame_make(cmd, status, 0, NULL);
 }
+
+#if defined(PROJECT_CHAMELEON_ULTRA)
+static data_frame_tx_t *cmd_processor_st25tb_get_image(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    uint8_t image[ST25TB_IMAGE_SIZE];
+    if (!nfc_st25tb_get_image(image)) return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    return data_frame_make(cmd, STATUS_SUCCESS, sizeof(image), image);
+}
+
+static data_frame_tx_t *cmd_processor_st25tb_set_image(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (length != ST25TB_IMAGE_SIZE || !nfc_st25tb_set_image(data))
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_nfcv_image(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t image[NFCV_IMAGE_MAX_SIZE];
+    uint16_t result_length;
+    status = nfc_tag_15_image_command(cmd == DATA_CMD_HF15_SET_IMAGE, length, data,
+                                      image, &result_length);
+    return data_frame_make(cmd, status, result_length, image);
+}
+#endif
 
 static data_frame_tx_t *cmd_processor_set_slot_enable(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     typedef struct {
@@ -2054,6 +2091,9 @@ static data_frame_tx_t *before_reader_run(uint16_t cmd, uint16_t status, uint16_
     if (mode != DEVICE_MODE_READER) {
         return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
     }
+    if (cmd != DATA_CMD_HF14A_SET_FIELD_OFF && !hf_radio_release()) {
+        return data_frame_make(cmd, STATUS_HF_ERR_STAT, 0, NULL);
+    }
     return NULL;
 }
 
@@ -2063,20 +2103,16 @@ static data_frame_tx_t *before_reader_run(uint16_t cmd, uint16_t status, uint16_
  * we must to wait some time, to init picc(power).
  */
 static data_frame_tx_t *before_hf_reader_run(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    data_frame_tx_t *ret = before_reader_run(cmd, status, length, data);
-    if (ret == NULL) {
-        pcd_14a_reader_reset();
-        pcd_14a_reader_antenna_on();
-        bsp_delay_ms(8);
-    }
-    return ret;
+    status = nfca_prepare(cmd, length, data);
+    if (status != STATUS_SUCCESS) return data_frame_make(cmd, status, 0, NULL);
+    return NULL;
 }
 
 /**
  * after reader run, off antenna, to keep battery.
  */
 static data_frame_tx_t *after_hf_reader_run(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    pcd_14a_reader_antenna_off();
+    nfca_finish(cmd);
     return NULL;
 }
 
@@ -2459,13 +2495,16 @@ static data_frame_tx_t *cmd_processor_hf14a_auth_trace(uint16_t cmd, uint16_t st
     return data_frame_make(cmd, auth_status, m_auth_trace_len, m_auth_trace_buf);
 }
 
-#define HF_SNIFF_BUF_SIZE   3800   /* leave room for USB framing */
-#define HF_SNIFF_MAX_FRAMES  200
+static data_frame_tx_t *cmd_processor_hf_sniff_live(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    uint8_t output[HF_SNIFF_BATCH_BYTES];
+    uint16_t size;
+    uint16_t result = hf_sniff_command(cmd == DATA_CMD_HF15_SNIFF_LIVE, length, data, output, &size);
+    return data_frame_make(cmd, result, size, output);
+}
 
-static uint8_t  m_sniff_buf[HF_SNIFF_BUF_SIZE];
+static uint8_t *m_sniff_buf;
 static uint16_t m_sniff_buf_len = 0;
 static bool     m_sniff_active  = false;
-static uint16_t m_sniff_cb_count = 0;   /* debug: total callback invocations */
 
 /* Encode one frame into m_sniff_buf.
  * Format: [szBits_be16][data...]
@@ -2474,22 +2513,32 @@ static uint16_t m_sniff_cb_count = 0;   /* debug: total callback invocations */
  * Old parsers (bit15=0 for all frames) still work correctly. */
 static void hf14a_sniff_store(const uint8_t *data, uint16_t szBits, bool is_tx) {
     uint16_t szBytes = (szBits + 7) / 8;
-    if (m_sniff_buf_len + 2 + szBytes > HF_SNIFF_BUF_SIZE) return;
+    if (m_sniff_buf_len + 2 + szBytes > HF_SNIFF_LEGACY_BYTES) {
+        return;
+    }
+
     uint16_t hdr = szBits | (is_tx ? 0x8000u : 0x0000u);
-    m_sniff_buf[m_sniff_buf_len++] = (hdr >> 8) & 0xFF;
-    m_sniff_buf[m_sniff_buf_len++] =  hdr        & 0xFF;
+    m_sniff_buf[m_sniff_buf_len] = (hdr >> 8) & 0xFF;
+    m_sniff_buf_len++;
+    m_sniff_buf[m_sniff_buf_len] = hdr & 0xFF;
+    m_sniff_buf_len++;
     memcpy(&m_sniff_buf[m_sniff_buf_len], data, szBytes);
     m_sniff_buf_len += szBytes;
 }
 
 static void hf14a_sniff_frame_cb(const uint8_t *data, uint16_t szBits) {
-    m_sniff_cb_count++;   /* count even if buffer full or inactive */
-    if (!m_sniff_active) return;
+    if (!m_sniff_active) {
+        return;
+    }
+
     hf14a_sniff_store(data, szBits, false);  /* reader→card */
 }
 
 static void hf14a_sniff_tx_frame_cb(const uint8_t *data, uint16_t szBits) {
-    if (!m_sniff_active) return;
+    if (!m_sniff_active || szBits == 0) {
+        return;
+    }
+
     hf14a_sniff_store(data, szBits, true);   /* card→reader */
 }
 
@@ -2498,7 +2547,9 @@ static data_frame_tx_t *cmd_processor_hf14a_sniff(uint16_t cmd, uint16_t status,
     uint32_t timeout_ms = 5000;
     if (length >= 2) {
         timeout_ms = ((uint32_t)data[0] << 8) | data[1];
-        if (timeout_ms == 0 || timeout_ms > 30000) timeout_ms = 5000;
+        if (timeout_ms == 0 || timeout_ms > 30000) {
+            timeout_ms = 5000;
+        }
     }
 
     /* Reload active slot data before sniffing.
@@ -2517,8 +2568,8 @@ static data_frame_tx_t *cmd_processor_hf14a_sniff(uint16_t cmd, uint16_t status,
      * NFCT and wipe the anti-collision data, breaking the emulation.
      * The device must already be in emulator mode (hw mode --emulator)
      * with a slot active before running this command. */
+    m_sniff_buf = hf_sniff_legacy_acquire();
     m_sniff_buf_len = 0;
-    m_sniff_cb_count = 0;
     m_sniff_active  = true;
     /* passive mode intentionally disabled: CU acts as the card so it must
      * respond normally to the reader (ATQA/UID/SAK). TX sniff captures responses. */
@@ -3204,6 +3255,10 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_SET_ACTIVE_SLOT,              NULL,                        cmd_processor_set_active_slot,               NULL                   },
     {    DATA_CMD_SET_SLOT_TAG_TYPE,            NULL,                        cmd_processor_set_slot_tag_type,             NULL                   },
     {    DATA_CMD_SET_SLOT_DATA_DEFAULT,        NULL,                        cmd_processor_set_slot_data_default,         NULL                   },
+#if defined(PROJECT_CHAMELEON_ULTRA)
+    {    DATA_CMD_ST25TB_GET_SLOT_IMAGE,         NULL,                        cmd_processor_st25tb_get_image,             NULL                   },
+    {    DATA_CMD_ST25TB_SET_SLOT_IMAGE,         NULL,                        cmd_processor_st25tb_set_image,             NULL                   },
+#endif
     {    DATA_CMD_SET_SLOT_ENABLE,              NULL,                        cmd_processor_set_slot_enable,               NULL                   },
     {    DATA_CMD_SET_SLOT_TAG_NICK,            NULL,                        cmd_processor_set_slot_tag_nick,             NULL                   },
     {    DATA_CMD_GET_SLOT_TAG_NICK,            NULL,                        cmd_processor_get_slot_tag_nick,             NULL                   },
@@ -3217,6 +3272,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_GET_ANIMATION_MODE,           NULL,                        cmd_processor_get_animation_mode,            NULL                   },
     {    DATA_CMD_GET_GIT_VERSION,              NULL,                        cmd_processor_get_git_version,               NULL                   },
     {    DATA_CMD_GET_ACTIVE_SLOT,              NULL,                        cmd_processor_get_active_slot,               NULL                   },
+    {    DATA_CMD_SLOT_SNAPSHOT,                NULL,                        cmd_processor_slot_snapshot,                 NULL                   },
     {    DATA_CMD_GET_SLOT_INFO,                NULL,                        cmd_processor_get_slot_info,                 NULL                   },
     {    DATA_CMD_WIPE_FDS,                     NULL,                        cmd_processor_wipe_fds,                      NULL                   },
     {    DATA_CMD_DELETE_SLOT_TAG_NICK,         NULL,                        cmd_processor_delete_slot_tag_nick,          NULL                   },
@@ -3243,9 +3299,25 @@ static cmd_data_map_t m_data_cmd_map[] = {
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
 
-    {    DATA_CMD_HF14A_SCAN,                   before_hf_reader_run,        cmd_processor_hf14a_scan,                    after_hf_reader_run    },
+    {    DATA_CMD_HF15_GET_IMAGE,               NULL,                        cmd_processor_nfcv_image,                    NULL                   },
+    {    DATA_CMD_HF15_SET_IMAGE,               NULL,                        cmd_processor_nfcv_image,                    NULL                   },
+    {    DATA_CMD_HF15_INVENTORY,               NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_GET_SYSTEM_INFO,         NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_READ_BLOCK,              NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF14B_SCAN,                   NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_ST25TB_INFO,                  NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_ST25TB_READ_BLOCK,            NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_ST25TB_DUMP,                  NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_ST25TB_TEAROFF,               NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_ST25TB_WRITE_BLOCK,           NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_DUMP,                    NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_SLIX_PRIVACY_SCAN,           NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_WRITE_BLOCK,            NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_RAW,                    NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF15_SECURITY,                NULL,                        cmd_processor_hf_reader,                     NULL                   },
+    {    DATA_CMD_HF14A_SCAN,                   before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF1_DETECT_SUPPORT,           before_hf_reader_run,        cmd_processor_mf1_detect_support,            after_hf_reader_run    },
-    {    DATA_CMD_MF1_DETECT_PRNG,              before_hf_reader_run,        cmd_processor_mf1_detect_prng,               after_hf_reader_run    },
+    {    DATA_CMD_MF1_DETECT_PRNG,              before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF1_STATIC_NESTED_ACQUIRE,    before_hf_reader_run,        cmd_processor_mf1_static_nested_acquire,     after_hf_reader_run    },
     {    DATA_CMD_MF1_DARKSIDE_ACQUIRE,         before_hf_reader_run,        cmd_processor_mf1_darkside_acquire,          after_hf_reader_run    },
     {    DATA_CMD_MF1_DETECT_NT_DIST,           before_hf_reader_run,        cmd_processor_mf1_detect_nt_dist,            after_hf_reader_run    },
@@ -3253,8 +3325,23 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_MF1_ENC_NESTED_ACQUIRE,       before_hf_reader_run,        cmd_processor_mf1_enc_nested_acquire,        after_hf_reader_run    },
 
     {    DATA_CMD_MF1_AUTH_ONE_KEY_BLOCK,       before_hf_reader_run,        cmd_processor_mf1_auth_one_key_block,        after_hf_reader_run    },
-    {    DATA_CMD_MF1_READ_ONE_BLOCK,           before_hf_reader_run,        cmd_processor_mf1_read_one_block,            after_hf_reader_run    },
+    {    DATA_CMD_MF1_READ_ONE_BLOCK,           before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_TYPE2_READ,                  before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_DESFIRE_READER,              NULL,                        cmd_processor_desfire_reader,                NULL                   },
+    {    DATA_CMD_DESFIRE_GET_IMAGE,           NULL,                        cmd_processor_desfire_image,                 NULL                   },
+    {    DATA_CMD_DESFIRE_SET_IMAGE,           NULL,                        cmd_processor_desfire_image,                 NULL                   },
+    {    DATA_CMD_MF1_DARKSIDE_STEP,            before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_READ_SECTOR,              before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF1_WRITE_ONE_BLOCK,          before_hf_reader_run,        cmd_processor_mf1_write_one_block,           after_hf_reader_run    },
+    {    DATA_CMD_NFCA_WRITE_USER_UNIT,          before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_TYPE2_AUTH_READ,               before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_MAGIC_PROBE,                before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_UID_SPECIAL,                before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_UID_SET,                    before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_TRAILER_SET,                before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_INSPECT,                   before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_MAINTENANCE,               before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_BLOCK0_SET,                 before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF0_ULC_AUTH,                 before_hf_reader_run,        cmd_processor_mf0_ulc_auth,                  after_hf_reader_run    },
     {    DATA_CMD_MF0_ULC_READ,                 before_hf_reader_run,        cmd_processor_mf0_ulc_read,                  after_hf_reader_run    },
     {    DATA_CMD_MF0_ULC_WRITE,                before_hf_reader_run,        cmd_processor_mf0_ulc_write,                 after_hf_reader_run    },
@@ -3263,8 +3350,11 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_MF1_MANIPULATE_VALUE_BLOCK,   before_hf_reader_run,        cmd_processor_mf1_manipulate_value_block,    after_hf_reader_run    },
     {    DATA_CMD_MF1_CHECK_KEYS_OF_SECTORS,    before_hf_reader_run,        cmd_processor_mf1_check_keys_of_sectors,     after_hf_reader_run    },
     {    DATA_CMD_MF1_HARDNESTED_ACQUIRE,       before_hf_reader_run,        cmd_processor_mf1_hardnested_nonces_acquire, after_hf_reader_run    },
-    {    DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK,      before_hf_reader_run,        cmd_processor_mf1_check_keys_on_block,       after_hf_reader_run    },
+    {    DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK,      before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_COLLECT_OBSERVATIONS,     before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_CAPTURE_SESSION,          NULL,                        cmd_processor_nfca_session,          NULL                   },
 
+    {    DATA_CMD_LF_T55XX,                     before_reader_run,           cmd_processor_lf_t55xx,                      NULL                   },
     {    DATA_CMD_EM410X_SCAN,                  before_reader_run,           cmd_processor_em410x_scan,                   NULL                   },
     {    DATA_CMD_EM410X_WRITE_TO_T55XX,        before_reader_run,           cmd_processor_em410x_write_to_t55xx,         NULL                   },
     {    DATA_CMD_EM410X_ELECTRA_WRITE_TO_T55XX, before_reader_run,           cmd_processor_em410x_electra_write_to_t55xx, NULL                   },
@@ -3292,6 +3382,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
+    {    DATA_CMD_HF15_SNIFF_LIVE,              NULL,                        cmd_processor_hf_sniff_live,                 NULL                   },
+    {    DATA_CMD_HF14A_SNIFF_LIVE,             NULL,                        cmd_processor_hf_sniff_live,                 NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },
     {    DATA_CMD_HF14A_AUTH_TRACE,             before_hf_reader_run,        cmd_processor_hf14a_auth_trace,              after_hf_reader_run    },
 
@@ -3391,11 +3483,11 @@ data_frame_tx_t *cmd_processor_get_device_capabilities(uint16_t cmd, uint16_t st
  * @param resp data
  */
 static void auto_response_data(data_frame_tx_t *resp) {
-    // TODO Please select the reply source automatically according to the message source,
-    //  and do not reply by checking the validity of the link layer by layer
-    if (is_usb_working()) {
+    if (data_frame_source() == DATA_SOURCE_USB) usb_cdc_request_end();
+    if (!data_frame_reply_valid()) return;
+    if (data_frame_source() == DATA_SOURCE_USB && is_usb_working()) {
         usb_cdc_write(resp->buffer, resp->length);
-    } else if (is_nus_working()) {
+    } else if (data_frame_source() == DATA_SOURCE_BLE && is_nus_working()) {
         nus_data_response(resp->buffer, resp->length);
     } else {
         NRF_LOG_ERROR("No connection valid found at response client.");
@@ -3405,7 +3497,52 @@ static void auto_response_data(data_frame_tx_t *resp) {
 
 /**@brief Function to process data frame(cmd)
  */
+static bool rf_only_command_allowed(uint16_t cmd) {
+    /* Discovery and Classic memory inspection remain read-only.
+     * Every other command may reach reader/slot/crypto code and must wait for
+     * a button restart. DFU remains available as an independent control path. */
+    switch (cmd) {
+        case DATA_CMD_GET_APP_VERSION: case DATA_CMD_GET_GIT_VERSION:
+        case DATA_CMD_GET_DEVICE_MODEL: case DATA_CMD_GET_DEVICE_CHIP_ID:
+        case DATA_CMD_GET_DEVICE_CAPABILITIES: case DATA_CMD_GET_DEVICE_MODE:
+        case DATA_CMD_GET_DEVICE_SETTINGS: case DATA_CMD_GET_ACTIVE_SLOT:
+        case DATA_CMD_GET_SLOT_INFO: case DATA_CMD_GET_ENABLED_SLOTS:
+        case DATA_CMD_HF14A_GET_ANTI_COLL_DATA: case DATA_CMD_MF1_GET_EMULATOR_CONFIG:
+        case DATA_CMD_MF1_GET_FIELD_OFF_DO_RESET: case DATA_CMD_MF1_GET_PRNG_TYPE:
+        case DATA_CMD_MF1_READ_EMU_BLOCK_DATA: case DATA_CMD_ENTER_BOOTLOADER:
+            return true;
+        default: return false;
+    }
+}
+
 void on_data_frame_received(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    if (ble_slave_rf_only() && !rf_only_command_allowed(cmd)) {
+        auto_response_data(data_frame_make(cmd, STATUS_BUSY, 0, NULL));
+        return;
+    }
+    if (cmd != DATA_CMD_HF14A_SNIFF_LIVE && cmd != DATA_CMD_HF15_SNIFF_LIVE) {
+        hf_sniff_stop();
+    }
+    bool web_owned = web_session_active();
+    if (cmd != DATA_CMD_GET_APP_VERSION && cmd != DATA_CMD_GET_GIT_VERSION &&
+        cmd != DATA_CMD_GET_DEVICE_MODEL && cmd != DATA_CMD_GET_DEVICE_CAPABILITIES &&
+        cmd != DATA_CMD_ENTER_BOOTLOADER && web_owned) {
+        auto_response_data(data_frame_make(cmd, STATUS_BUSY, 0, NULL));
+        return;
+    }
+#if defined(PROJECT_CHAMELEON_ULTRA)
+    if (cmd != DATA_CMD_MF1_DARKSIDE_STEP && cmd != DATA_CMD_MF1_DARKSIDE_ACQUIRE &&
+        cmd != DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK && cmd != DATA_CMD_MF1_CAPTURE_SESSION &&
+        !web_owned) mf1_darkside_reset();
+    nfca_session_poll();
+    if (cmd != DATA_CMD_MF1_COLLECT_OBSERVATIONS && cmd != DATA_CMD_TYPE2_READ &&
+        cmd != DATA_CMD_DESFIRE_READER &&
+        cmd != DATA_CMD_MF1_READ_SECTOR &&
+        cmd != DATA_CMD_MF1_DARKSIDE_STEP && cmd != DATA_CMD_MF1_CAPTURE_SESSION
+        && !hf_reader_supports(cmd) && (!web_owned || cmd == DATA_CMD_ENTER_BOOTLOADER)) {
+        nfca_session_close();
+    }
+#endif
     data_frame_tx_t *response = NULL;
     bool is_cmd_support = false;
     for (int i = 0; i < ARRAY_SIZE(m_data_cmd_map); i++) {

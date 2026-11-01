@@ -14,6 +14,8 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid_main.c \
   $(PROJ_DIR)/settings.c \
   $(PROJ_DIR)/usb_main.c \
+  $(PROJ_DIR)/usb_controller.c \
+  $(PROJ_DIR)/usb_tearoff.c \
   $(PROJ_DIR)/rgb_marquee.c \
   $(PROJ_DIR)/bsp/bsp_delay.c \
   $(PROJ_DIR)/bsp/bsp_time.c \
@@ -25,14 +27,24 @@ SRC_FILES += \
   $(PROJ_DIR)/rfid/mf1_crapto1.c \
   $(PROJ_DIR)/rfid/mf1_crypto1.c \
   $(PROJ_DIR)/rfid/parity.c \
+  $(PROJ_DIR)/rfid/iso15693/frame.c \
+  $(PROJ_DIR)/rfid/st25tb/model.c \
+  $(PROJ_DIR)/rfid/st25tb/receiver.c \
   $(PROJ_DIR)/rfid/nfctag/tag_emulation.c \
   $(PROJ_DIR)/rfid/nfctag/tag_persistence.c \
   $(PROJ_DIR)/rfid/nfctag/hf/crypto1_helper.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/mf1_emulator_crypto.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_14a.c \
+  $(PROJ_DIR)/rfid/reader/hf/hf_sniff.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfcv_sniff.c \
+  $(PROJ_DIR)/rfid/iso15693/sniff_decode.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_14a_4.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/desfire_model.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_desfire.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_mf1.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_mf0_ntag.c \
   $(PROJ_DIR)/rfid/nfctag/hf/nfc_seos.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_st25tb.c \
   $(PROJ_DIR)/rfid/nfctag/lf/lf_tag_em.c \
   $(PROJ_DIR)/rfid/nfctag/lf/utils/fskdemod.c \
   $(PROJ_DIR)/rfid/nfctag/lf/utils/circular_buffer.c \
@@ -50,6 +62,7 @@ SRC_FILES += \
   $(PROJ_DIR)/utils/dataframe.c \
   $(PROJ_DIR)/utils/delayed_reset.c \
   $(PROJ_DIR)/utils/fds_util.c \
+  $(PROJ_DIR)/utils/hfclk.c \
   $(PROJ_DIR)/utils/syssleep.c \
   $(PROJ_DIR)/utils/timeslot.c \
   $(SDK_ROOT)/modules/nrfx/mdk/gcc_startup_nrf52840.S \
@@ -65,11 +78,6 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/fifo/app_fifo.c \
   $(SDK_ROOT)/components/libraries/scheduler/app_scheduler.c \
   $(SDK_ROOT)/components/libraries/timer/app_timer2.c \
-  $(SDK_ROOT)/components/libraries/usbd/app_usbd.c \
-  $(SDK_ROOT)/components/libraries/usbd/class/cdc/acm/app_usbd_cdc_acm.c \
-  $(SDK_ROOT)/components/libraries/usbd/app_usbd_core.c \
-  $(SDK_ROOT)/components/libraries/usbd/app_usbd_serial_num.c \
-  $(SDK_ROOT)/components/libraries/usbd/app_usbd_string_desc.c \
   $(SDK_ROOT)/components/libraries/util/app_util_platform.c \
   $(SDK_ROOT)/components/libraries/timer/drv_rtc.c \
   $(SDK_ROOT)/components/libraries/hardfault/nrf52/handler/hardfault_handler_gcc.c \
@@ -104,7 +112,6 @@ SRC_FILES += \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_power.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/prs/nrfx_prs.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_systick.c \
-  $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_usbd.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_nfct.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_timer.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_lpcomp.c \
@@ -127,7 +134,7 @@ SRC_FILES += \
   $(SDK_ROOT)/components/ble/ble_services/ble_nus/ble_nus.c \
   $(SDK_ROOT)/components/ble/ble_services/ble_bas/ble_bas.c \
   $(SDK_ROOT)/components/ble/nrf_ble_qwr/nrf_ble_qwr.c \
-  $(SDK_ROOT)/components/softdevice/common/nrf_sdh.c \
+  $(PROJ_DIR)/ble_clock.c \
   $(SDK_ROOT)/components/softdevice/common/nrf_sdh_ble.c \
   $(SDK_ROOT)/components/softdevice/common/nrf_sdh_soc.c \
   $(SDK_ROOT)/components/ble/peer_manager/auth_status_tracker.c \
@@ -181,6 +188,27 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hash.c \
   $(SDK_ROOT)/components/libraries/crypto/backend/oberon/oberon_backend_hmac.c \
 
+# TinyUSB provides USB serial and networking in every application build.
+ifneq ($(CURRENT_DEVICE_TYPE),ultra)
+$(error The application firmware requires Chameleon Ultra)
+endif
+TINYUSB ?= ../../.cache/web/deps/tinyusb
+LWIP ?= ../../.cache/web/deps/lwip
+WEB_BUILD ?= ../../.cache/web/assets
+WEB_INPUTS := $(TINYUSB)/src/tusb.c $(LWIP)/src/core/init.c $(WEB_BUILD)/web_assets.h
+ifneq ($(words $(wildcard $(WEB_INPUTS))),$(words $(WEB_INPUTS)))
+$(error Prepare USB dependencies and web assets first; see software/web/README.md)
+endif
+SRC_FILES += $(wildcard $(PROJ_DIR)/net/*.c) \
+  $(TINYUSB)/src/tusb.c $(TINYUSB)/src/common/tusb_fifo.c \
+  $(TINYUSB)/src/device/usbd.c $(TINYUSB)/src/device/usbd_control.c \
+  $(TINYUSB)/src/class/cdc/cdc_device.c $(TINYUSB)/src/class/net/ecm_rndis_device.c \
+  $(wildcard $(LWIP)/src/core/*.c) $(filter-out $(LWIP)/src/core/ipv4/dhcp.c,$(wildcard $(LWIP)/src/core/ipv4/*.c)) \
+  $(LWIP)/src/netif/ethernet.c
+INC_FOLDERS += $(SDK_ROOT)/modules/nrfx/drivers/src $(PROJ_DIR)/net $(TINYUSB)/src $(TINYUSB)/lib/networking $(LWIP)/src/include $(WEB_BUILD)
+# Keep web dispatch and serialization small; retain default optimization for RF kernels.
+$(addprefix $(OUTPUT_DIRECTORY)/application/,http.c.o api.c.o hf_reader.c.o st25tb_reader.c.o st25tb_tearoff_command.c.o web_tearoff.c.o): CFLAGS += -Os
+
 # Include folders common to all targets
 INC_FOLDERS += \
   ${PROJ_DIR} \
@@ -200,10 +228,6 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/nfc/platform \
   $(SDK_ROOT)/components/ble/ble_services/ble_ias_c \
   $(SDK_ROOT)/components/libraries/pwm \
-  $(SDK_ROOT)/components/libraries/usbd/class/cdc/acm \
-  $(SDK_ROOT)/components/libraries/usbd/class/hid/generic \
-  $(SDK_ROOT)/components/libraries/usbd/class/msc \
-  $(SDK_ROOT)/components/libraries/usbd/class/hid \
   $(SDK_ROOT)/modules/nrfx/hal \
   $(SDK_ROOT)/components/nfc/ndef/conn_hand_parser/le_oob_rec_parser \
   $(SDK_ROOT)/components/libraries/log \
@@ -213,6 +237,7 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/libraries/mutex \
   $(SDK_ROOT)/components/libraries/gfx \
   $(SDK_ROOT)/components/libraries/bootloader/ble_dfu \
+  $(SDK_ROOT)/components/libraries/bootloader \
   $(SDK_ROOT)/components/nfc/ndef/connection_handover/common \
   $(SDK_ROOT)/components/libraries/fifo \
   $(SDK_ROOT)/components/libraries/stack_info \
@@ -309,7 +334,6 @@ INC_FOLDERS += \
   $(SDK_ROOT)/modules/nrfx \
   $(SDK_ROOT)/components/libraries/twi_sensor \
   $(SDK_ROOT)/integration/nrfx/legacy \
-  $(SDK_ROOT)/components/libraries/usbd \
   $(SDK_ROOT)/components/nfc/ndef/connection_handover/ep_oob_rec \
   $(SDK_ROOT)/external/segger_rtt \
   $(SDK_ROOT)/components/libraries/atomic_fifo \
@@ -343,41 +367,62 @@ LIB_FILES += \
   $(SDK_ROOT)/external/nrf_cc310/lib/cortex-m4/hard-float/libnrf_cc310_0.9.13.a \
   $(SDK_ROOT)/external/nrf_oberon/lib/cortex-m4/hard-float/liboberon_3.0.8.a \
 
-ifeq	(${CURRENT_DEVICE_TYPE}, ${CHAMELEON_ULTRA})
 # Append reader module source code to compile list.
-  SRC_FILES +=\
-    $(PROJ_DIR)/rfid/reader/hf/mf1_toolbox.c \
-    $(PROJ_DIR)/rfid/reader/hf/rc522.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_125khz_radio.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_em410x_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_em4x05_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_gap.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_reader_generic.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_reader_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_reader_main.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_t55xx_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_hidprox_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_pac_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_ioprox_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_viking_data.c \
-    $(PROJ_DIR)/rfid/reader/lf/lf_jablotron_data.c \
+SRC_FILES +=\
+  $(PROJ_DIR)/rfid/reader/hf/mf1_toolbox.c \
+  $(PROJ_DIR)/rfid/reader/hf/mf1_capture_stats.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfca_session.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfca_commands.c \
+  $(PROJ_DIR)/rfid/reader/hf/mf1_uid.c \
+  $(PROJ_DIR)/rfid/reader/hf/mf1_magic.c \
+  $(PROJ_DIR)/rfid/reader/hf/type2_commands.c \
+  $(PROJ_DIR)/rfid/reader/hf/desfire_reader.c \
+  $(PROJ_DIR)/rfid/reader/hf/hf_reader.c \
+  $(PROJ_DIR)/rfid/reader/hf/hf_radio.c \
+  $(PROJ_DIR)/rfid/reader/hf/rc522_raw.c \
+  $(PROJ_DIR)/rfid/reader/hf/rc522_tx.c \
+  $(PROJ_DIR)/rfid/reader/rf_workspace.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfcb_decode.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfcb_reader.c \
+  $(PROJ_DIR)/rfid/reader/hf/st25tb_reader.c \
+  $(PROJ_DIR)/rfid/reader/hf/st25tb_tearoff_command.c \
+  $(PROJ_DIR)/rfid/reader/hf/st25tb_tearoff.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfcv_reader_codec.c \
+  $(PROJ_DIR)/rfid/reader/hf/nfcv_reader.c \
+  $(PROJ_DIR)/rfid/reader/hf/rc522.c \
+  $(PROJ_DIR)/rfid/iso15693/memory.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfcv_radio.c \
+  $(PROJ_DIR)/rfid/iso15693/session.c \
+  $(PROJ_DIR)/rfid/iso15693/slix.c \
+  $(PROJ_DIR)/rfid/iso15693/standard.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_15.c \
+  $(PROJ_DIR)/rfid/nfctag/hf/nfc_st25tb_radio.c \
+  $(PROJ_DIR)/utils/rf_timeslot.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_125khz_radio.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_em410x_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_em4x05_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_gap.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_reader_generic.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_reader_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_reader_main.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_t55xx_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_t55xx.c \
+  $(PROJ_DIR)/rfid/reader/lf/t55xx_radio.c \
+  $(PROJ_DIR)/rfid/nfctag/lf/protocols/t55xx_decode.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_hidprox_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_pac_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_ioprox_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_viking_data.c \
+  $(PROJ_DIR)/rfid/reader/lf/lf_jablotron_data.c \
 
-  INC_FOLDERS +=\
-    ${PROJ_DIR}/rfid/reader/ \
-    ${PROJ_DIR}/rfid/reader/hf \
-    ${PROJ_DIR}/rfid/reader/lf \
+INC_FOLDERS +=\
+  ${PROJ_DIR}/rfid/reader/ \
+  ${PROJ_DIR}/rfid/reader/hf \
+  ${PROJ_DIR}/rfid/reader/lf \
 
-  CFLAGS += -DPROJECT_CHAMELEON_ULTRA
+CFLAGS += -DPROJECT_CHAMELEON_ULTRA
 
 $(info  Chameleon Ultra <Application>: reader and tag emulation module enable.)
-else ifeq (${CURRENT_DEVICE_TYPE}, ${CHAMELEON_LITE})
-
-  CFLAGS += -DPROJECT_CHAMELEON_LITE
-
-$(info  Chameleon Lite <Application>: tag emulation module enable.)
-else
-$(error Chameleon <Application>: No device type define.)
-endif
 
 ifeq (${NRF_LOG_UART_ON_SWO_ENABLED}, 1)
 SRC_FILES += \
@@ -499,6 +544,28 @@ CC_VERSION := $(or $(strip $(CC_VERSION)),0)
 #endif
 
 $(foreach target, $(TARGETS), $(call define_target, $(target)))
+
+# newlib-nano clears the large BSS byte by byte before main. Link only the
+# matching toolchain's optimized memset, keeping the rest of nano libc.
+ifneq ($(MAKECMDGOALS),clean)
+FULL_LIBC := $(shell $(CC) $(filter -m%,$(CFLAGS)) -print-file-name=libc.a)
+FULL_LIBC_MEMSET := $(filter %-memset.o,$(shell $(filter-out -r,$(AR)) t "$(FULL_LIBC)"))
+$(OUTPUT_DIRECTORY)/application.out: $(OUTPUT_DIRECTORY)/libc_memset.o
+$(OUTPUT_DIRECTORY)/libc_memset.o: $(FULL_LIBC) | $(OUTPUT_DIRECTORY)
+	@test $(words $(FULL_LIBC_MEMSET)) -eq 1
+	$(filter-out -r,$(AR)) p "$<" $(FULL_LIBC_MEMSET) > "$@.tmp"
+	@mv "$@.tmp" "$@"
+endif
+
+# Rebuild reported versions when the Git description or semantic version changes.
+VERSION_FILE := $(OUTPUT_DIRECTORY)/git-version
+.PHONY: version-force
+$(VERSION_FILE): version-force | $(OUTPUT_DIRECTORY)
+	@printf '%s\n' '$(GIT_VERSION)' '$(APP_FW_SEMVER)' > $@.tmp
+	@# macOS Make 3.81 compares second-resolution modification times.
+	@if cmp -s $@.tmp $@; then rm $@.tmp; else sleep 1 && touch $@.tmp && mv $@.tmp $@; fi
+$(addprefix $(OUTPUT_DIRECTORY)/application/,app_cmd.c.o api.c.o device_api.c.o): $(VERSION_FILE)
+$(OUTPUT_DIRECTORY)/application/ble_clock.c.o: $(SDK_ROOT)/components/softdevice/common/nrf_sdh.c
 
 .PHONY: flash flash_softdevice erase config
 

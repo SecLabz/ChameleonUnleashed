@@ -45,6 +45,8 @@ typedef enum {
     DARKSIDE_LUCKY_AUTH_OK    = 2u, // the direct authentification is successful, maybe the key is just the default one
     DARKSIDE_NO_NAK_SENT      = 3u, // the card does not respond to NACK, it may be a card that fixes Nack logic vulnerabilities
     DARKSIDE_TAG_CHANGED      = 4u, // card change while running DARKSIDE
+    DARKSIDE_IN_PROGRESS      = 5u, // bounded acquisition needs another step
+    DARKSIDE_EXHAUSTED        = 6u, // bounded acquisition reached its budget
 } mf1_darkside_status_t;
 
 // this struct is also used in the fw/cli protocol, therefore PACKED
@@ -150,6 +152,15 @@ uint8_t mf1_hardnested_nonces_acquire(bool slow, uint8_t blkKnown, uint8_t typKn
 uint8_t targetBlk, uint8_t targetTyp, uint8_t *nonces, uint16_t noncesMax, uint8_t *num_nonces);
 
 uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_count, uint8_t starting_sector, uint8_t sector_data[40][sizeof(mf1_static_nonce_sector_t)], uint8_t *sectors_acquired, uint32_t *cardUid);
+
+/* Records are source nonce BE32, target ciphertext BE32, then four wire-parity
+ * bytes. count is 1..16; output has count * 12 bytes. No partial result on error.
+ * chained authenticates the source once more before requesting the target. */
+uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
+    uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
+    uint8_t count, uint8_t *output);
+
+#include "mf1_darkside.h"
 
 #ifdef __cplusplus
 }

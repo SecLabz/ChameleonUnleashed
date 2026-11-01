@@ -49,6 +49,7 @@ void rgb_marquee_stop(void) {
     rgb_marquee_usb_open_step = 0;
 }
 
+
 // reset RGB state machines to force a refresh of the LED color
 void rgb_marquee_reset(void) {
     rgb_marquee_usb_idle_step = 0;

@@ -42,6 +42,12 @@ uint32_t request_next_event_earliest(void) {
 /**@brief Timeslot signal handler
  */
 static void t55xx_soc_evt_handler(uint32_t evt_id, void *p_context) {
+    (void)p_context;
+    // SoC events are broadcast to every observer, including other RF sessions.
+    if (!m_is_timeslot_running) {
+        return;
+    }
+
     //NRF_LOG_INFO("t55xx_soc_evt_handler: %d", evt_id);
     uint32_t err_code;
     switch (evt_id) {
@@ -188,7 +194,7 @@ void timeslot_stop(void) {
 
     // Make sure that there is already a timeSlot running
     APP_ERROR_CHECK_BOOL(m_is_timeslot_running);
-    m_is_timeslot_running = false;
+    // Keep ownership until the asynchronous SESSION_CLOSED event is handled.
 
     // Exit critical point
     //NVIC_EnableIRQ(GPIOTE_IRQn);

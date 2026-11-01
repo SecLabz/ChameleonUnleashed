@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Leave RAM for USB networking while holding one 2048-sample ADC batch plus backlog.
+#define LF_ADC_BUFFER_SIZE (3072)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

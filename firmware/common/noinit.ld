@@ -15,5 +15,6 @@ SECTIONS
   {
     /* place all symbols in input sections that start with .noinit */
     KEEP(*(*.noinit*))
+    KEEP(*(.mf1_crypto_tables))
   } > NOINIT
 }

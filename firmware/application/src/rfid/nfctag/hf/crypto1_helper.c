@@ -1,16 +1,17 @@
 #include "crypto1_helper.h"
+#include "mf1_emulator_crypto.h"
 
 // crypto1 helpers
 void mf_crypto1_decryptEx(struct Crypto1State *pcs, uint8_t *data_in, int len, uint8_t *data_out) {
     if (len != 1) {
         for (int i = 0; i < len; i++)
-            data_out[i] = crypto1_byte(pcs, 0x00, 0) ^ data_in[i];
+            data_out[i] = mf1_emulator_crypto_byte(pcs, 0x00, 0) ^ data_in[i];
     } else {
         uint8_t bt = 0;
-        bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data_in[0], 0)) << 0;
-        bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data_in[0], 1)) << 1;
-        bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data_in[0], 2)) << 2;
-        bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data_in[0], 3)) << 3;
+        bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data_in[0], 0)) << 0;
+        bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data_in[0], 1)) << 1;
+        bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data_in[0], 2)) << 2;
+        bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data_in[0], 3)) << 3;
         data_out[0] = bt;
     }
     return;
@@ -25,9 +26,9 @@ void mf_crypto1_encryptEx(struct Crypto1State *pcs, uint8_t *data_in, uint8_t *k
     for (i = 0; i < len; i++) {
         uint8_t bt = data_in[i];
         // Encrypted bytes
-        data_out[i] = crypto1_byte(pcs, keystream ? keystream[i] : 0x00, 0) ^ data_in[i];
+        data_out[i] = mf1_emulator_crypto_byte(pcs, keystream ? keystream[i] : 0x00, 0) ^ data_in[i];
         // Generate strange school inspection
-        par[i] = filter(pcs->odd) ^ oddparity8(bt);
+        par[i] = mf1_emulator_filter(pcs->odd) ^ oddparity8(bt);
     }
 }
 
@@ -37,9 +38,9 @@ void mf_crypto1_encrypt(struct Crypto1State *pcs, uint8_t *data, uint16_t len, u
 
 uint8_t mf_crypto1_encrypt4bit(struct Crypto1State *pcs, uint8_t data) {
     uint8_t bt = 0;
-    bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data, 0)) << 0;
-    bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data, 1)) << 1;
-    bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data, 2)) << 2;
-    bt |= (crypto1_bit(pcs, 0, 0) ^ BIT(data, 3)) << 3;
+    bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data, 0)) << 0;
+    bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data, 1)) << 1;
+    bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data, 2)) << 2;
+    bt |= (mf1_emulator_crypto_bit(pcs, 0, 0) ^ BIT(data, 3)) << 3;
     return bt;
 }

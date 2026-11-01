@@ -76,8 +76,19 @@ STATIC_ASSERT(sizeof(tag_slot_config_t) == TAG_SLOT_CONFIG_CURRENT_SIZE);
 
 // The most basic emulation card initialization program
 void tag_emulation_init(void);
+bool tag_emulation_rf_only_safe(void);
 // Some of the data stored in RAM can be saved to Flash through this interface
 void tag_emulation_save(void);
+
+// Hold sensing across each bounded HTTP slot transaction, preserving requested state.
+void tag_emulation_sense_hold(bool hold);
+uint32_t tag_emulation_place_revision(uint8_t slot, tag_sense_type_t sense);
+// Bounded HTTP slot operations do not select a slot merely to inspect it.
+bool tag_emulation_snapshot(uint8_t slot, tag_sense_type_t sense,
+    uint8_t *bytes, uint16_t *length, tag_specific_type_t *type);
+bool tag_emulation_slot_configure(uint8_t slot, tag_sense_type_t sense,
+    tag_specific_type_t type, bool enabled, uint8_t *scratch, size_t capacity);
+bool tag_emulation_select_checked(uint8_t slot, uint8_t *scratch, size_t capacity);
 
 // Starting and ending of the emulation card
 void tag_emulation_load_data(void);

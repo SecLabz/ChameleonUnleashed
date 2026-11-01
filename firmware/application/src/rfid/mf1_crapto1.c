@@ -108,7 +108,7 @@ uint32_t crypto1_word(struct Crypto1State *s, uint32_t in, int is_encrypted) {
     ret |= crypto1_bit(s, BEBIT(in, 4), is_encrypted) << (24 ^ 4);
     ret |= crypto1_bit(s, BEBIT(in, 5), is_encrypted) << (24 ^ 5);
     ret |= crypto1_bit(s, BEBIT(in, 6), is_encrypted) << (24 ^ 6);
-    ret |= crypto1_bit(s, BEBIT(in, 7), is_encrypted) << (24 ^ 7);
+    ret |= (uint32_t)crypto1_bit(s, BEBIT(in, 7), is_encrypted) << (24 ^ 7);
 
     ret |= crypto1_bit(s, BEBIT(in, 8), is_encrypted) << (24 ^ 8);
     ret |= crypto1_bit(s, BEBIT(in, 9), is_encrypted) << (24 ^ 9);

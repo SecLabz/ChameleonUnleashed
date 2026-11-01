@@ -1,10 +1,11 @@
 #include "lf_reader_data.h"
 
-#include "bsp_delay.h"
+#include <stdlib.h>
+#include <string.h>
+
 #include "bsp_time.h"
 #include "circular_buffer.h"
 #include "lf_125khz_radio.h"
-#include "lf_reader_data.h"
 #include "protocols/em410x.h"
 #include "protocols/protocols.h"
 
@@ -15,6 +16,7 @@
 NRF_LOG_MODULE_REGISTER();
 
 #define EM410X_BUFFER_SIZE (128)
+#define ELECTRA_CONFIRMATION_MS 40
 
 static circular_buffer cb;
 
@@ -53,6 +55,8 @@ bool em410x_read(uint8_t *data, uint32_t timeout_ms) {
     start_lf_125khz_radio();
 
     bool ok = false;
+    bool base_pending = false;
+    uint32_t base_found_ms = 0;
     autotimer *p_at = bsp_obtain_timer(0);
     while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
         uint16_t val = 0;
@@ -62,14 +66,29 @@ bool em410x_read(uint8_t *data, uint32_t timeout_ms) {
                 if (!p->decoder.feed(codecs[i], val)) {
                     continue;
                 }
+                if (p->tag_type == TAG_TYPE_EM410X_64 && base_pending) {
+                    continue;
+                }
                 data[0] = p->tag_type >> 8;
                 data[1] = p->tag_type;
                 memcpy(data + 2, p->get_data(codecs[i]), p->data_size);
-                ok = true;
+                if (p->tag_type == TAG_TYPE_EM410X_64) {
+                    /* Electra starts with an ordinary EM410x/64 frame. Allow
+                     * its additional 64 bits (32.8 ms) to arrive before
+                     * returning the shorter identity. */
+                    base_pending = true;
+                    base_found_ms = p_at->time;
+                } else {
+                    ok = true;
+                }
                 break;
             }
         }
+        if (base_pending && p_at->time - base_found_ms >= ELECTRA_CONFIRMATION_MS) {
+            ok = true;
+        }
     }
+    ok |= base_pending;
 
     bsp_return_timer(p_at);
     stop_lf_125khz_radio();

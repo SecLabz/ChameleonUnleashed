@@ -90,6 +90,7 @@ int nfc_tag_mf0_ntag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *bu
 int nfc_tag_mf0_ntag_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool nfc_tag_mf0_ntag_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int nfc_tag_mf0_ntag_get_nr_pages_by_tag_type(tag_specific_type_t tag_type);
+int nfc_tag_mf0_ntag_image_size(tag_specific_type_t tag_type);
 uint8_t *nfc_tag_mf0_ntag_get_counter_data_by_index(uint8_t index);
 uint8_t *nfc_tag_mf0_ntag_get_version_data(void);
 uint8_t *nfc_tag_mf0_ntag_get_signature_data(void);

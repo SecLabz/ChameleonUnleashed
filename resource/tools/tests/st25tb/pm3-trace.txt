@@ -1,0 +1,254 @@
+# Synthetic UID and memory; retained PM3 transcript layout and exchange timing.
+[+] execute command from commandline: hf 14b reader; hf 14b dump --ns; hf 14b dump --ns; hf 14b dump --ns; trace list -t 14b
+
+[+] Using UART port /dev/ttyACM0
+[+] Communicating with PM3 over USB-CDC
+[usb|script] pm3 --> hf 14b reader
+
+[+]  UID: D0 02 06 05 04 03 02 01
+[+]  MFG: 02, ST Microelectronics SA France
+[+] Chip: 0C, SRT512
+[usb|script] pm3 --> hf 14b dump --ns
+[+] found a SRT512 tag
+[=] reading tag memory
+[=] .................
+
+[=] -------- SRT512 tag memory ---------
+
+[=]  block#  | data        |lck| ascii
+[=] ---------+-------------+---+------
+[=]   0/0x00 | 00 01 02 03 |   | ....
+[=]   1/0x01 | 04 05 06 07 |   | ....
+[=]   2/0x02 | 08 09 0A 0B |   | ....
+[=]   3/0x03 | 0C 0D 0E 0F |   | ....
+[=]   4/0x04 | 10 11 12 13 |   | ....
+[=]   5/0x05 | 14 15 16 17 |   | ....
+[=]   6/0x06 | 18 19 1A 1B |   | ....
+[=]   7/0x07 | 1C 1D 1E 1F |   | ....
+[=]   8/0x08 | 20 21 22 23 |   | ....
+[=]   9/0x09 | 24 25 26 27 |   | ....
+[=]  10/0x0A | 28 29 2A 2B |   | ....
+[=]  11/0x0B | 2C 2D 2E 2F |   | ....
+[=]  12/0x0C | 30 31 32 33 |   | ....
+[=]  13/0x0D | 34 35 36 37 |   | ....
+[=]  14/0x0E | 38 39 3A 3B |   | ....
+[=]  15/0x0F | 3C 3D 3E 3F |   | ....
+[=] 255/0xFF | FF FF FF FF |   | ....
+[=] ---------+-------------+---+------
+
+[=] Called with no save option
+
+[usb|script] pm3 --> hf 14b dump --ns
+[+] found a SRT512 tag
+[=] reading tag memory
+[=] .......[-] retrying one more time
+..........
+
+[=] -------- SRT512 tag memory ---------
+
+[=]  block#  | data        |lck| ascii
+[=] ---------+-------------+---+------
+[=]   0/0x00 | 00 01 02 03 |   | ....
+[=]   1/0x01 | 04 05 06 07 |   | ....
+[=]   2/0x02 | 08 09 0A 0B |   | ....
+[=]   3/0x03 | 0C 0D 0E 0F |   | ....
+[=]   4/0x04 | 10 11 12 13 |   | ....
+[=]   5/0x05 | 14 15 16 17 |   | ....
+[=]   6/0x06 | 18 19 1A 1B |   | ....
+[=]   7/0x07 | 1C 1D 1E 1F |   | ....
+[=]   8/0x08 | 20 21 22 23 |   | ....
+[=]   9/0x09 | 24 25 26 27 |   | ....
+[=]  10/0x0A | 28 29 2A 2B |   | ....
+[=]  11/0x0B | 2C 2D 2E 2F |   | ....
+[=]  12/0x0C | 30 31 32 33 |   | ....
+[=]  13/0x0D | 34 35 36 37 |   | ....
+[=]  14/0x0E | 38 39 3A 3B |   | ....
+[=]  15/0x0F | 3C 3D 3E 3F |   | ....
+[=] 255/0xFF | FF FF FF FF |   | ....
+[=] ---------+-------------+---+------
+
+[=] Called with no save option
+
+[usb|script] pm3 --> hf 14b dump --ns
+[+] found a SRT512 tag
+[=] reading tag memory
+[=] .................
+
+[=] -------- SRT512 tag memory ---------
+
+[=]  block#  | data        |lck| ascii
+[=] ---------+-------------+---+------
+[=]   0/0x00 | 00 01 02 03 |   | ....
+[=]   1/0x01 | 04 05 06 07 |   | ....
+[=]   2/0x02 | 08 09 0A 0B |   | ....
+[=]   3/0x03 | 0C 0D 0E 0F |   | ....
+[=]   4/0x04 | 10 11 12 13 |   | ....
+[=]   5/0x05 | 14 15 16 17 |   | ....
+[=]   6/0x06 | 18 19 1A 1B |   | ....
+[=]   7/0x07 | 1C 1D 1E 1F |   | ....
+[=]   8/0x08 | 20 21 22 23 |   | ....
+[=]   9/0x09 | 24 25 26 27 |   | ....
+[=]  10/0x0A | 28 29 2A 2B |   | ....
+[=]  11/0x0B | 2C 2D 2E 2F |   | ....
+[=]  12/0x0C | 30 31 32 33 |   | ....
+[=]  13/0x0D | 34 35 36 37 |   | ....
+[=]  14/0x0E | 38 39 3A 3B |   | ....
+[=]  15/0x0F | 3C 3D 3E 3F |   | ....
+[=] 255/0xFF | FF FF FF FF |   | ....
+[=] ---------+-------------+---+------
+
+[=] Called with no save option
+
+[usb|script] pm3 --> trace list -t 14b
+[+] Recorded activity ( 2029 bytes )
+[=] start = start of start frame. end = end of frame. src = source of transfer.
+[=] ISO14443B - all times are in carrier periods (1/13.56MHz)
+
+      Start |        End | Src | Data (! denotes parity error)                                           | CRC | Annotation
+------------+------------+-----+-------------------------------------------------------------------------+-----+--------------------
+          0 |       2048 | Rdr |05  00  00  71  FF                                                       |  ok | REQB
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+       1131 |       2795 | Tag |A1  FB  44                                                               |  ok |
+      62576 |      64368 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+       1142 |       2806 | Tag |A1  FB  44                                                               |  ok |
+      69312 |      70848 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+       2092 |       5996 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+       1142 |       2806 | Tag |A1  FB  44                                                               |  ok |
+       6752 |       8544 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+       1166 |       2830 | Tag |A1  FB  44                                                               |  ok |
+      13504 |      15040 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+       2105 |       6009 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+       1129 |       2793 | Tag |A1  FB  44                                                               |  ok |
+       6752 |       8544 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+       1139 |       2803 | Tag |A1  FB  44                                                               |  ok |
+      13488 |      15024 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+       2115 |       6019 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+     106880 |     108672 | Rdr |08  00  87  C1                                                           |  ok | READ_BLK(0)
+       1561 |       4185 | Tag | 00 01 02 03 29 A7                                                        |  ok |
+     191056 |     192848 | Rdr |08  01  0E  D0                                                           |  ok | READ_BLK(1)
+       1553 |       4177 | Tag | 04 05 06 07 E0 97                                                        |  ok |
+     271264 |     273056 | Rdr |08  02  95  E2                                                           |  ok | READ_BLK(2)
+       1553 |       4177 | Tag | 08 09 0A 0B BB C6                                                        |  ok |
+     363360 |     365152 | Rdr |08  03  1C  F3                                                           |  ok | READ_BLK(3)
+       1537 |       4161 | Tag | 0C 0D 0E 0F 72 F6                                                        |  ok |
+     456928 |     458720 | Rdr |08  04  A3  87                                                           |  ok | READ_BLK(4)
+       1535 |       4159 | Tag | 10 11 12 13 0D 64                                                        |  ok |
+     538624 |     540416 | Rdr |08  05  2A  96                                                           |  ok | READ_BLK(5)
+       1553 |       4177 | Tag | 14 15 16 17 C4 54                                                        |  ok |
+     633184 |     634976 | Rdr |08  06  B1  A4                                                           |  ok | READ_BLK(6)
+       1537 |       4161 | Tag | 18 19 1A 1B 9F 05                                                        |  ok |
+     723824 |     725616 | Rdr |08  07  38  B5                                                           |  ok | READ_BLK(7)
+       1561 |       4185 | Tag | 1C 1D 1E 1F 56 35                                                        |  ok |
+     810480 |     812272 | Rdr |08  08  CF  4D                                                           |  ok | READ_BLK(8)
+       1537 |       4161 | Tag | 20 21 22 23 70 29                                                        |  ok |
+     894144 |     895936 | Rdr |08  09  46  5C                                                           |  ok | READ_BLK(9)
+       1561 |       4185 | Tag | 24 25 26 27 B9 19                                                        |  ok |
+     975440 |     977232 | Rdr |08  0A  DD  6E                                                           |  ok | READ_BLK(10)
+       1539 |       4163 | Tag | 28 29 2A 2B E2 48                                                        |  ok |
+    1054336 |    1056128 | Rdr |08  0B  54  7F                                                           |  ok | READ_BLK(11)
+       1556 |       4180 | Tag | 2C 2D 2E 2F 2B 78                                                        |  ok |
+    1153376 |    1155168 | Rdr |08  0C  EB  0B                                                           |  ok | READ_BLK(12)
+       1537 |       4161 | Tag | 30 31 32 33 54 EA                                                        |  ok |
+    1240528 |    1242320 | Rdr |08  0D  62  1A                                                           |  ok | READ_BLK(13)
+       1553 |       4177 | Tag | 34 35 36 37 9D DA                                                        |  ok |
+    1336064 |    1337856 | Rdr |08  0E  F9  28                                                           |  ok | READ_BLK(14)
+       1537 |       4161 | Tag | 38 39 3A 3B C6 8B                                                        |  ok |
+    1429136 |    1430928 | Rdr |08  0F  70  39                                                           |  ok | READ_BLK(15)
+       1534 |       4158 | Tag | 3C 3D 3E 3F 0F BB                                                        |  ok |
+    1523728 |    1525520 | Rdr |08  FF  FF  CE                                                           |  ok | READ_BLK(255)
+       1539 |       4163 | Tag | FF FF FF FF 47 0F                                                        |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+       1132 |       2796 | Tag |A1  FB  44                                                               |  ok |
+       6752 |       8544 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+       1145 |       2809 | Tag |A1  FB  44                                                               |  ok |
+      13488 |      15024 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+       2115 |       6019 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+       1127 |       2791 | Tag |A1  FB  44                                                               |  ok |
+       6752 |       8544 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+       1140 |       2804 | Tag |A1  FB  44                                                               |  ok |
+      13488 |      15024 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+       2092 |       5996 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+     106864 |     108656 | Rdr |08  00  87  C1                                                           |  ok | READ_BLK(0)
+       1546 |       4170 | Tag | 00 01 02 03 29 A7                                                        |  ok |
+     196992 |     198784 | Rdr |08  01  0E  D0                                                           |  ok | READ_BLK(1)
+       1536 |       4160 | Tag | 04 05 06 07 E0 97                                                        |  ok |
+     278704 |     280496 | Rdr |08  02  95  E2                                                           |  ok | READ_BLK(2)
+       1538 |       4162 | Tag | 08 09 0A 0B BB C6                                                        |  ok |
+     370288 |     372080 | Rdr |08  03  1C  F3                                                           |  ok | READ_BLK(3)
+       1538 |       4162 | Tag | 0C 0D 0E 0F 72 F6                                                        |  ok |
+     465344 |     467136 | Rdr |08  04  A3  87                                                           |  ok | READ_BLK(4)
+       1535 |       4159 | Tag | 10 11 12 13 0D 64                                                        |  ok |
+     557424 |     559216 | Rdr |08  05  2A  96                                                           |  ok | READ_BLK(5)
+       1561 |       4185 | Tag | 14 15 16 17 C4 54                                                        |  ok |
+     649040 |     650832 | Rdr |08  06  B1  A4                                                           |  ok | READ_BLK(6)
+     999312 |    1001104 | Rdr |08  06  B1  A4                                                           |  ok | READ_BLK(6)
+        430 |       3054 | Tag | 18 19 1A 1B 9F 05                                                        |  ok |
+    1076672 |    1078464 | Rdr |08  07  38  B5                                                           |  ok | READ_BLK(7)
+        421 |       3045 | Tag | 1C 1D 1E 1F 56 35                                                        |  ok |
+    1168880 |    1170672 | Rdr |08  08  CF  4D                                                           |  ok | READ_BLK(8)
+        410 |       3034 | Tag | 20 21 22 23 70 29                                                        |  ok |
+    1254160 |    1255952 | Rdr |08  09  46  5C                                                           |  ok | READ_BLK(9)
+        421 |       3045 | Tag | 24 25 26 27 B9 19                                                        |  ok |
+    1350336 |    1352128 | Rdr |08  0A  DD  6E                                                           |  ok | READ_BLK(10)
+        408 |       3032 | Tag | 28 29 2A 2B E2 48                                                        |  ok |
+    1438576 |    1440368 | Rdr |08  0B  54  7F                                                           |  ok | READ_BLK(11)
+        420 |       3044 | Tag | 2C 2D 2E 2F 2B 78                                                        |  ok |
+    1530800 |    1532592 | Rdr |08  0C  EB  0B                                                           |  ok | READ_BLK(12)
+        420 |       3044 | Tag | 30 31 32 33 54 EA                                                        |  ok |
+    1623008 |    1624800 | Rdr |08  0D  62  1A                                                           |  ok | READ_BLK(13)
+        421 |       3045 | Tag | 34 35 36 37 9D DA                                                        |  ok |
+    1711824 |    1713616 | Rdr |08  0E  F9  28                                                           |  ok | READ_BLK(14)
+        411 |       3035 | Tag | 38 39 3A 3B C6 8B                                                        |  ok |
+    1803024 |    1804816 | Rdr |08  0F  70  39                                                           |  ok | READ_BLK(15)
+        427 |       3051 | Tag | 3C 3D 3E 3F 0F BB                                                        |  ok |
+    1881888 |    1883680 | Rdr |08  FF  FF  CE                                                           |  ok | READ_BLK(255)
+        423 |       3047 | Tag | FF FF FF FF 47 0F                                                        |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+        305 |       1969 | Tag |A1  FB  44                                                               |  ok |
+       5680 |       7472 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+        311 |       1975 | Tag |A1  FB  44                                                               |  ok |
+      11360 |      12896 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+        555 |       4459 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+ 4294967248 |       1744 | Rdr |06  00  97  5B                                                           |  ok | INITIATE
+        307 |       1971 | Tag |A1  FB  44                                                               |  ok |
+       5680 |       7472 | Rdr |0E  A1  D4  21                                                           |  ok | SELECT(161)
+        300 |       1964 | Tag |A1  FB  44                                                               |  ok |
+      11344 |      12880 | Rdr |0B  AB  4E                                                               |  ok | GET UID
+        546 |       4450 | Tag | 01 02 03 04 05 06 02 D0 A9 49                                            |  ok |
+      95520 |      97312 | Rdr |08  00  87  C1                                                           |  ok | READ_BLK(0)
+        412 |       3036 | Tag | 00 01 02 03 29 A7                                                        |  ok |
+     182272 |     184064 | Rdr |08  01  0E  D0                                                           |  ok | READ_BLK(1)
+        412 |       3036 | Tag | 04 05 06 07 E0 97                                                        |  ok |
+     275968 |     277760 | Rdr |08  02  95  E2                                                           |  ok | READ_BLK(2)
+        412 |       3036 | Tag | 08 09 0A 0B BB C6                                                        |  ok |
+     369168 |     370960 | Rdr |08  03  1C  F3                                                           |  ok | READ_BLK(3)
+        424 |       3048 | Tag | 0C 0D 0E 0F 72 F6                                                        |  ok |
+     455952 |     457744 | Rdr |08  04  A3  87                                                           |  ok | READ_BLK(4)
+        413 |       3037 | Tag | 10 11 12 13 0D 64                                                        |  ok |
+     550640 |     552432 | Rdr |08  05  2A  96                                                           |  ok | READ_BLK(5)
+        422 |       3046 | Tag | 14 15 16 17 C4 54                                                        |  ok |
+     636416 |     638208 | Rdr |08  06  B1  A4                                                           |  ok | READ_BLK(6)
+        421 |       3045 | Tag | 18 19 1A 1B 9F 05                                                        |  ok |
+     719728 |     721520 | Rdr |08  07  38  B5                                                           |  ok | READ_BLK(7)
+        409 |       3033 | Tag | 1C 1D 1E 1F 56 35                                                        |  ok |
+     806992 |     808784 | Rdr |08  08  CF  4D                                                           |  ok | READ_BLK(8)
+        422 |       3046 | Tag | 20 21 22 23 70 29                                                        |  ok |
+     897248 |     899040 | Rdr |08  09  46  5C                                                           |  ok | READ_BLK(9)
+        413 |       3037 | Tag | 24 25 26 27 B9 19                                                        |  ok |
+     974144 |     975936 | Rdr |08  0A  DD  6E                                                           |  ok | READ_BLK(10)
+        412 |       3036 | Tag | 28 29 2A 2B E2 48                                                        |  ok |
+    1056944 |    1058736 | Rdr |08  0B  54  7F                                                           |  ok | READ_BLK(11)
+        410 |       3034 | Tag | 2C 2D 2E 2F 2B 78                                                        |  ok |
+    1147184 |    1148976 | Rdr |08  0C  EB  0B                                                           |  ok | READ_BLK(12)
+        409 |       3033 | Tag | 30 31 32 33 54 EA                                                        |  ok |
+    1232464 |    1234256 | Rdr |08  0D  62  1A                                                           |  ok | READ_BLK(13)
+        409 |       3033 | Tag | 34 35 36 37 9D DA                                                        |  ok |
+    1325664 |    1327456 | Rdr |08  0E  F9  28                                                           |  ok | READ_BLK(14)
+        412 |       3036 | Tag | 38 39 3A 3B C6 8B                                                        |  ok |
+    1415392 |    1417184 | Rdr |08  0F  70  39                                                           |  ok | READ_BLK(15)
+        412 |       3036 | Tag | 3C 3D 3E 3F 0F BB                                                        |  ok |
+    1508592 |    1510384 | Rdr |08  FF  FF  CE                                                           |  ok | READ_BLK(255)
+        421 |       3045 | Tag | FF FF FF FF 47 0F                                                        |  ok |
