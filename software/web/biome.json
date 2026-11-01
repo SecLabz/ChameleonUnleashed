@@ -1,0 +1,60 @@
+{
+  "root": true,
+  "files": {
+    "includes": [
+      "**/*.mjs",
+      "**/*.json",
+      "public/**/*.html",
+      "public/**/*.css",
+      "!package-lock.json",
+      "!build-lock.json",
+      "!test-results/**",
+      "!playwright-report/**"
+    ]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "lineWidth": 110,
+    "enabled": true
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "trailingCommas": "none"
+    }
+  },
+  "linter": {
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "noUnreachable": "error",
+        "noUndeclaredVariables": "error"
+      },
+      "suspicious": {
+        "noDoubleEquals": "error",
+        "noDuplicateCase": "error",
+        "noDuplicateObjectKeys": "error",
+        "noDuplicateParameters": "error",
+        "noAsyncPromiseExecutor": "error"
+      },
+      "style": {
+        "noNestedTernary": "error",
+        "noMultiAssign": "error",
+        "useBlockStatements": "error",
+        "useSingleVarDeclarator": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  },
+  "html": {
+    "experimentalFullSupportEnabled": true,
+    "formatter": {
+      "enabled": true,
+      "whitespaceSensitivity": "ignore"
+    }
+  }
+}

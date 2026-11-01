@@ -1,0 +1,17 @@
+Chameleon Unleashed USB networking and browser interface
+=======================================================
+
+RNDIS: Sergey Fetisov; MIT notice retained in rndis.c.
+
+TinyUSB: https://github.com/hathach/tinyusb
+Revision 5217cee5de4cd555018da90f9f1bcc87fb1c1d3a; MIT license.
+lwIP: https://github.com/lwip-tcpip/lwip
+Revision 0a0452b2c39bdd91e252aef045c115f88f6ca773; BSD-style license.
+The asset builder assembles the GPL license and these MIT/BSD notices in
+THIRD_PARTY.txt for the firmware release archives.
+
+The separately distributed WASM engine and dictionary come from
+https://github.com/SecLabz/nfc-libs-rs (GPL-3.0-or-later). Its LICENSE and
+docs/licenses accompany each engine and Hardnested table pack.
+
+The firmware retains its existing Nordic SDK and other upstream notices.

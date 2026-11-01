@@ -1,0 +1,19 @@
+{
+  "rust": "1.93.1",
+  "dependencies": {
+    "tinyusb": {
+      "url": "https://github.com/hathach/tinyusb.git",
+      "revision": "5217cee5de4cd555018da90f9f1bcc87fb1c1d3a",
+      "sha256": "3e6e53412c124fcc8fa24d1ef29486b2b4cfdf5b6f8e7ca238797cc3b1244f83"
+    },
+    "lwip": {
+      "url": "https://github.com/lwip-tcpip/lwip.git",
+      "revision": "0a0452b2c39bdd91e252aef045c115f88f6ca773",
+      "sha256": "096013f6c2915f48f70c908a49b1e800f43f76fcaa053d4fbc07aa3e1c6f3bcb"
+    }
+  },
+  "shared": {
+    "revision": "e0301a8dd320c9951d4f1ff879ff064c8e9bdf3b",
+    "sha256": "5da907842153596b9db6e821a05a0f1c1922211518ef67dbccda655b57fc1cc7"
+  }
+}

@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#0a0c11">
+    <meta name="referrer" content="no-referrer">
+    <title>Chameleon Unleashed</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.mjs"></script>
+  </head>
+
+  <body>
+    <div class="shell">
+      <header class="app-header">
+        <a class="brand" href="/">
+          <span class="mark">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <path d="M16.5 7.2A6.5 6.5 0 1 0 16.5 16.8M12.6 10.2a2.6 2.6 0 0 1 0 3.6" />
+            </svg>
+          </span>
+          Chameleon Unleashed
+        </a>
+        <button class="cu-status" id="connection" type="button" data-connection data-view-target="device">
+          Connecting…
+        </button>
+      </header>
+
+      <main>
+        <section class="view scan-home" data-view="scan">
+          <h1>Scan</h1>
+          <div class="scanner">
+            <div class="orbit" aria-hidden="true"></div>
+            <button class="scan-button" id="scan" type="button" disabled>
+              <svg viewBox="0 0 40 40" aria-hidden="true">
+                <circle cx="20" cy="20" r="20" fill="currentColor" />
+                <g fill="none" stroke="#343646" stroke-width="2.5" stroke-linecap="round">
+                  <path d="M15 16a10 10 0 0 1 0 8m5-12a18 18 0 0 1 0 16m5-20a27 27 0 0 1 0 24" />
+                </g>
+              </svg>
+              <span>Tap to Scan</span>
+            </button>
+          </div>
+          <div class="scan-mode" role="radiogroup" aria-label="Technology">
+            <button type="button" role="radio" aria-checked="true" data-scan-mode="nfc">
+              NFC<small>13.56 MHz</small>
+            </button>
+            <button type="button" role="radio" aria-checked="false" data-scan-mode="rfid">
+              RFID<small>125 kHz</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="view" data-view="studio" hidden>
+          <div class="page-heading">
+            <h1>Studio</h1>
+            <div class="studio-actions">
+              <button class="mini-action" id="import" type="button">Import…</button>
+              <button class="mini-action" id="studio-new" type="button">＋ New…</button>
+            </div>
+          </div>
+          <div class="studio-empty" id="studio-empty">
+            <div class="studio-glyph" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+                <path d="M14 3v5h5M9 13h6M9 17h4" />
+              </svg>
+            </div>
+            <h2>No tag open</h2>
+            <p id="empty-context">Import a file, drop one anywhere on this page, or start a blank tag.</p>
+            <div class="empty-actions">
+              <button class="btn" id="create" type="button">＋ New…</button>
+            </div>
+            <section class="recents" id="recents-section" hidden>
+              <h3>Recent · this session</h3>
+              <div class="recent-list" id="recents"></div>
+            </section>
+          </div>
+          <div id="studio-document" hidden>
+            <div class="doc-head">
+              <button
+                class="icon-btn"
+                id="close-doc"
+                type="button"
+                aria-label="Close document"
+                title="Close document"
+                hidden
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  aria-hidden="true"
+                >
+                  <path d="m6 6 12 12M18 6 6 18" />
+                </svg>
+              </button>
+              <div class="doc-title">
+                <h2 id="studio-family">Tag</h2>
+                <span id="amiibo-badge" class="tag-badge" hidden>Amiibo</span>
+                <p class="studio-target" id="studio-target" data-target="draft">Draft</p>
+              </div>
+              <p class="doc-name">
+                <span id="studio-name">Untitled</span>
+                <button class="icon-btn" id="rename" type="button" aria-label="Rename document">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 20h4L19 9l-4-4L4 16z" />
+                    <path d="M13 7l4 4" />
+                  </svg>
+                </button>
+              </p>
+              <div class="doc-meta">
+                <span id="card" class="tag-fact">
+                  <span id="card-label" class="tag-fact-label"></span>
+                  <code id="card-value" class="tag-fact-value"></code>
+                </span>
+                <span id="amiibo-identity" class="tag-fact" hidden>
+                  <span class="tag-fact-label">Figure ID</span>
+                  <code id="amiibo-id" class="tag-fact-value"></code>
+                </span>
+                <span id="classic-physical" class="tag-fact tag-capability" hidden>
+                  <span class="tag-fact-label">UID write</span>
+                  <span id="classic-physical-value" class="tag-fact-value"></span>
+                </span>
+                <span id="classic-prng" class="tag-fact tag-prng" hidden>
+                  <span class="tag-fact-label">PRNG</span>
+                  <span id="classic-prng-type" class="tag-fact-value"></span>
+                </span>
+                <details id="classic-details" class="tag-details" hidden>
+                  <summary aria-label="UID detection details">ⓘ</summary>
+                  <div class="tag-detail-content">
+                    <p id="classic-activation"></p>
+                    <p id="classic-evidence"></p>
+                    <p id="classic-emulation" hidden></p>
+                  </div>
+                </details>
+                <div id="lf-chip" class="lf-chip" hidden></div>
+                <span id="memory-status" class="count"></span>
+              </div>
+              <p id="hf-details" class="memory-hint" hidden></p>
+            </div>
+            <div class="doc-bar" id="doc-bar">
+              <div class="doc-actions">
+                <div class="split" id="read-group">
+                  <button class="btn primary" id="read" type="button">Read</button>
+                  <button class="btn stop" id="stop" type="button" hidden disabled>Stop</button>
+                  <details class="menu" id="read-menu">
+                    <summary class="btn primary" aria-label="Read options">
+                      <svg
+                        class="caret"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="m3 4.5 3 3 3-3" />
+                      </svg>
+                    </summary>
+                    <div class="menu-list">
+                      <button id="read-slix" type="button" hidden>Read with privacy password…</button>
+                      <button id="dictionary-edit" data-classic type="button">
+                        Personal dictionary…<small id="dictionary-count"></small>
+                      </button>
+                      <div id="type2-controls" hidden>
+                        <label class="field" for="type2-profile">
+                          Type 2 profile<select id="type2-profile">
+                            <option value="auto">Detect from version</option>
+                            <option value="ultralight">Original Ultralight (16 pages)</option>
+                            <option value="ultralight_c">Ultralight C (48 pages)</option>
+                            <option value="ultralight_ev1_48">Ultralight EV1 48</option>
+                            <option value="ultralight_ev1_128">Ultralight EV1 128</option>
+                            <option value="ntag210">NTAG210</option>
+                            <option value="ntag212">NTAG212</option>
+                            <option value="ntag213">NTAG213</option>
+                            <option value="ntag215">NTAG215</option>
+                            <option value="ntag216">NTAG216</option>
+                          </select>
+                        </label>
+                        <p class="memory-hint">
+                          Use a manual profile only when you know the tag model. Hidden credentials remain
+                          unknown.
+                        </p>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+                <button class="btn" id="write-changes" type="button" hidden disabled>Write changes</button>
+                <details class="menu" id="save-menu">
+                  <summary class="btn" aria-label="Send to options">
+                    <span>Send to</span>
+                    <svg
+                      class="caret"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="m3 4.5 3 3 3-3" />
+                    </svg>
+                  </summary>
+                  <div class="menu-list">
+                    <button id="save-slot" type="button">Slot…</button>
+                    <button id="emulate" type="button">Slot &amp; emulate</button>
+                    <hr id="copy-tag-divider">
+                    <button id="copy-tag" type="button">Copy to a tag…</button>
+                  </div>
+                </details>
+                <button class="btn" id="export-json" type="button" hidden>Export JSON</button>
+                <details class="menu" id="export-menu">
+                  <summary class="btn">
+                    Export
+                    <svg
+                      class="caret"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="m3 4.5 3 3 3-3" />
+                    </svg>
+                  </summary>
+                  <div class="menu-list end">
+                    <button id="export" type="button">Flipper file<small>.nfc</small></button>
+                    <button id="export-document" type="button">JSON file<small>.json</small></button>
+                    <button id="export-mct" type="button">MIFARE Classic Tool<small>.mct</small></button>
+                  </div>
+                </details>
+                <details class="menu" id="more-menu">
+                  <summary class="btn" aria-label="More actions">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <circle cx="5" cy="12" r="1.8" />
+                      <circle cx="12" cy="12" r="1.8" />
+                      <circle cx="19" cy="12" r="1.8" />
+                    </svg>
+                  </summary>
+                  <div class="menu-list end">
+                    <button type="button" data-classic data-open-dialog="keys-dialog">Keys…</button>
+                    <hr data-classic>
+                    <button id="change-uid" type="button" hidden disabled>Change tag UID…</button>
+                    <button id="repair-tag" type="button" hidden>Repair tag…</button>
+                    <button id="format-tag" type="button" hidden>Factory format tag…</button>
+                    <hr id="capture-details-divider" hidden>
+                    <button
+                      id="capture-details"
+                      type="button"
+                      data-open-dialog="capture-details-dialog"
+                      hidden
+                    >
+                      Capture details…
+                    </button>
+                  </div>
+                </details>
+              </div>
+              <div class="read-feedback">
+                <div class="read-summary">
+                  <p class="doc-status" id="status" role="status" aria-live="polite"></p>
+                  <span id="read-elapsed" hidden aria-label="Total read time"></span>
+                </div>
+                <div class="read-progress" id="read-progress" hidden>
+                  <span id="progress-label"></span>
+                  <progress id="progress" max="1" value="0" aria-label="Read progress"></progress>
+                </div>
+                <div class="read-progress copy-progress" id="copy-progress" hidden>
+                  <span id="copy-progress-label"></span>
+                  <span id="copy-elapsed" aria-label="Total copy time"></span>
+                  <div class="copy-track">
+                    <progress id="copy-progress-bar" aria-label="Verified copy progress"></progress>
+                  </div>
+                  <span class="copy-hint">Keep the target on the antenna.</span>
+                </div>
+              </div>
+            </div>
+            <div class="doc-notes" id="doc-notes" hidden>
+              <p id="doc-notes-text"></p>
+              <button class="btn" id="type2-defaults" type="button" hidden>Use emulator defaults…</button>
+              <button class="btn" id="hf-defaults" type="button" hidden>Use emulator defaults…</button>
+            </div>
+            <section
+              id="type2-content"
+              class="card type2-content"
+              hidden
+              aria-label="Type 2 content"
+            ></section>
+            <section class="memory-section" id="memory-section">
+              <div class="memory-head">
+                <h3 id="memory-title">Memory</h3>
+                <p class="memory-legend" id="memory-legend"></p>
+              </div>
+              <div id="memory"></div>
+            </section>
+
+            <section class="lf-card" id="lf-card" hidden>
+              <label class="field" for="lf-format">Format<select id="lf-format"></select></label>
+              <div class="lf-fields" id="lf-fields"></div>
+              <p class="lf-error" id="lf-error" role="alert" hidden></p>
+              <p class="memory-hint" id="lf-hint"></p>
+              <details class="lf-record" id="lf-record">
+                <summary>Encoded record</summary>
+                <code id="lf-record-value"></code>
+              </details>
+            </section>
+
+            <section class="unreadable" id="identity-card" hidden>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="6" width="18" height="12" rx="2" />
+                <path d="M7 10h4M7 14h7" />
+                <path id="identity-unreadable-mark" d="m3 3 18 18" />
+              </svg>
+              <h3 id="identity-title">Memory not readable</h3>
+              <p id="identity-reason"></p>
+              <p id="identity-help">The identity above is all this capture holds. Export JSON keeps it.</p>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="slots" hidden>
+          <div class="page-heading">
+            <h1>Slots</h1>
+            <button class="mini-action" id="refresh-slots" type="button">Refresh</button>
+          </div>
+          <div class="slot-strip" id="slot-strip" role="group" aria-label="Device slots"></div>
+          <p class="slot-legend">
+            <span><i data-led="green"></i>NFC</span>
+            <span><i data-led="blue"></i>RFID</span>
+            <span><i data-led="red"></i>Both</span>
+          </p>
+          <div class="slot-grid" id="slots">
+            <p class="empty">Connect the Chameleon to read its slots.</p>
+          </div>
+        </section>
+
+        <section class="view" data-view="device" hidden>
+          <div id="cu-device">
+            <div class="page-heading">
+              <h1>Device</h1>
+              <button class="mini-action" id="refresh-device" type="button">Refresh</button>
+            </div>
+            <div class="emulation-state pending" id="emulation-state" role="status">
+              <span class="emulation-dot" aria-hidden="true"></span>
+              <div class="emulation-copy">
+                <strong id="emulation-title">Checking emulation…</strong>
+                <span id="emulation-detail">Reading device state</span>
+              </div>
+            </div>
+            <div id="device-info" class="card"><p class="memory-hint">Connecting…</p></div>
+            <div id="device-settings"></div>
+            <section class="card" id="offline-resources" aria-labelledby="offline-title">
+              <div class="cu-hero-top">
+                <h3 id="offline-title">Offline use</h3>
+                <span class="cu-mode" id="offline-state" role="status">Not checked</span>
+              </div>
+              <div class="read-progress" id="offline-progress" hidden>
+                <span id="offline-progress-label"></span>
+                <span id="offline-bytes"></span>
+                <progress id="offline-progress-bar" aria-label="Offline preparation progress"></progress>
+              </div>
+              <p class="memory-hint" id="offline-message" role="status"></p>
+              <button class="primary-action" id="offline-prepare" type="button" hidden>
+                Retry preparation
+              </button>
+              <button class="secondary" id="offline-stop" type="button" hidden>Stop download</button>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <nav aria-label="Navigation">
+      <a class="brand" href="/">
+        <span class="mark">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.9"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M16.5 7.2A6.5 6.5 0 1 0 16.5 16.8M12.6 10.2a2.6 2.6 0 0 1 0 3.6" />
+          </svg>
+        </span>
+        Chameleon Unleashed
+      </a>
+      <button class="nav-item active" data-view-target="scan" type="button">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M6.5 6.5a7.8 7.8 0 0 0 0 11M17.5 6.5a7.8 7.8 0 0 1 0 11" stroke-linecap="round" />
+        </svg>
+        Scan
+      </button>
+      <button class="nav-item" data-view-target="studio" type="button">
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M4 20h4L19 9l-4-4L4 16z" />
+          <path d="M13 7l4 4" />
+        </svg>
+        Studio
+      </button>
+      <button class="nav-item" data-view-target="slots" type="button">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3.5" y="5" width="7" height="6" rx="1.6" />
+          <rect x="13.5" y="5" width="7" height="6" rx="1.6" />
+          <rect x="3.5" y="13" width="7" height="6" rx="1.6" />
+          <rect x="13.5" y="13" width="7" height="6" rx="1.6" />
+        </svg>
+        Slots
+      </button>
+      <button class="nav-item" data-view-target="device" type="button">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="6" y="3" width="12" height="18" rx="3" />
+          <path d="M10 17h4" />
+        </svg>
+        Device
+      </button>
+      <div class="nav-foot">
+        <p class="nav-slot" id="nav-slot">
+          <span class="nav-slot-title" id="nav-slot-title">Checking emulation…</span>
+          <span class="nav-slot-detail" id="nav-slot-detail" hidden></span>
+        </p>
+        <button class="cu-status" id="nav-connection" type="button" data-connection data-view-target="device">
+          Connecting…
+        </button>
+      </div>
+    </nav>
+
+    <template id="maintenance-template">
+      <section class="maintenance-result" role="status" hidden>
+        <h3><span aria-hidden="true">✓</span> <span data-result-title></span></h3>
+        <p data-result-message></p>
+      </section>
+      <fieldset class="maintenance-settings">
+        <div data-repair-options>
+          <label><input type="checkbox" name="repairIdentity" checked> Correct identification</label>
+          <label><input type="checkbox" name="resetAccess"> Reset keys and access</label>
+          <label data-sectors hidden>
+            Sectors to reset
+            <input
+              class="dialog-input"
+              name="sectors"
+              aria-label="Sectors to reset"
+              value="all"
+              placeholder="0,1,2 or all"
+              autocomplete="off"
+            >
+          </label>
+          <details data-manual hidden>
+            <summary>Card not detected</summary>
+            <label>
+              Known generation
+              <select class="dialog-input" name="method" aria-label="Known generation">
+                <option value="">Choose generation</option>
+                <option value="1">Gen1A</option>
+                <option value="2">Gen1B</option>
+                <option value="3">Gen2 / CUID</option>
+              </select>
+            </label>
+            <label>
+              Known card model
+              <select class="dialog-input" name="model" aria-label="Known card model">
+                <option value="">Choose model</option>
+                <option value="5">Classic Mini</option>
+                <option value="1">Classic 1K</option>
+                <option value="6">Classic 2K</option>
+                <option value="7">Classic 4K</option>
+              </select>
+            </label>
+            <label>
+              Replacement UID (optional)
+              <input
+                class="dialog-input"
+                name="uid"
+                aria-label="Replacement UID (optional)"
+                placeholder="8 or 14 hex digits"
+                autocomplete="off"
+              >
+            </label>
+          </details>
+        </div>
+        <details data-credentials>
+          <summary>Add a known key</summary>
+          <label>
+            Known target key
+            <input
+              class="dialog-input"
+              name="key"
+              aria-label="Known target key"
+              placeholder="12 hex digits"
+              autocomplete="off"
+            >
+          </label>
+        </details>
+      </fieldset>
+      <section class="maintenance-preview" hidden>
+        <p class="maintenance-target"></p>
+        <details data-effect-details>
+          <summary>Details</summary>
+          <dl>
+            <dt>Data</dt>
+            <dd data-effect="data"></dd>
+            <dt>Keys A/B</dt>
+            <dd data-effect="keys"></dd>
+            <dt>Access</dt>
+            <dd data-effect="access"></dd>
+            <dt>UID / manufacturer</dt>
+            <dd data-effect="identity"></dd>
+          </dl>
+          <p data-changes></p>
+          <details>
+            <summary>Technical details</summary>
+            <p data-technical></p>
+          </details>
+        </details>
+      </section>
+    </template>
+
+    <div class="drop-zone" id="drop-zone" hidden>Drop to import · .nfc · .mct · .cu · .json</div>
+    <dialog class="app-dialog" id="scan-dialog" aria-labelledby="scan-title" aria-describedby="scan-help">
+      <div class="scan-handle" aria-hidden="true"></div>
+      <h2 id="scan-title">Ready to Scan</h2>
+      <div class="scan-symbol" aria-hidden="true">
+        <svg viewBox="0 0 112 144" fill="none" stroke="currentColor" stroke-width="2.5">
+          <rect x="10" y="6" width="92" height="132" rx="14" fill="#2b2d3d" />
+          <path d="M44 17h24" stroke-width="5" stroke-linecap="round" />
+          <circle cx="56" cy="110" r="15" fill="#45465f" />
+          <circle cx="56" cy="110" r="10" stroke-width="1" />
+          <path
+            d="M52 107a7 7 0 0 1 0 6m4-8a12 12 0 0 1 0 10m4-12a18 18 0 0 1 0 14"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          />
+        </svg>
+      </div>
+      <p class="scan-dialog-copy" id="scan-help">Hold the tag near the device antenna.</p>
+      <p class="memory-hint" id="scan-result" role="status"></p>
+      <div class="scan-actions">
+        <button class="secondary" id="scan-repair" type="button" hidden>Troubleshoot MIFARE Classic…</button>
+        <button class="secondary" id="cancel-scan" type="button">Cancel</button>
+      </div>
+    </dialog>
+
+    <div
+      class="st25-tearoff"
+      id="st25-tearoff"
+      role="dialog"
+      aria-modal="true"
+      aria-label="ST25TB tearoff"
+      hidden
+    >
+      <div class="st25-tear-card">
+        <h2>Tearoff in progress</h2>
+        <div class="st25-tear-grid">
+          <span>Block</span>
+          <strong id="st25-tear-block">—</strong>
+          <span>Current value</span>
+          <strong id="st25-tear-current">—</strong>
+          <span>Target</span>
+          <strong id="st25-tear-target">—</strong>
+          <span>Attempts</span>
+          <strong id="st25-tear-attempts">—</strong>
+          <span>Timing</span>
+          <strong id="st25-tear-timing">—</strong>
+          <span>Duration</span>
+          <strong id="st25-tear-duration">—</strong>
+        </div>
+        <div class="st25-tear-bar"><i id="st25-tear-progress"></i></div>
+        <p>Keep the tag on the antenna until the final reread.</p>
+        <button id="st25-tear-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <dialog class="app-dialog create-dialog" id="create-dialog" aria-labelledby="create-title">
+      <div class="create-heading">
+        <div>
+          <h2 id="create-title">New document</h2>
+          <p>Local draft · nothing written</p>
+        </div>
+        <button class="icon-btn" id="create-cancel" type="button" aria-label="Cancel creation">✕</button>
+      </div>
+      <input
+        id="create-search"
+        class="dialog-input"
+        type="search"
+        placeholder="Search models…"
+        aria-label="Search models"
+        autocomplete="off"
+        spellcheck="false"
+        aria-controls="create-suggestions create-models"
+      >
+      <div class="create-list" id="create-suggestions" aria-label="Suggested models"></div>
+      <p class="memory-hint" id="create-none" role="status" hidden>No matching model.</p>
+      <details id="create-all">
+        <summary>All models</summary>
+        <div class="create-list" id="create-models"></div>
+      </details>
+      <details id="create-identity">
+        <summary>Set a custom UID</summary>
+        <label class="field" for="create-uid">
+          UID (optional)<input
+            id="create-uid"
+            maxlength="32"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="create-uid-help"
+          >
+        </label>
+        <p class="memory-hint" id="create-uid-help">
+          Leave empty to generate a UID. Classic: 4 bytes · NTAG / Ultralight: 7 bytes · SLIX / SLIX-L: 8
+          bytes matching the model · ignored for RFID. The first SLIX read adopts the physical tag’s UID.
+        </p>
+      </details>
+      <p class="create-error" id="create-error" role="alert" hidden></p>
+      <p class="memory-hint" id="create-progress" role="status" hidden>Preparing document…</p>
+    </dialog>
+
+    <dialog class="app-dialog" id="mct-dialog" aria-labelledby="mct-title">
+      <form method="dialog">
+        <h2 id="mct-title">Confirm MCT identity</h2>
+        <p>
+          MCT files do not reliably identify the card model or UID length. Confirm both; suggested values may
+          be incomplete.
+        </p>
+        <label class="field" for="mct-type">
+          MIFARE Classic<select id="mct-type">
+            <option value="9">Mini</option>
+            <option value="8">1K</option>
+            <option value="16">2K</option>
+            <option value="24">4K</option>
+          </select>
+        </label>
+        <label class="field" for="mct-uid">
+          UID (4, 7 or 10 bytes)<input
+            id="mct-uid"
+            maxlength="20"
+            pattern="([0-9a-fA-F]{8}|[0-9a-fA-F]{14}|[0-9a-fA-F]{20})"
+            required
+          >
+        </label>
+        <div class="dialog-actions">
+          <button class="secondary" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-action" value="import">Import</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="app-dialog" id="dictionary-dialog" aria-labelledby="dictionary-title">
+      <div class="dialog-head">
+        <h2 id="dictionary-title">Personal dictionary</h2>
+        <button class="icon-btn" id="dictionary-close" type="button" aria-label="Close">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <label class="field" for="dictionary">
+        Keys to try during the next read<textarea
+          id="dictionary"
+          rows="10"
+          spellcheck="false"
+          placeholder="FFFFFFFFFFFF&#10;A0A1A2A3A4A5"
+        ></textarea>
+      </label>
+      <p class="memory-hint" id="dictionary-status" role="status" aria-live="polite">
+        Saved in this browser only. The shared system dictionary is also used.
+      </p>
+      <div class="document-actions">
+        <button id="dictionary-import" type="button">Import keys</button>
+        <button id="dictionary-export" type="button">Export keys</button>
+      </div>
+      <div class="dialog-actions">
+        <button class="primary-action" id="dictionary-done" type="button">Recover keys &amp; read</button>
+      </div>
+    </dialog>
+
+    <dialog class="app-dialog" id="keys-dialog" aria-labelledby="keys-title">
+      <h2 id="keys-title">Keys in this document</h2>
+      <div class="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Sector</th>
+              <th>Key A</th>
+              <th>Key B</th>
+            </tr>
+          </thead>
+          <tbody id="keys"></tbody>
+        </table>
+      </div>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>Close</button>
+      </div>
+    </dialog>
+
+    <dialog class="app-dialog" id="capture-details-dialog" aria-labelledby="capture-details-title">
+      <h2 id="capture-details-title">Capture details</h2>
+      <ul class="capture-details-list" id="capture-details-list"></ul>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>Close</button>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <input id="dump-file" type="file" accept=".nfc,.cu,.mct,.json" hidden>
+    <input id="dictionary-file" type="file" accept=".txt,.keys,.dic,text/plain" hidden>
+  </body>
+</html>

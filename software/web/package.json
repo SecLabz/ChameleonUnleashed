@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@playwright/test": "1.64.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "scripts": {
+    "check": "biome check . && tsc -p jsconfig.json",
+    "format": "biome format --write .",
+    "test": "cd ../.. && node --test software/web/tests/*.test.mjs",
+    "test:browser": "playwright test"
+  }
+}
