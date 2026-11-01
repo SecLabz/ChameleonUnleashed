@@ -949,6 +949,32 @@ class ChameleonCMD:
         return self.device.send_cmd_sync(Command.SET_SLOT_DATA_DEFAULT, data)
 
     @expect_response(Status.SUCCESS)
+    def st25tb_get_slot_image(self):
+        resp = self.device.send_cmd_sync(Command.ST25TB_GET_SLOT_IMAGE)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def hf15_get_image(self):
+        resp = self.device.send_cmd_sync(Command.HF15_GET_IMAGE)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def hf15_set_image(self, image: bytes):
+        if len(image) not in (112, 192):
+            raise ValueError("SLIX-L images must contain 112 bytes; SLIX images must contain 192 bytes")
+        return self.device.send_cmd_sync(Command.HF15_SET_IMAGE, image)
+
+    @expect_response(Status.SUCCESS)
+    def st25tb_set_slot_image(self, image: bytes):
+        if len(image) != 77:
+            raise ValueError("ST25TB512-AT images must contain 77 bytes")
+        return self.device.send_cmd_sync(Command.ST25TB_SET_SLOT_IMAGE, image)
+
+    @expect_response(Status.SUCCESS)
     def set_slot_enable(self, slot_index: SlotNumber, sense_type: TagSenseType, enabled: bool):
         """
         Set whether the specified card slot is enabled.

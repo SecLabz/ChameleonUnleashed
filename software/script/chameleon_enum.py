@@ -72,6 +72,7 @@ class Command(enum.IntEnum):
     MF1_NESTED_ACQUIRE = 2006
     MF1_AUTH_ONE_KEY_BLOCK = 2007
     MF1_READ_ONE_BLOCK = 2008
+    MF1_READ_SECTOR = 2027
     MF1_WRITE_ONE_BLOCK = 2009
     HF14A_RAW = 2010
     MF0_ULC_AUTH = 2018
@@ -160,6 +161,10 @@ class Command(enum.IntEnum):
     SEOS_READ_EMU_DATA = 4042
     SEOS_WRITE_EMU_DATA = 4043
     SEOS_WRITE_EMU_KEYS = 4044
+    ST25TB_GET_SLOT_IMAGE = 4310
+    ST25TB_SET_SLOT_IMAGE = 4311
+    HF15_GET_IMAGE = 4300
+    HF15_SET_IMAGE = 4301
 
     # ISO14443-4 T=CL emulation
     HF14A_4_APDU_RECV = 6000
@@ -367,7 +372,9 @@ class TagSpecificType(enum.IntEnum):
     # MIFARE Plus series     1200
     # DESFire series         1300
 
-    # ST25TA series          2000
+    SLIX_L = 1500
+    SLIX = 1501
+    ST25TB512_AT = 2000
 
     # ISO14443-4 T=CL emulation
     HF14A_4 = 3000
@@ -450,6 +457,12 @@ class TagSpecificType(enum.IntEnum):
             return "NTAG 210"
         elif self == TagSpecificType.NTAG_212:
             return "NTAG 212"
+        elif self == TagSpecificType.ST25TB512_AT:
+            return "ST25TB512-AT"
+        elif self == TagSpecificType.SLIX_L:
+            return "SLIX-L"
+        elif self == TagSpecificType.SLIX:
+            return "SLIX"
         elif self == TagSpecificType.SEOS:
             return "SEOS"
         elif self < TagSpecificType.OLD_TAG_TYPES_END:

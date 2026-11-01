@@ -7191,6 +7191,31 @@ class HWSlotUpdate(DeviceRequiredUnit):
         print(" - Store slots config and data from device memory to flash success.")
 
 
+@hw_slot.command("st25tb")
+class HWSlotST25TB(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Load or save the active ST25TB512-AT slot image (77-byte binary)"
+        action = parser.add_mutually_exclusive_group(required=True)
+        action.add_argument("--load", type=Path, metavar="FILE")
+        action.add_argument("--save", type=Path, metavar="FILE")
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.load is not None:
+            image = args.load.read_bytes()
+            if len(image) != 77:
+                raise ArgsParserError("ST25TB512-AT image must contain exactly 77 bytes")
+            self.cmd.st25tb_set_slot_image(image)
+            if self.cmd.st25tb_get_slot_image() != image:
+                raise RuntimeError("ST25TB512-AT slot image readback differs")
+            print(" - ST25TB512-AT slot image stored and verified.")
+            return
+        with args.save.open("xb") as output:
+            output.write(self.cmd.st25tb_get_slot_image())
+        print(f" - ST25TB512-AT slot image saved to {args.save}.")
+
+
 @hw_slot.command("openall")
 class HWSlotOpenAll(DeviceRequiredUnit):
     def args_parser(self) -> ArgumentParserNoExit:

@@ -708,8 +708,16 @@ FodyWeavers.xsd
 # End of https://www.toptal.com/developers/gitignore/api/visualstudio,c++,c,python,visualstudiocode,macos,windows
 software/script/tests/nonces.bin
 software/script/nonces.bin
+/backups/
 .vscode/settings.json
 .vscode/tasks.json
 firmware/compile_commands.json
 firmware/application/compile_commands.json
 software/src/target_arch_detect.c
+
+software/web/test-results/
+software/web/playwright-report/
+
+# Local credentials and development output
+.env.*
+!.env.example
