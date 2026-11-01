@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Build, flash and run Chameleon Unleashed from this checkout."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+TOOLS = ROOT / 'resource/tools'
+sys.path.insert(0, str(TOOLS))
+
+
+def run(*command, env=None):
+    subprocess.run([str(value) for value in command], cwd=ROOT, env=env, check=True)
+
+
+def shared_source(source, revision):
+    if source is not None:
+        return source.expanduser().resolve()
+
+    destination = ROOT / '.cache/web/shared'
+    if not destination.exists():
+        run('git', 'clone', '--no-checkout', 'https://github.com/SecLabz/nfc-libs-rs', destination)
+        run('git', '-C', destination, 'checkout', '--detach', revision)
+
+    return destination
+
+
+def web(source, local, env, modified, asset_base):
+    command = [sys.executable, TOOLS / 'build_web.py', '--prepare-deps', '--shared-source', source]
+    if modified:
+        command.append('--allow-local-changes')
+
+    if local:
+        command.extend(['--resources-only', '--output', ROOT / '.cache/web/dev', '--asset-base', '/'])
+    else:
+        command.append('--zopfli')
+        if asset_base is not None:
+            command.extend(['--asset-base', asset_base])
+
+    run(*command, env=env)
+    if not local:
+        run(sys.executable, TOOLS / 'package_cdn.py', '--shared-source', source, env=env)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Examples (from the repository root):
+  ./dev build cli     Build the native Rust CLI (release)
+  ./dev build         Build firmware and the matching CDN archive
+  ./dev flash         Build and flash the application over USB
+  ./dev serve         Serve web sources; refresh after edits
+  ./dev cdn           Build and package the CDN resources
+
+Run ./dev COMMAND --help for options.''',
+    )
+    commands = parser.add_subparsers(dest='command')
+    for name, help_text in [
+        ('build', 'Build firmware + CDN (default); use "build cli" for the Rust CLI'),
+        ('flash', 'Build both archives, then flash the application over USB'),
+        ('serve', 'Serve web sources connected to the Ultra; refresh after edits'),
+        ('cdn', 'Build the web resources and package the CDN archive'),
+    ]:
+        command = commands.add_parser(name, help=help_text, description=help_text)
+        command.add_argument('--shared-source', type=Path, help='Use an editable nfc-libs-rs checkout')
+        if name != 'serve':
+            command.add_argument('--asset-base', help='Resource base URL for this build, ending in /')
+        if name in {'build', 'flash'}:
+            command.add_argument('--clean', action='store_true',
+                                 help='Remove firmware objects before building')
+        if name == 'build':
+            command.formatter_class = argparse.RawDescriptionHelpFormatter
+            command.epilog = '''Examples:
+  ./dev build cli     Build the native Rust CLI in release mode
+  ./dev build         Build firmware and the matching CDN archive
+
+CLI executable: software/target/release/chameleon (chameleon.exe on Windows).
+Cargo target-directory settings can relocate it.
+CLI prerequisites: Python, Git, Rust and a native linker.'''
+            command.add_argument('target', nargs='?', choices=['firmware', 'cli'], default='firmware',
+                                 help='Build firmware and CDN resources (default), or the native CLI')
+        if name == 'flash':
+            command.add_argument('--full', action='store_true',
+                                 help='Also flash the bootloader and SoftDevice')
+        if name == 'serve':
+            command.add_argument('--port', type=int, default=8080)
+            command.add_argument('--device', default='http://192.168.16.1')
+
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return
+
+    cli_only = args.command == 'build' and args.target == 'cli'
+    if cli_only and args.shared_source is not None:
+        parser.error('--shared-source applies to web builds; the CLI uses software/Cargo.lock')
+    if cli_only and args.clean:
+        parser.error('--clean applies to firmware builds')
+    if cli_only and args.asset_base is not None:
+        parser.error('--asset-base applies to web builds')
+
+    needed = ['git', 'cargo']
+    compiler = None
+    if args.command != 'serve' and not cli_only:
+        needed.append('zopfli')
+    if args.command in {'build', 'flash'} and not cli_only:
+        needed.extend(['bash', 'make', 'nrfutil', 'mergehex', 'zip'])
+        directory = os.environ.get('GNU_INSTALL_ROOT')
+        executable = str(Path(directory) / 'arm-none-eabi-gcc') if directory else 'arm-none-eabi-gcc'
+        compiler = shutil.which(executable)
+
+    missing = [name for name in needed if shutil.which(name) is None]
+    if args.command in {'build', 'flash'} and not cli_only and compiler is None:
+        missing.append('arm-none-eabi-gcc')
+    if missing:
+        parser.error('Missing tools: ' + ', '.join(missing) + '. See docs/README.md.')
+
+    env = os.environ.copy()
+    try:
+        lock = json.loads((ROOT / 'software/web/build-lock.json').read_text())
+        env.setdefault('RUSTUP_TOOLCHAIN', lock['rust'])
+        if cli_only:
+            run('cargo', 'build', '--manifest-path', ROOT / 'software/Cargo.toml',
+                '--locked', '--release', '-p', 'chameleon-cli', env=env)
+            return
+
+        source = shared_source(args.shared_source, lock['shared']['revision'])
+        if args.command == 'serve':
+            from serve_web import resources_ready, serve
+
+            cache = ROOT / '.cache/web'
+            if not resources_ready(cache, ROOT / 'software/web'):
+                print('Preparing local WASM and tables.', flush=True)
+                web(source, True, env, args.shared_source is not None, None)
+
+            serve(ROOT / 'software/web', cache, source, args.device, args.port)
+            return
+
+        web(source, False, env, args.shared_source is not None, args.asset_base)
+        cdn = ROOT / '.cache/web/chameleon-unleashed-cdn.zip'
+        if args.command in {'build', 'flash'}:
+            env.setdefault('GNU_INSTALL_ROOT', str(Path(compiler).parent) + os.sep)
+            run('bash', ROOT / 'firmware/build.sh', *(['--clean'] if args.clean else []), env=env)
+            shutil.copyfile(cdn, ROOT / 'firmware/objects' / cdn.name)
+            print(ROOT / 'firmware/objects/chameleon-unleashed-app.zip', flush=True)
+            print(ROOT / 'firmware/objects' / cdn.name, flush=True)
+
+        if args.command == 'flash':
+            package = 'chameleon-unleashed-app.zip'
+            if args.full:
+                package = 'chameleon-unleashed-full.zip'
+
+            run('cargo', 'run', '--manifest-path', ROOT / 'software/Cargo.toml',
+                '--locked', '--release', '-p', 'chameleon-cli', '--',
+                'flash', ROOT / 'firmware/objects' / package, '--yes', env=env)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f'{error}\n')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

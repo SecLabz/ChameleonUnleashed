@@ -6,6 +6,10 @@ on:
       checkout-sha:
         required: false
         type: string
+      asset-base:
+        description: Resource base URL for the firmware and matching assets
+        required: false
+        type: string
       publish-builder:
         description: Build and publish the firmware builder image
         required: false
@@ -86,7 +90,7 @@ jobs:
       contents: read
     strategy:
       matrix:
-        device_type: [ultra, lite]
+        device_type: [ultra]
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -103,6 +107,63 @@ jobs:
       - name: Load Docker image
         if: ${{ !inputs.publish-builder }}
         run: docker load --input "${{ runner.temp }}/fw-builder.tar"
+      - name: Read shared library revision
+        id: shared
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          lock = json.loads(Path('software/web/build-lock.json').read_text())
+          print('revision=' + lock['shared']['revision'])
+          print('rust=' + lock['rust'])
+          PY
+      - name: Check out shared NFC libraries
+        uses: actions/checkout@v7
+        with:
+          repository: SecLabz/nfc-libs-rs
+          ref: ${{ steps.shared.outputs.revision }}
+          path: .cache/web/shared
+          persist-credentials: false
+      - name: Build web assets and USB dependencies
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.shared.outputs.rust }}
+          ASSET_BASE: ${{ inputs.asset-base }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -qy zopfli
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          asset_options=()
+          if [[ -n "$ASSET_BASE" ]]; then
+            asset_options=(--asset-base "$ASSET_BASE")
+          fi
+          python3 resource/tools/build_web.py --prepare-deps --zopfli --shared-source .cache/web/shared "${asset_options[@]}"
+      - name: Package matching CDN resources
+        run: python3 resource/tools/package_cdn.py --shared-source .cache/web/shared
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Check and test the native CLI
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.shared.outputs.rust }}
+        run: |
+          cargo fmt --manifest-path software/Cargo.toml --all -- --check
+          cargo clippy --manifest-path software/Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo test --manifest-path software/Cargo.toml --workspace --locked
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install hardware test dependency
+        run: python3 -m pip install pyserial==3.5
+      - name: Check and test the web interface
+        run: |
+          npm ci --prefix software/web
+          npm run check --prefix software/web
+          npm test --prefix software/web
+          python3 -m unittest discover -s resource/tools -p 'test_*.py' -v
+          npm exec --prefix software/web -- playwright install --with-deps chromium webkit
+          npm run test:browser --prefix software/web
       - name: Build firmware
         run: |
           docker run --rm -v ${PWD}:/workdir -e CURRENT_DEVICE_TYPE=${{ matrix.device_type }} "${{ needs.build_fw_builder.outputs.image_ref }}" firmware/build.sh
@@ -110,26 +171,34 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.device_type }}-firmware
-          path: firmware/objects/*.hex
-      - name: Unzip dfu images
+          path: |
+            firmware/objects/*.hex
+            firmware/objects/THIRD_PARTY.txt
+      - name: Prepare release artifacts
         run: |
           sudo chown -R $USER:$USER firmware/objects
-          mkdir firmware/objects/${{ matrix.device_type }}-dfu-app
-          mkdir firmware/objects/${{ matrix.device_type }}-dfu-full
-          unzip firmware/objects/${{ matrix.device_type }}-dfu-app.zip -d firmware/objects/${{ matrix.device_type }}-dfu-app
-          unzip firmware/objects/${{ matrix.device_type }}-dfu-full.zip -d firmware/objects/${{ matrix.device_type }}-dfu-full
+          cp .cache/web/chameleon-unleashed-cdn.zip firmware/objects/chameleon-unleashed-cdn.zip
+          mkdir firmware/objects/chameleon-unleashed-app
+          mkdir firmware/objects/chameleon-unleashed-full
+          unzip firmware/objects/chameleon-unleashed-app.zip -d firmware/objects/chameleon-unleashed-app
+          unzip firmware/objects/chameleon-unleashed-full.zip -d firmware/objects/chameleon-unleashed-full
       - name: Upload dfu app image
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.device_type }}-dfu-app
-          path: firmware/objects/${{ matrix.device_type }}-dfu-app/*
+          name: chameleon-unleashed-app
+          path: firmware/objects/chameleon-unleashed-app/*
       - name: Upload dfu full image
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.device_type }}-dfu-full
-          path: firmware/objects/${{ matrix.device_type }}-dfu-full/*
+          name: chameleon-unleashed-full
+          path: firmware/objects/chameleon-unleashed-full/*
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
         with:
           name: release-artifacts-${{ matrix.device_type }}
-          path: firmware/objects/*.zip
+          path: |
+            firmware/objects/chameleon-unleashed-app.zip
+            firmware/objects/chameleon-unleashed-full.zip
+            firmware/objects/chameleon-unleashed-binaries.zip
+            firmware/objects/chameleon-unleashed-cdn.zip
+          if-no-files-found: error

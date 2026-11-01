@@ -1,5 +1,4 @@
-# This is just a placeholder while the whole PyInstaller thing gets figured out
-name: Client build
+name: Client builds and checks
 
 on:
   workflow_call:
@@ -8,33 +7,31 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 jobs:
-  build_client:
-    name: Build client
-    permissions:
-      contents: read
+  build_native:
+    name: Build native CLI (${{ matrix.name }})
     strategy:
+      fail-fast: false
       matrix:
-        include: 
-          - name: windows
-            os: windows-latest
-            pre_command: |
-              ? .
-            bundle_command: |
-              Compress-Archive -Path software\dist\* -DestinationPath client-windows.zip
-          - name: linux
+        include:
+          - name: linux-x64
             os: ubuntu-latest
-            pre_command: |
-              true
-            bundle_command: |
-              (cd software/dist && zip -r "$OLDPWD/client-linux.zip" .)
-          - name: macos
-            os: macos-latest
-            pre_command: |
-              true
-            bundle_command: |
-              (cd software/dist && zip -r "$OLDPWD/client-macos.zip" .)
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -45,33 +42,62 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Install PyInstaller and client dependencies
+      - name: Install pinned Rust toolchain
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r software/script/requirements.txt
-      - name: Run OS specific setup
-        run: ${{ matrix.pre_command }}
-      - name: Compile native code
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          toolchain = json.loads(Path('software/web/build-lock.json').read_text())['rust']
+          subprocess.run(['rustup', 'toolchain', 'install', toolchain, '--profile', 'minimal',
+                          '--target', os.environ['CARGO_BUILD_TARGET']], check=True)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              output.write('RUSTUP_TOOLCHAIN=' + toolchain + '\n')
+          PY
+      - name: Build native CLI
+        shell: bash
+        run: cargo build --manifest-path software/Cargo.toml --locked --release -p chameleon-cli --config 'profile.release.strip="symbols"'
+      - name: Smoke test and zip native CLI
+        shell: bash
+        env:
+          ARCHIVE: chameleon-${{ matrix.name }}.zip
         run: |
-          cd software/src
-          mkdir out
-          cd out
-          cmake ..
-          cmake --build . --config Release
-      - name: Run PyInstaller
-        run: |
-          cd software
-          pyinstaller pyinstaller.spec
-      - name: Upload built client
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          from zipfile import ZIP_DEFLATED, ZipFile
+          binary = Path('software/target') / os.environ['CARGO_BUILD_TARGET'] / 'release'
+          binary /= 'chameleon.exe' if os.name == 'nt' else 'chameleon'
+          subprocess.run([str(binary), '--help'], check=True)
+          output = Path('native-artifacts')
+          output.mkdir()
+          with ZipFile(output / os.environ['ARCHIVE'], 'w', compression=ZIP_DEFLATED) as archive:
+              archive.write(binary, binary.name)
+          PY
+      - name: Upload native CLI release archive
         uses: actions/upload-artifact@v7
         with:
-          name: client-${{ matrix.name }}
-          path: software/dist/*
-      - name: Zip up client for release
-        run: ${{ matrix.bundle_command }}
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+          name: release-artifacts-native-${{ matrix.name }}
+          path: native-artifacts/*.zip
+          if-no-files-found: error
+
+  test_python:
+    name: Test Python client
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
         with:
-          name: release-artifacts-${{ matrix.name }}
-          path: client-${{ matrix.name }}.zip
+          ref: ${{ inputs.checkout-sha == null && github.sha || inputs.checkout-sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install client dependencies
+        run: python -m pip install -r software/script/requirements.txt
+      - name: Run Python regressions
+        run: python -m unittest discover -s software/script/tests -v

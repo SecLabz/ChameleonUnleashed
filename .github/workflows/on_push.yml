@@ -2,32 +2,102 @@ name: Push handler
 
 on:
   push:
+    branches-ignore:
+      - gh-pages
+    tags:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: push-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  pages:
+    name: Read GitHub Pages URL
+    runs-on: ubuntu-latest
+    permissions:
+      pages: read
+    outputs:
+      url: ${{ steps.pages.outputs.base_url }}/
+    steps:
+      - name: Read Pages configuration
+        id: pages
+        uses: actions/configure-pages@v5
   firmware_pipeline:
     name: Build Firmware
+    needs: pages
     permissions:
-      packages: write
       contents: read
     uses: ./.github/workflows/build_firmware.yml
+    with:
+      publish-builder: false
+      asset-base: ${{ needs.pages.outputs.url }}
   client_pipeline:
-    name: Build Firmware
+    name: Build and test clients
     permissions:
       contents: read
     uses: ./.github/workflows/build_client.yml
+  publish_resources:
+    name: Publish matching resources
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')
+    needs: firmware_pipeline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download matching release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts-ultra
+          path: release-artifacts
+      - name: Extract matching resources
+        run: unzip -q release-artifacts/chameleon-unleashed-cdn.zip -d .cache/pages/resources
+      - name: Preserve published resources on gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .cache/pages/resources
+          keep_files: true
+          commit_message: 'build(cdn): publish matching resources'
+      - name: Check out all published versions
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: .cache/pages/published
+          persist-credentials: false
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .cache/pages/published
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
   create_dev_release:
     permissions:
       contents: write
     name: Create dev pre-release with artifacts
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     needs:
       - firmware_pipeline
       - client_pipeline
+      - publish_resources
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -41,10 +111,14 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body: |
-            Auto-Generated DFU packages from latest `main` commit.
+            Firmware, native CLI and matching CDN resources from the latest default-branch commit.
             For development purposes only. 
             These are not tested, here be dragons.
             Built from commit ${{ github.sha }}
+
+            Flash `chameleon-unleashed-app.zip` over USB DFU.
+            Matching resources are published automatically to GitHub Pages.
+            The CDN archive contains the same resources for manual hosting.
           tag_name: dev
           name: Development release
           draft: false
@@ -65,6 +139,7 @@ jobs:
     needs:
       - firmware_pipeline
       - client_pipeline
+      - publish_resources
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -80,23 +155,15 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body: |
-            Auto-Generated DFU packages for Release ${{ github.ref_name }}
+            Firmware, native CLI and matching CDN resources for release ${{ github.ref_name }}.
             Built from commit ${{ github.sha }}
+
+            Flash `chameleon-unleashed-app.zip` over USB DFU.
+            Matching resources are published automatically to GitHub Pages.
+            The CDN archive contains the same resources for manual hosting.
           name: Release ${{ github.ref_name }}
           draft: false
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           append_body: true
           files: release-artifacts/*
-
-  start_feature_freeze:
-    name: Start the next PR review cycle
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: create_release
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    uses: ./.github/workflows/pr_review_cycle.yml
-    with:
-      start_feature_freeze: true

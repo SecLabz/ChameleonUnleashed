@@ -2,6 +2,9 @@ name: PR handler
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr-build-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -16,7 +19,7 @@ jobs:
       checkout-sha: "${{ github.event.pull_request.head.sha }}"
       publish-builder: false
   client_pipeline:
-    name: Build Firmware
+    name: Build and test clients
     permissions:
       contents: read
     uses: ./.github/workflows/build_client.yml

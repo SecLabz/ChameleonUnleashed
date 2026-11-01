@@ -57,16 +57,12 @@ jobs:
               lines.push(
                 '## Firmware',
                 '',
-                `- [Ultra APP DFU Package](${baseUrl}/ultra-dfu-app.zip)`,
+                `- [Chameleon Unleashed APP DFU Package](${baseUrl}/chameleon-unleashed-app.zip)`,
                 `- [Ultra binaries](${baseUrl}/ultra-firmware.zip)`,
-                `- [Lite APP DFU Package](${baseUrl}/lite-dfu-app.zip)`,
-                `- [Lite binaries](${baseUrl}/lite-firmware.zip)`,
                 '',
-                '## Client',
+                '## Native CLI',
                 '',
-                `- [Linux](${baseUrl}/client-linux.zip)`,
-                `- [macOS](${baseUrl}/client-macos.zip)`,
-                `- [Windows](${baseUrl}/client-windows.zip)`,
+                `- [Linux, Windows and macOS ARM64/Intel artifacts](${run.html_url}#artifacts)`,
               );
             } else {
               lines.push(
