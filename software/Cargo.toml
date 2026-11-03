@@ -10,6 +10,6 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
-nfc-native = { git = "https://github.com/SecLabz/nfc-libs-rs", rev = "e0301a8dd320c9951d4f1ff879ff064c8e9bdf3b" }
+nfc-native = { git = "https://github.com/SecLabz/nfc-libs-rs", rev = "d23cf8225a684cb72ad448038b1abec6e44d56c6" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
