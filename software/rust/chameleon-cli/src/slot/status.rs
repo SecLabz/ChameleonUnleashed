@@ -403,8 +403,8 @@ mod tests {
 
     fn sample(reader: bool, width: usize, color: bool) -> String {
         overview(
-            "Chameleon Ultra 2.2 (78cfa0f-dirty)",
-            "/dev/cu.usbmodemF3EB5E5655C33",
+            "Chameleon Ultra 1.0 (v1.0.0)",
+            "/dev/cu.usbmodemTEST000000001",
             (4324, 100),
             reader,
             &Slot {
