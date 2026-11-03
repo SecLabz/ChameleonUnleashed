@@ -1,0 +1,97 @@
+name: Repackage tagged release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag (left unchanged)
+        required: true
+        default: v1.0.0
+        type: string
+      source-run:
+        description: Successful build run for the tagged commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: repackage-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Package and publish original CI artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_RUN: ${{ inputs.source-run }}
+    steps:
+      - name: Check out packaging tools
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tag and source build
+        id: source
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'resource/tools')
+          from project_version import check_tag, read_version
+          tag = os.environ['RELEASE_TAG']
+          run_id = os.environ['SOURCE_RUN']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) or not re.fullmatch(r'[0-9]+', run_id):
+              raise ValueError('Expected a stable version tag and numeric run ID')
+          check_tag(read_version(), tag)
+          commit = subprocess.check_output(['git', 'rev-parse', 'refs/tags/' + tag + '^{commit}'], text=True).strip()
+          repo = os.environ['GITHUB_REPOSITORY']
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', 'repos/' + repo + path]))
+          run = api('/actions/runs/' + run_id)
+          if (run['status'] != 'completed' or run['conclusion'] != 'success'
+                  or run['head_sha'] != commit or run['head_repository']['full_name'] != repo):
+              raise ValueError('Source run must be a successful build of the unchanged tag in this repository')
+          artifacts = api('/actions/runs/' + run_id + '/artifacts?per_page=100')['artifacts']
+          expected = {'release-artifacts-ultra', *('release-artifacts-native-' + p for p in
+                      ('linux-x64', 'macos-arm64', 'macos-x64', 'windows-x64'))}
+          selected = [a for a in artifacts if a['name'].startswith('release-artifacts-')]
+          if {a['name'] for a in selected} != expected or any(a['expired'] for a in selected):
+              raise ValueError('Expected all five original, unexpired build artifacts')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('commit=' + commit + '\n')
+          print('Verified source build', run_id, 'for', tag, commit)
+          PYCODE
+      - name: Download original CI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source-run }}
+          pattern: release-artifacts-*
+          merge-multiple: true
+          path: release-artifacts
+      - name: Package versioned downloads
+        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --tag "$RELEASE_TAG"
+      - name: Upload to tagged release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: .github/release-description.txt
+          tag_name: ${{ inputs.tag }}
+          name: Release ${{ inputs.tag }}
+          draft: false
+          prerelease: false
+          target_commitish: ${{ steps.source.outputs.commit }}
+          files: release-packages/*
+      - name: Verify uploads and remove superseded downloads
+        run: python3 resource/tools/sync_release_assets.py --tag "$RELEASE_TAG" --archives release-packages

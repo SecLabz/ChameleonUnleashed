@@ -45,3 +45,10 @@ and shared NFC libraries have their own version numbers.
 Every push runs builds, Rust/Python/JavaScript tests and code checks. The complete
 Chromium/WebKit suite also runs for `v*` tags and manual **Push handler** runs;
 it is skipped for ordinary branch pushes and pull requests.
+
+To regenerate downloads for an existing tag, run **Repackage tagged release**
+with the tag and the ID of its original successful build. The workflow verifies
+that the build belongs to the tagged commit, downloads its GitHub Actions
+artifacts, then runs the same packaging and publication steps as a new release.
+It leaves the tag and compiled payloads unchanged. The original build artifacts
+must still be available; this workflow does not rebuild firmware or deploy Pages.
