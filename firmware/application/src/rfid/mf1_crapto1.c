@@ -44,7 +44,7 @@ void crypto1_init(struct Crypto1State *state, uint64_t key) {
     }
 }
 
-void inline crypto1_deinit(struct Crypto1State *state) {
+inline void crypto1_deinit(struct Crypto1State *state) {
     state->odd = 0;
     state->even = 0;
 }
