@@ -48,7 +48,9 @@ class CdnArchiveTests(unittest.TestCase):
         }
         self.write(self.cache / 'core.json', json.dumps(self.core).encode())
         self.write(self.cache / 'hardnested.json', json.dumps(self.hardnested).encode())
+        self.write(self.root / 'software/Cargo.toml', b'[workspace.package]\nversion = "1.0.0"\n')
         self.build = {
+            'projectVersion': '1.0.0',
             'source': {'revision': 'a' * 40, 'dirty': False},
             'shared': {'revision': 'b' * 40, 'dirty': False, 'sha256': 'c' * 64},
             'resourceBase': 'https://alice.github.io/ChameleonUnleashed/',
@@ -68,6 +70,12 @@ class CdnArchiveTests(unittest.TestCase):
         path = directory / name
         self.write(path, data)
         return {'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+
+    def test_project_version_change_requires_a_matching_build(self):
+        self.write(self.root / 'software/Cargo.toml', b'[workspace.package]\nversion = "1.1.0"\n')
+        with self.assertRaisesRegex(ValueError, 'Project version changed'):
+            package_cdn.prepare(self.shared, self.output)
+        self.assertFalse(self.output.exists())
 
     def test_archive_is_ready_to_extract_at_the_cdn_root(self):
         package_cdn.prepare(self.shared, self.output)

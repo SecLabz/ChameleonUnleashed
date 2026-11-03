@@ -142,7 +142,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
             (directory/'settings.h').write_text(settings.replace('#include "utils.h"','#define ALIGN_U32 __attribute__((aligned(4)))'))
             binary=directory/'device'
             subprocess.run(['cc','-std=c11','-Wall','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined',
-                '-DAPP_FW_VER_MAJOR=2','-DAPP_FW_VER_MINOR=2','-DGIT_VERSION="host-test"',
+                '-DAPP_FW_VER_MAJOR=1','-DAPP_FW_VER_MINOR=0','-DAPP_FW_SEMVER="1.0.0"','-DGIT_VERSION="host-test"',
                 '-I',str(directory),'-I',str(NET),'-I',str(ROOT/'firmware/application/src'),
                 '-I',str(ROOT/'firmware/application/src/rfid/nfctag'),
                 str(ROOT/'resource/tools/tests/web_device.c'),str(NET/'device_api.c'),'-o',str(binary)],check=True)

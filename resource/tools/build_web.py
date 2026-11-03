@@ -14,6 +14,7 @@ import sys
 from urllib.parse import urlsplit
 
 from esbuild_tool import ensure_esbuild
+from project_version import read_version
 
 ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / 'software/web'
@@ -137,6 +138,7 @@ def main():
     parser.add_argument('--asset-base', help='Override the resource base URL in this web build')
     args = parser.parse_args()
     config = json.loads((WEB / 'config.json').read_text())
+    config['projectVersion'] = read_version(ROOT)
     if args.asset_base is not None:
         config['baseUrl'] = args.asset_base
 
@@ -219,7 +221,8 @@ def main():
     manifest = {'version': 2, 'abi': 1, 'tablePack': table, 'modules': modules}
     (cdn / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (ROOT / '.cache/web/hardnested.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    build = {'source': source, 'shared': shared_version, 'resourceBase': config['baseUrl']}
+    build = {'projectVersion': config['projectVersion'], 'source': source,
+             'shared': shared_version, 'resourceBase': config['baseUrl']}
     if args.resources_only:
         from package_cdn import copy_asset
 

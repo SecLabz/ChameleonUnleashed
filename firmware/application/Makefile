@@ -472,6 +472,7 @@ CFLAGS += -fno-builtin -fshort-enums
 
 # Versioning flags
 CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
+CFLAGS += -DAPP_FW_SEMVER=\"$(APP_FW_SEMVER)\"
 ifndef APP_FW_VER_MAJOR
 $(error APP_FW_VER_MAJOR is not defined, please define it)
 endif

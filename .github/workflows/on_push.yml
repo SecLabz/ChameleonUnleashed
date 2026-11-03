@@ -36,6 +36,7 @@ jobs:
     with:
       publish-builder: false
       asset-base: ${{ needs.pages.outputs.url }}
+      browser-tests: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
   client_pipeline:
     name: Build and test clients
     permissions:
@@ -115,7 +116,7 @@ jobs:
           body: |
             Firmware, native CLI and matching CDN resources from the latest default-branch commit.
             For development purposes only. 
-            These are not tested, here be dragons.
+            Browser tests run on release tags and manual workflows.
             Built from commit ${{ github.sha }}
 
             Flash `chameleon-unleashed-app.zip` over USB DFU.

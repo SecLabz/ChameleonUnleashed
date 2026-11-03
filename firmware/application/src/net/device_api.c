@@ -14,11 +14,11 @@ static api_response_t response(unsigned status, size_t size) {
 
 static api_response_t device_info(uint8_t *output, size_t capacity) {
     int n = snprintf((char *)output, capacity,
-        "{\"version\":\"%u.%u\",\"git\":\"%s\",\"chip\":\"%08lx%08lx\","
+        "{\"version\":\"%s\",\"git\":\"%s\",\"chip\":\"%08lx%08lx\","
         "\"battery_mv\":%u,\"battery_percent\":%u,\"reader\":%s,\"active_slot\":%u,"
         "\"busy\":%s,\"settings\":{\"animation\":%u,\"press_a\":%u,\"press_b\":%u,"
         "\"long_a\":%u,\"long_b\":%u,\"sleep\":%lu,\"long_ms\":%u,\"pairing\":%s}}",
-        APP_FW_VER_MAJOR, APP_FW_VER_MINOR, GIT_VERSION,
+        APP_FW_SEMVER, GIT_VERSION,
         (unsigned long)NRF_FICR->DEVICEID[1], (unsigned long)NRF_FICR->DEVICEID[0],
         batt_lvl_in_milli_volts, percentage_batt_lvl,
         get_device_mode() == DEVICE_MODE_READER ? "true" : "false",

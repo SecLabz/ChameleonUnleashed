@@ -98,7 +98,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/device':
             details = dict(
-                version='2.2',
+                version=CONFIG['projectVersion'],
                 git='SIMULATED CARD',
                 chip='SIMULATED',
                 battery_mv=4012,

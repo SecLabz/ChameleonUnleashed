@@ -72,6 +72,9 @@ jobs:
           binary = Path('software/target') / os.environ['CARGO_BUILD_TARGET'] / 'release'
           binary /= 'chameleon.exe' if os.name == 'nt' else 'chameleon'
           subprocess.run([str(binary), '--help'], check=True)
+          version = subprocess.check_output(['python', 'resource/tools/project_version.py'], text=True).strip()
+          actual = subprocess.check_output([str(binary), '--version'], text=True).strip()
+          assert actual == 'chameleon ' + version, actual
           output = Path('native-artifacts')
           output.mkdir()
           with ZipFile(output / os.environ['ARCHIVE'], 'w', compression=ZIP_DEFLATED) as archive:

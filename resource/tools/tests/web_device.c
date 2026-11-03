@@ -47,6 +47,7 @@ int main(void) {
     uint8_t output[512] = {0};
     api_response_t r = web_device_request("GET", "/api/device", NULL, 0, output, sizeof(output));
     assert(r.status == 200 && !strcmp(r.type, "application/json"));
+    assert(strstr((char *)output, "\"version\":\"1.0.0\""));
     assert(strstr((char *)output, "\"chip\":\"abcdef0112345678\""));
     assert(strstr((char *)output, "\"active_slot\":3"));
     assert(web_device_request("GET", "/api/device", NULL, 0, output, 10).status == 500);

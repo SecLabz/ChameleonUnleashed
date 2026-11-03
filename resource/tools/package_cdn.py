@@ -9,6 +9,8 @@ import shutil
 import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from project_version import read_version
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -43,6 +45,8 @@ def prepare(shared_source, output):
     core = json.loads((cache / 'core.json').read_text())
     hardnested = json.loads((cache / 'hardnested.json').read_text())
     build = json.loads((cache / 'cdn-build.json').read_text())
+    if build.get('projectVersion') != read_version(ROOT):
+        raise ValueError('Project version changed; rebuild the matching web assets')
     table = json.loads((ROOT / 'software/web/src/runtime/tables.json').read_text())
     if hardnested['tablePack'] != table:
         raise ValueError('Table pin changed; rebuild the matching Hardnested bundle')

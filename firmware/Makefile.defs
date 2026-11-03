@@ -26,7 +26,13 @@ CHAMELEON_LITE  := lite
 CURRENT_DEVICE_TYPE ?= ${CHAMELEON_ULTRA}
 
 # Versioning information
-APP_FW_SEMVER ?= 2.2.0
+VERSION_TOOL := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../resource/tools/project_version.py)
+ifndef APP_FW_SEMVER
+APP_FW_SEMVER := $(shell python3 "$(VERSION_TOOL)")
+endif
+ifeq ($(strip $(APP_FW_SEMVER)),)
+$(error Unable to read the project version from software/Cargo.toml)
+endif
 GIT_VERSION := $(or $(shell git describe --abbrev=7 --dirty --always --tags --match "v*.*" 2>/dev/null),v$(APP_FW_SEMVER))
 APP_FW_VER_MAJOR := $(word 1,$(subst ., ,$(APP_FW_SEMVER)))
 APP_FW_VER_MINOR := $(word 2,$(subst ., ,$(APP_FW_SEMVER)))
