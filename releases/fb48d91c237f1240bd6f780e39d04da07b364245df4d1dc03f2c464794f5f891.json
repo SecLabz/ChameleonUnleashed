@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "projectVersion": "1.0.0",
+  "source": {
+    "revision": "43cc6cbbdf38b461c2a49efc709f778f75b8778f",
+    "dirty": false
+  },
+  "shared": {
+    "revision": "d23cf8225a684cb72ad448038b1abec6e44d56c6",
+    "dirty": false,
+    "sha256": "8ce2ca42d2eff4f9d2ef242c4129524ad5ebadb1b650d5ca04a50b43ae6c75a8"
+  },
+  "resourceBase": "https://seclabz.github.io/ChameleonUnleashed/",
+  "resources": [
+    {
+      "path": "core/4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/LICENSE",
+      "size": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "core/4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/docs/licenses/NOTICE.md",
+      "size": 6796,
+      "sha256": "75fb63717485a90d19a4bfeaf80cc6a6c3ef0615dc5d18364f31c701e5a8ca5e"
+    },
+    {
+      "path": "core/4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/docs/licenses/mifare-dictionaries.txt",
+      "size": 2265,
+      "sha256": "161f835f0781171e0c67ba83e629f0d74601619e610b21314e373a65e2c0a4e0"
+    },
+    {
+      "path": "core/4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/manifest.json",
+      "size": 233,
+      "sha256": "260fab3bef09ba14a3aba4fabed57527c4f177e98156bc2add154f73855a708d"
+    },
+    {
+      "path": "core/4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/nfc_wasm.wasm",
+      "size": 659134,
+      "sha256": "4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/LICENSE",
+      "size": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/docs/licenses/NOTICE.md",
+      "size": 6796,
+      "sha256": "75fb63717485a90d19a4bfeaf80cc6a6c3ef0615dc5d18364f31c701e5a8ca5e"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/docs/licenses/mifare-dictionaries.txt",
+      "size": 2265,
+      "sha256": "161f835f0781171e0c67ba83e629f0d74601619e610b21314e373a65e2c0a4e0"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/hardnested-scalar.wasm",
+      "size": 323171,
+      "sha256": "76304ebf07a6029b8abfc5432e0a77ce765ff38aa2530a4610f682f2f4235ff9"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/hardnested-simd.wasm",
+      "size": 330267,
+      "sha256": "85b9c2c82bd272a5e97017fd5a7ea57c90cabb50f771dd77d6007aa450bec1ed"
+    },
+    {
+      "path": "hardnested/4761da55825546123b083acf66531644090fafbeeec040b6aee398e778e0537d/manifest.json",
+      "size": 674,
+      "sha256": "b7e78b6ed991e0620923a1ba056cd4c56239d7bf95cfb813ae46ba824d63852a"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/LICENSE",
+      "size": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/docs/licenses/NOTICE.md",
+      "size": 6796,
+      "sha256": "75fb63717485a90d19a4bfeaf80cc6a6c3ef0615dc5d18364f31c701e5a8ca5e"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/docs/licenses/mifare-dictionaries.txt",
+      "size": 2265,
+      "sha256": "161f835f0781171e0c67ba83e629f0d74601619e610b21314e373a65e2c0a4e0"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/hardnested-assets-license.txt",
+      "size": 400,
+      "sha256": "ea85a9ce566bff28dec47980625b0999e3b43641d9e09e8fa1a999581a24d716"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/hardnested-assets-notice.txt",
+      "size": 742,
+      "sha256": "8cccf376b934f62c13d52395090982f2895dcdeffe71fd9e7a1626039266b00d"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/hardnested.tables.knhp",
+      "size": 8561925,
+      "sha256": "c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805"
+    },
+    {
+      "path": "tables/c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805/manifest.json",
+      "size": 181,
+      "sha256": "9c3a9ddbbb2291da26b40552e4d1ea5f15be25d0a9fd4cb2b6ecb7b89e07cc58"
+    }
+  ]
+}
