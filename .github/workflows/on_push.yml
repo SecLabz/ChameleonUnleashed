@@ -67,7 +67,9 @@ jobs:
           name: release-artifacts-ultra
           path: release-artifacts
       - name: Extract matching resources
-        run: unzip -q release-artifacts/chameleon-unleashed-cdn.zip -d .cache/pages/resources
+        run: |
+          mkdir -p .cache/pages/resources
+          unzip -q release-artifacts/chameleon-unleashed-cdn.zip -d .cache/pages/resources
       - name: Preserve published resources on gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
