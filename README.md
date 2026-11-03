@@ -94,10 +94,12 @@ Flash a prebuilt application package over USB using the native CLI. This needs
 no Rust, Python or `nrfutil`.
 
 1. From [GitHub Releases](https://github.com/SecLabz/ChameleonUnleashed/releases),
-   download the **archive matching your OS and architecture**.
-   It contains the CLI, application firmware and `INSTALL.txt`.
-   See [archive names](docs/releases.md).
-2. Extract the downloaded archive. **Keep the included `firmware.zip` intact.**
+   download the **archive matching your OS and architecture**, for example
+   `ChameleonUnleashed-v1.0.0-macos-arm64.zip` for an Apple Silicon Mac.
+   See [archive names](docs/releases.md) for other platforms.
+2. Extract that outer archive. Inside are `chameleon` (`chameleon.exe` on Windows),
+   `firmware.zip` and `INSTALL.txt`. **Keep `firmware.zip` intact, next to the CLI:**
+   it is the application firmware passed to the commands below.
 3. Connect one Chameleon Ultra with a USB data cable. Close any other client
    using the device.
 4. Open a terminal in that folder, run the command for your OS below, and
