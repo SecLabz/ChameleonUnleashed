@@ -4,23 +4,35 @@ For step-by-step flashing instructions, see [Quick installation](../README.md#qu
 
 Download archives from [GitHub Releases](https://github.com/SecLabz/ChameleonUnleashed/releases).
 
-| Archive | Contents |
+Choose the archive matching your OS and architecture. Each contains the native
+CLI, application firmware (`firmware.zip`) and platform-specific `INSTALL.txt`.
+
+| Archive (v1.0.0 examples) | Platform |
 | --- | --- |
-| `chameleon-unleashed-app.zip` | Application-only USB DFU update. |
-| `chameleon-unleashed-full.zip` | Application, bootloader and SoftDevice USB DFU update. |
-| `chameleon-unleashed-binaries.zip` | HEX images for direct programming. |
-| `chameleon-unleashed-cdn.zip` | Matching web modules, tables and resource manifests. |
-| `chameleon-linux-x64.zip` | Native CLI for Linux x64. |
-| `chameleon-windows-x64.zip` | Native CLI for Windows x64. |
-| `chameleon-macos-arm64.zip` | Native CLI for Apple Silicon Macs. |
-| `chameleon-macos-x64.zip` | Native CLI for Intel Macs. |
+| `ChameleonUnleashed-v1.0.0-macos-arm64.zip` | macOS, Apple Silicon |
+| `ChameleonUnleashed-v1.0.0-macos-x64.zip` | macOS, Intel |
+| `ChameleonUnleashed-v1.0.0-windows-x64.zip` | Windows x64 |
+| `ChameleonUnleashed-v1.0.0-linux-x64.zip` | Linux x64 |
 
-Extract the CLI archive for your platform and run `chameleon` (`chameleon.exe`
-on Windows). The Python CLI is available from source.
+Extract the downloaded archive, keep the included `firmware.zip` intact, and
+follow `INSTALL.txt`. The executable is `chameleon` (`chameleon.exe` on Windows).
+The Python CLI remains available from source.
 
-Use firmware and CDN archives from the same build. Web resources are published
-automatically to GitHub Pages. For manual hosting, extract the CDN archive at
-the firmware's configured resource URL and keep older versions available.
+`ChameleonUnleashed-v1.0.0-firmware-resources.zip` provides standalone packages:
+
+| Path | Contents |
+| --- | --- |
+| `firmware/application.zip` | Application-only USB DFU update. |
+| `firmware/system.zip` | Application, bootloader and SoftDevice USB DFU update. |
+| `images/` | HEX images for direct programming, with notices. |
+| `cdn/` | Matching web modules, tables, manifests and license notices. |
+
+Web resources are published automatically to GitHub Pages. For manual hosting,
+publish the contents of `cdn/` at the firmware's configured resource URL and keep
+older versions available. Use firmware and resources from the same build.
+
+Development archives include both the version and source commit in their names,
+for example `ChameleonUnleashed-v1.0.0-dev.abcdef0-macos-arm64.zip`.
 
 The `dev` pre-release tracks the default branch. The project version is defined
 in `software/Cargo.toml` under `[workspace.package]`; the native CLI, firmware,

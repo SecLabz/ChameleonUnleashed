@@ -67,10 +67,13 @@ especially with credentials. Disable colors with `--no-color` or `NO_COLOR=1`.
 
 ```sh
 chameleon dfu
-chameleon flash chameleon-unleashed-app.zip --dry-run
-chameleon flash chameleon-unleashed-app.zip --yes
-chameleon flash chameleon-unleashed-full.zip --yes
+chameleon flash firmware.zip --dry-run
+chameleon flash firmware.zip --yes
+chameleon flash firmware/system.zip --yes
 ```
+
+The platform archive includes `firmware.zip`. The optional firmware/resources
+archive contains `firmware/application.zip` and `firmware/system.zip`.
 
 **Export slots before flashing a full/system package:** the stock bootloader can
 overwrite slot storage. Application-only updates leave the bootloader unchanged.

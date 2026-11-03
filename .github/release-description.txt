@@ -1,0 +1,3 @@
+Download the archive matching your OS and architecture. It includes the native CLI, application firmware and installation instructions.
+
+**Firmware & resources:** standalone firmware packages, HEX images and matching CDN resources for manual updates or self-hosting.

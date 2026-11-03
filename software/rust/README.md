@@ -8,7 +8,7 @@ or copy the commands below directly into the console.
 
 ## Open the console
 
-Download and extract the [CLI for your platform](../../docs/releases.md), then
+Download and extract the [archive for your platform](../../docs/releases.md), then
 add its folder to your `PATH`. Connect one Ultra over USB with matching firmware.
 
 ```sh

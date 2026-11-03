@@ -110,25 +110,22 @@ jobs:
           pattern: release-artifacts-*
           merge-multiple: true
           path: release-artifacts
+      - name: Package versioned downloads
+        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --development
       - name: Upload to dev release
         uses: softprops/action-gh-release@v3
         with:
-          body: |
-            Firmware, native CLI and matching CDN resources from the latest default-branch commit.
-            For development purposes only. 
-            Browser tests run on release tags and manual workflows.
-            Built from commit ${{ github.sha }}
-
-            Flash `chameleon-unleashed-app.zip` over USB DFU.
-            Matching resources are published automatically to GitHub Pages.
-            The CDN archive contains the same resources for manual hosting.
+          body_path: .github/release-description.txt
           tag_name: dev
           name: Development release
           draft: false
           prerelease: true
           target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          files: release-artifacts/*
+          files: release-packages/*
+      - name: Verify uploads and remove superseded downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 resource/tools/sync_release_assets.py --tag dev --archives release-packages
       - name: Fix up release tag
         run: |
           git tag -f dev
@@ -154,19 +151,20 @@ jobs:
           pattern: release-artifacts-*
           merge-multiple: true
           path: release-artifacts
+      - name: Package versioned downloads
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --tag "$RELEASE_TAG"
       - name: Upload to tagged release
         uses: softprops/action-gh-release@v3
         with:
-          body: |
-            Firmware, native CLI and matching CDN resources for release ${{ github.ref_name }}.
-            Built from commit ${{ github.sha }}
-
-            Flash `chameleon-unleashed-app.zip` over USB DFU.
-            Matching resources are published automatically to GitHub Pages.
-            The CDN archive contains the same resources for manual hosting.
+          body_path: .github/release-description.txt
           name: Release ${{ github.ref_name }}
           draft: false
           target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          append_body: true
-          files: release-artifacts/*
+          files: release-packages/*
+      - name: Verify uploads and remove superseded downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 resource/tools/sync_release_assets.py --tag "$RELEASE_TAG" --archives release-packages
