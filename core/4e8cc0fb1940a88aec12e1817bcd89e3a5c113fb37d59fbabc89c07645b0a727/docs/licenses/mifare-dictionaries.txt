@@ -1,0 +1,45 @@
+Embedded MIFARE Classic dictionary
+=================================
+
+The embedded catalogue and its editorial priority selection are derived from:
+
+Proxmark3 / RfidResearchGroup
+Revision: cea810820be992fbccc70d2462415b557a5b39a6
+Source: client/dictionaries/mfc_default_keys.dic
+https://github.com/RfidResearchGroup/proxmark3/blob/cea810820be992fbccc70d2462415b557a5b39a6/client/dictionaries/mfc_default_keys.dic
+SHA256: 9e32e7ac46e7cd278a3a5e291d1adea5a4367da6b55352eecc8bea5e62679066
+
+The essentials pass preserves the first occurrence of each key in the
+61-entry `g_mifare_default_keys` array in:
+
+Proxmark3 / RfidResearchGroup
+Revision: 2bf48a02c8f45af06e9811f18f37348facf25292
+Source: client/src/mifare/mifaredefault.h
+SHA256: b1b6dffec3405113f90a84f9dc1232319992c6f7546cac3944a8a1d7dc1ade61
+
+The two duplicate entries are omitted, leaving 59 unique keys in their original
+priority order at the start of `classic.dic`. The `# End essentials` comment
+marks the end of this selection; there is no separate essentials dictionary.
+
+The original dictionary header and contributor/source annotations are
+retained in crates/nfc-mifare/resources/dictionaries/sources/proxmark3.dic.
+The embedded catalogue normalizes case, removes annotations, places essentials
+first, then preserves source order for the remaining keys without duplicates.
+Only the prefix is maintained by hand. tools/mifare_dictionaries.py rebuilds the
+tail from the retained source without network access and checks the full list.
+The upstream project notice is retained below.
+
+Copyright (C) Proxmark3 contributors. See upstream AUTHORS.md for details:
+https://github.com/RfidResearchGroup/proxmark3/blob/cea810820be992fbccc70d2462415b557a5b39a6/AUTHORS.md
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+See the accompanying LICENSE for the full GNU GPL version 3 text.

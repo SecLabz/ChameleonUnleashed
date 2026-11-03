@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "module": {
+    "path": "4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727/nfc_wasm.wasm",
+    "size": 659134,
+    "sha256": "4e8cc0fb1940a88aec12e1817bcd89e3a5c113fb37d59fbabc89c07645b0a727"
+  }
+}

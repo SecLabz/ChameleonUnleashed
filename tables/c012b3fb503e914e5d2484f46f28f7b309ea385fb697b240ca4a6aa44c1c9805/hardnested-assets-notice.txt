@@ -1,0 +1,14 @@
+Hardnested table pack notice
+===========================
+
+The bundled KHNP pack contains 351 PM3-compatible LZ4 table frames used by the
+native Hardnested solver.
+Table generator: Copyright (C) 2015, 2016 by piwi.
+Reviewed upstream generator:
+https://github.com/RfidResearchGroup/proxmark3/blob/2bf48a02c8f45af06e9811f18f37348facf25292/client/deps/hardnested/hardnested_tables.c
+Reviewed upstream table assets:
+https://github.com/RfidResearchGroup/proxmark3/tree/2bf48a02c8f45af06e9811f18f37348facf25292/client/resources/hardnested_tables
+
+The solver and table pack are distributed under GPL-3.0-or-later.
+See LICENSE and docs/licenses/NOTICE.md at the repository or distribution root
+for the complete license and retained component notices.

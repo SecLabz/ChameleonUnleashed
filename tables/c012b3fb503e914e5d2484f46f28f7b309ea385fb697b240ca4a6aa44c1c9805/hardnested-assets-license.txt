@@ -1,0 +1,9 @@
+Hardnested table pack license
+============================
+
+The bundled Hardnested table pack and native Rust solver are distributed under
+GNU General Public License version 3 or any later version (GPL-3.0-or-later).
+
+The complete license text is supplied in LICENSE at the repository or
+distribution root. Component copyrights and terms are retained in
+docs/licenses/NOTICE.md under that same root.

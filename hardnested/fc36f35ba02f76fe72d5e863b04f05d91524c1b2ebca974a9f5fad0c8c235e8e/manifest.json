@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "abi": 1,
+  "tablePack": {
+    "path": "hardnested.tables.knhp",
+    "size": 8561925,
+    "sha256": "c012b3fb503e914e5d2484f46f28f7b309ea385fb697b240ca4a6aa44c1c9805"
+  },
+  "modules": {
+    "scalar": {
+      "path": "fc36f35ba02f76fe72d5e863b04f05d91524c1b2ebca974a9f5fad0c8c235e8e/hardnested-scalar.wasm",
+      "size": 323213,
+      "sha256": "c5937966c479e553324ad71893f2e6d7ae4525056a765232aa3934a79fdaa3f3"
+    },
+    "simd": {
+      "path": "fc36f35ba02f76fe72d5e863b04f05d91524c1b2ebca974a9f5fad0c8c235e8e/hardnested-simd.wasm",
+      "size": 330272,
+      "sha256": "de5ddb8c2c622a3d78e4657f1b990615e4b91aed17502c8f882cbf08fa27abdd"
+    }
+  }
+}
