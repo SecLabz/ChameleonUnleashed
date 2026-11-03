@@ -26,9 +26,9 @@ CHAMELEON_LITE  := lite
 CURRENT_DEVICE_TYPE ?= ${CHAMELEON_ULTRA}
 
 # Versioning information
-VERSION_TOOL := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../resource/tools/project_version.py)
+VERSION_MANIFEST := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../software/Cargo.toml)
 ifndef APP_FW_SEMVER
-APP_FW_SEMVER := $(shell python3 "$(VERSION_TOOL)")
+APP_FW_SEMVER := $(shell awk -F '"' '/^\[workspace[.]package\][[:space:]]*$$/ { package=1; next } /^\[/ { package=0 } package && /^[[:space:]]*version[[:space:]]*=/ { print $$2; exit }' "$(VERSION_MANIFEST)")
 endif
 ifeq ($(strip $(APP_FW_SEMVER)),)
 $(error Unable to read the project version from software/Cargo.toml)

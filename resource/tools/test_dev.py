@@ -4,11 +4,15 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 import io
 import json
+import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+
+from project_version import read_version
 
 
 loader = SourceFileLoader('project_dev', str(Path(__file__).resolve().parents[2] / 'dev'))
@@ -185,14 +189,24 @@ class FirmwareVersionTests(unittest.TestCase):
             '"$(APP_FW_VER_MINOR)" "$(GIT_VERSION)"\n'
         )
 
-    def version(self, *options):
+    def version(self, *options, env=None):
         result = subprocess.run(['make', '--no-print-directory', 'version', *options],
-                                cwd=self.root, capture_output=True, text=True, check=True)
+                                cwd=self.root, env=env, capture_output=True, text=True, check=True)
         self.assertEqual(result.stderr, '')
         return result.stdout.splitlines()
 
+    def test_firmware_version_needs_neither_python_nor_git(self):
+        tools = self.root / 'bin'
+        tools.mkdir()
+        for name in ['make', 'awk']:
+            (tools / name).symlink_to(shutil.which(name))
+        version = read_version()
+        self.assertEqual(self.version(env={**os.environ, 'PATH': str(tools)}),
+                         [version, *version.split('.')[:2], 'v' + version])
+
     def test_source_archive_has_a_version_without_git(self):
         version, major, minor, description = self.version()
+        self.assertEqual(version, read_version())
         self.assertTrue(version.startswith(f'{int(major)}.{int(minor)}.'))
         self.assertEqual(description, 'v' + version)
         self.assertEqual(self.version('APP_FW_SEMVER=3.7.1'), ['3.7.1', '3', '7', 'v3.7.1'])
