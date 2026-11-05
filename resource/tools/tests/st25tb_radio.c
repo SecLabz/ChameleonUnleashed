@@ -493,14 +493,20 @@ typedef enum {
 } nrfx_power_usb_state_t;
 
 static nrfx_power_usb_state_t nrfx_power_usbstatus_get(void) {
-    if (is_scenario("usb_enumerating_window")) {
+    if (is_scenario("usb_powering_window")) {
         return NRFX_POWER_USB_STATE_CONNECTED;
     }
     if (is_scenario("usb_idle_window") || is_scenario("usb_active_window") ||
-        is_scenario("usb_ble_window") || (is_scenario("usb_disconnect_window") && !slot_calls)) {
+        is_scenario("usb_ble_window") || is_scenario("usb_enumerating_window") ||
+        is_scenario("usb_suspended_window") || (is_scenario("usb_disconnect_window") && !slot_calls)) {
         return NRFX_POWER_USB_STATE_READY;
     }
     return NRFX_POWER_USB_STATE_DISCONNECTED;
+}
+
+static bool usb_hfclk_active(void) {
+    return is_scenario("usb_idle_window") || is_scenario("usb_active_window") ||
+           is_scenario("usb_ble_window") || (is_scenario("usb_disconnect_window") && !slot_calls);
 }
 
 static bool advertising_pause(bool *resume) {
@@ -648,11 +654,11 @@ static uint32_t rf_timeslot_deadline(void) {
 static bool rf_timeslot_run(uint32_t us, bool high, bool extend, void (*work)(void)) {
     unsigned expected_us = 500000;
     bool ble_connected = is_scenario("ble_window") || is_scenario("usb_ble_window");
-    if (ble_connected || is_scenario("usb_idle_window") || is_scenario("usb_active_window") ||
-        is_scenario("usb_enumerating_window") || (is_scenario("usb_disconnect_window") && !slot_calls)) {
+    if (ble_connected || is_scenario("usb_powering_window") ||
+        is_scenario("usb_enumerating_window") || is_scenario("usb_suspended_window")) {
         expected_us = 25000;
     } else if (is_scenario("active_window") || is_scenario("rf_only_window") || is_scenario("active_deadline") ||
-               is_scenario("field_off_deadline")) {
+               is_scenario("field_off_deadline") || (is_scenario("usb_disconnect_window") && slot_calls)) {
         expected_us = 2000000;
     }
     assert(us == expected_us && high && extend == !ble_connected);
@@ -990,7 +996,8 @@ int main(int argc, char **argv) {
     if (is_scenario("banks") || is_scenario("bank_gaps") || is_scenario("button") || is_scenario("ble_window") ||
         is_scenario("active_window") || is_scenario("rf_only_window") ||
         is_scenario("usb_idle_window") || is_scenario("usb_active_window") ||
-        is_scenario("usb_ble_window") || is_scenario("usb_enumerating_window") ||
+        is_scenario("usb_ble_window") || is_scenario("usb_powering_window") ||
+        is_scenario("usb_enumerating_window") || is_scenario("usb_suspended_window") ||
         is_scenario("usb_disconnect_window")) {
         assert(sampled && present && !gpio_edges && !settles && stream_starts == 1);
         unsigned wanted = is_scenario("button") ? 128 : sample_count;
@@ -1002,7 +1009,7 @@ int main(int argc, char **argv) {
         assert(cycles.CYCCNT < slot_end - 10000u * 64u);
         if (is_scenario("usb_disconnect_window")) {
             sample_position = 0;
-            assert(nfc_st25tb_radio_poll(&present, false) && present);
+            assert(nfc_st25tb_radio_poll(&present, true) && present);
             assert(slot_calls == 2);
             assert_released();
         }
