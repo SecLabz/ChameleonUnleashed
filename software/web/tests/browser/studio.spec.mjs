@@ -166,7 +166,9 @@ test('fresh Plus SL1 ATS identifies 2K before reading all 128 blocks', async ({ 
   expect(captured.memory).toHaveLength(128);
   expect(captured.memory[126]).toEqual(upper);
   expect(captured.recoveredKeys).toHaveLength(32);
-  expect(commands.every((number) => [2000, 2040, 2002, 2008, 2015, 2026, 2027].includes(number))).toBe(true);
+  expect(commands.every((number) => [2000, 2040, 2002, 2008, 2015, 2026, 2027, 2042].includes(number))).toBe(
+    true
+  );
 });
 
 test('rereading a known Classic 2K document preserves its model and reads the upper half', async ({
@@ -204,8 +206,20 @@ test('rereading a known Classic 2K document preserves its model and reads the up
   expect(captured.memory[126]).toEqual(lastData);
   expect(captured.memory[127]).toEqual([...Array(6).fill(255), 255, 7, 128, 105, ...Array(6).fill(255)]);
   expect(captured.recoveredKeys).toHaveLength(32);
-  expect(commands.filter((entry) => entry.number === 2027).map((entry) => entry.data[1])).toContain(31);
-  expect(commands.every((entry) => [2000, 2002, 2008, 2015, 2026, 2027].includes(entry.number))).toBe(true);
+  const readSectors = commands.flatMap(({ number, data }) => {
+    if (number === 2027) {
+      return [data[1]];
+    }
+    if (number === 2042 && data[1] === 1) {
+      const head = 4 + data[2];
+      return Array.from({ length: data[head - 1] }, (_, index) => data[head + index * 8]);
+    }
+    return [];
+  });
+  expect(readSectors).toContain(31);
+  expect(commands.every((entry) => [2000, 2002, 2008, 2015, 2026, 2027, 2042].includes(entry.number))).toBe(
+    true
+  );
   await expect(page.locator('#studio-family')).toHaveText('Classic 2K');
   await expect(page.locator('#memory-status')).toHaveText('128/128 blocks known');
   await page.reload();
