@@ -15,7 +15,7 @@ import { classicChanges } from '../documents/classic-write.mjs';
 import { renderLfChip } from './lf-chip.mjs';
 import { lfIdentity } from '../documents/lf.mjs';
 import { lfEditor } from './lf-editor.mjs';
-import { $ } from './device-view.mjs';
+import { $, BLE_PAUSED_TYPES } from './device-view.mjs';
 import {
   canExportNfc,
   editBlock,
@@ -337,6 +337,14 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
 
     for (const id of ['save-slot', 'emulate', 'copy-tag', 'export']) {
       $(id).title = $(id).disabled ? disabledReason : '';
+    }
+    // The firmware keeps NFC-V and NFC-B emulation off while BLE is linked.
+    if (state.transport === 'ble' && BLE_PAUSED_TYPES.includes(doc.type) && !$('emulate').disabled) {
+      $('emulate').title = 'Emulation starts once Bluetooth disconnects';
+    }
+    if (emulating && state.transport === 'ble' && BLE_PAUSED_TYPES.includes(doc.type)) {
+      $('emulate').textContent = 'Selected';
+      $('emulate').title = 'Emulation starts once Bluetooth disconnects';
     }
 
     $('export').hidden =

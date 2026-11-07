@@ -19,7 +19,10 @@ extern uint8_t tud_network_mac_address[6];
 static struct netif net;
 static struct pbuf *incoming;
 static volatile bool disconnected;
-void network_disconnect(void) { disconnected = true; }
+void network_disconnect(void) {
+    disconnected = true;
+    web_session_disconnect(API_SOURCE_HTTP);
+}
 typedef struct {
     struct tcp_pcb *pcb;
     uint8_t buffer[HTTP_REQUEST_MAX_BYTES];
@@ -244,10 +247,24 @@ bool network_init(void) {
     return true;
 }
 
+bool network_work_pending(void) {
+    if (disconnected || incoming)
+        return true;
+    for (unsigned i = 0; i < HTTP_CONNECTIONS; i++) {
+        const connection_t *c = &connections[i];
+        if (c->pcb && (c->pending || (c->responding &&
+                c->sent < c->response.header_size + c->response.size)))
+            return true;
+    }
+    for (const struct tcp_pcb *pcb = tcp_active_pcbs; pcb; pcb = pcb->next)
+        if (pcb->unsent || pcb->unacked || (pcb->flags & TF_ACK_NOW))
+            return true;
+    return false;
+}
+
 void network_poll(void) {
     if (disconnected) {
         disconnected = false;
-        web_session_end();
         /* Include handshakes and closing PCBs no longer owned by HTTP. */
         while (tcp_active_pcbs)
             tcp_abort(tcp_active_pcbs);

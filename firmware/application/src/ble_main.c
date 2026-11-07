@@ -26,6 +26,7 @@
 #include "hw_connect.h"
 #include "settings.h"
 #include "tag_emulation.h"
+#include "net/api.h"
 
 #define NRF_LOG_MODULE_NAME ble_main
 #include "nrf_log.h"
@@ -192,6 +193,10 @@ static void nus_data_handler(ble_nus_evt_t *p_evt) {
     }
 }
 /**@snippet [Handling the data received over BLE] */
+
+uint16_t ble_nus_payload_limit(void) {
+    return m_ble_nus_max_data_len;
+}
 
 void nus_data_response(uint8_t *p_data, uint16_t length) {
     NRF_LOG_INFO("BLE nus service response data length: %d", length);
@@ -416,6 +421,8 @@ static void ble_evt_handler(ble_evt_t const *p_ble_evt, void *p_context) {
     switch (p_ble_evt->header.evt_id) {
         case BLE_GAP_EVT_CONNECTED:
             sleep_timer_stop();
+            /* The next peer may negotiate a smaller MTU than its predecessor. */
+            m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;
 
             NRF_LOG_INFO("Connected");
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
@@ -430,6 +437,7 @@ static void ble_evt_handler(ble_evt_t const *p_ble_evt, void *p_context) {
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
             g_is_ble_connected = false;
             data_frame_disconnect(DATA_SOURCE_BLE);
+            web_session_disconnect(API_SOURCE_BLE);
             // call sleep_timer_start *after* unsetting g_is_ble_connected
             sleep_timer_start(SLEEP_DELAY_MS_BLE_DISCONNECTED);
             break;

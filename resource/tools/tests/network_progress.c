@@ -26,6 +26,7 @@ void tud_network_xmit(void *ref, uint16_t arg) {
 }
 void tud_network_recv_renew(void) { renewals++; }
 void web_session_end(void) { ended++; }
+void web_session_disconnect(api_source_t source) { assert(source == API_SOURCE_HTTP); ended++; }
 void web_session_poll(void) {}
 err_t dhcp_server_init(struct netif *n, const ip4_addr_t *ip, const ip4_addr_t *mask,
                    const ip4_addr_t *lease) {
@@ -109,7 +110,33 @@ int main(int argc, char **argv) {
     net.output = output;
     unsigned baseline = lwip_stats.memp[MEMP_TCP_PCB]->used;
     struct tcp_pcb *pcb;
-    if (!strcmp(argv[1], "empty_rx")) {
+    if (!strcmp(argv[1], "work")) {
+        assert(!network_work_pending());
+        pcb = connection(ESTABLISHED);
+        assert(accept(NULL, pcb, ERR_OK) == ERR_OK);
+        assert(!network_work_pending()); /* An idle preconnection is not work. */
+        pcb->flags |= TF_ACK_NOW;
+        assert(network_work_pending());
+        pcb->flags &= ~TF_ACK_NOW;
+        assert(!network_work_pending());
+        tcp_abort(pcb);
+        pcb = request(3);
+        assert(network_work_pending()); /* Dispatch queued, USB events drained. */
+        network_poll();
+        assert(network_work_pending()); /* Response blocked by sndbuf. */
+        pcb->snd_buf = TCP_SND_BUF;
+        flush(pcb->callback_arg);
+        assert(pcb->unsent && network_work_pending());
+        writable = true;
+        network_poll();
+        assert(pcb->unacked && network_work_pending());
+        tcp_abort(pcb);
+        assert(!network_work_pending());
+        network_disconnect();
+        assert(network_work_pending());
+        network_poll();
+        assert(!network_work_pending());
+    } else if (!strcmp(argv[1], "empty_rx")) {
         const uint8_t bytes[] = {1, 2, 3};
         assert(!tud_network_recv_cb(bytes, 0) && !incoming);
         tud_network_recv_renew();

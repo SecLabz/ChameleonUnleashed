@@ -72,13 +72,17 @@ uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output, ui
 /* Request: key type, sector (0..39), six key bytes. Response: big-endian
  * readable-block mask followed by 4 or 16 blocks; unread bytes are zero.
  * An optional UID length and UID enable checked reads with a retained RF lease.
+ * Appending byte 1 to a checked request adds four diagnostic bytes after the
+ * unchanged body: version 1, first failed offset (FF if complete), RF status BE16.
  * A read failure ends this authentication. Callers can retry missing blocks
  * independently when access permissions differ within a sector. */
 static uint16_t read_sector(uint16_t length, uint8_t *data, uint8_t *output,
                             uint16_t *output_length) {
+    *output_length = 0;
+    bool diagnostic = length >= 9 && length == 10 + data[8] && data[length - 1] == 1;
     if (length < 8 || (data[0] != 0x60 && data[0] != 0x61) || data[1] >= 40 ||
         (length != 8 && ((data[8] != 4 && data[8] != 7 && data[8] != 10) ||
-                         length != 9 + data[8]))) {
+                         (length != 9 + data[8] && !diagnostic)))) {
         nfca_session_close();
         return STATUS_PAR_ERR;
     }
@@ -102,16 +106,28 @@ static uint16_t read_sector(uint16_t length, uint8_t *data, uint8_t *output,
     }
     memset(output, 0, 2 + count * 16);
     uint16_t mask = 0;
+    uint8_t failed = 0xff;
     for (uint8_t i = 0; i < count; i++) {
         uint8_t block[16];
         status = pcd_14a_reader_mf1_read(first + i, block);
-        if (status != STATUS_HF_TAG_OK) break;
+        if (status != STATUS_HF_TAG_OK) {
+            failed = i;
+            break;
+        }
         memcpy(output + 2 + i * 16, block, 16);
         mask |= 1u << i;
     }
     output[0] = mask >> 8;
     output[1] = mask;
     *output_length = 2 + count * 16;
+    if (diagnostic) {
+        uint8_t *tail = output + *output_length;
+        tail[0] = 1;
+        tail[1] = failed;
+        tail[2] = status >> 8;
+        tail[3] = status;
+        *output_length += 4;
+    }
     if (status != STATUS_HF_TAG_OK || length == 8) {
         nfca_session_close();
     } else {
@@ -262,6 +278,23 @@ static uint16_t type2_auth_read(uint16_t length, const uint8_t *data,
     return status;
 }
 
+static uint16_t classic_model_check(uint8_t model, const picc_14a_tag_t *tag) {
+    uint8_t sak;
+    switch (model) {
+    case 1: sak = 8; break;
+    case 5: sak = 9; break;
+    case 6:
+        if (tag->sak == 8) {
+            return mf1_classic_2k_sl1_check(tag->uid_len, tag->uid, tag->atqa, tag->sak);
+        }
+        sak = 0x10;
+        break;
+    case 7: sak = 0x18; break;
+    default: return STATUS_PAR_ERR;
+    }
+    return (tag->sak & ~0x20u) == sak ? STATUS_HF_TAG_OK : STATUS_HF_TAG_NO;
+}
+
 /* One guarded write. The host must preflight every target unit first. */
 static uint16_t write_user_unit(uint16_t length, const uint8_t *data,
                                 uint8_t *output, uint16_t *output_length) {
@@ -276,22 +309,18 @@ static uint16_t write_user_unit(uint16_t length, const uint8_t *data,
     uint8_t kind = data[KIND_BYTE];
     bool classic = model == 1 || model == 5 || model == 6 || model == 7;
     uint16_t count = 0;
-    uint8_t expected_sak = 8;
     switch (model) {
     case 1:
         count = 64;
         break;
     case 5:
         count = 20;
-        expected_sak = 9;
         break;
     case 6:
         count = 128;
-        expected_sak = 0x10;
         break;
     case 7:
         count = 256;
-        expected_sak = 0x18;
         break;
     case 2:
         count = 130;  /* NTAG215: dynamic lock at 130. */
@@ -363,8 +392,12 @@ static uint16_t write_user_unit(uint16_t length, const uint8_t *data,
         return status;
     }
     if (tag.uid_len != data[1] || memcmp(tag.uid, data + UID_BYTE, tag.uid_len) ||
-        (classic ? (tag.sak & ~0x20u) != expected_sak : tag.sak != 0)) {
+        (!classic && tag.sak != 0)) {
         return STATUS_HF_TAG_NO;
+    }
+    if (classic) {
+        status = classic_model_check(model, &tag);
+        if (status != STATUS_HF_TAG_OK) return status;
     }
     if (!classic) {
         status = type2_model_check(model, data + UID_BYTE);
@@ -473,25 +506,16 @@ static uint16_t block0_set(uint16_t length, const uint8_t *data,
 
     picc_14a_tag_t tag;
     uint16_t status = pcd_14a_reader_scan_auto(&tag);
-    uint8_t expected_sak = 8;
-    switch (data[0]) {
-    case 5:
-        expected_sak = 9;
-        break;
-    case 6:
-        expected_sak = 0x10;
-        break;
-    case 7:
-        expected_sak = 0x18;
-        break;
-    }
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
-    if (tag.uid_len != 4 || memcmp(tag.uid, data + 2, 4) ||
-        (tag.sak & ~0x20u) != expected_sak) {
+    if (tag.uid_len != 4 || memcmp(tag.uid, data + 2, 4)) {
         return STATUS_HF_TAG_NO;
     }
+    status = classic_model_check(data[0], &tag);
+    if (status != STATUS_HF_TAG_OK) return status;
+    picc_14a_tag_t expected = tag;
+    uint8_t expected_sak = tag.sak & ~0x20u;
     uint8_t probe[21] = {4};
     memcpy(probe + 1, tag.uid, 4);
     memcpy(probe + 11, tag.atqa, 2);
@@ -521,7 +545,8 @@ static uint16_t block0_set(uint16_t length, const uint8_t *data,
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
-    if (tag.uid_len != 4 || memcmp(tag.uid, data + 2, 4)) {
+    if (tag.uid_len != 4 || memcmp(tag.uid, data + 2, 4) ||
+        tag.sak != expected.sak || memcmp(tag.atqa, expected.atqa, 2)) {
         return STATUS_HF_TAG_NO;
     }
     if (data[10]) {
@@ -597,23 +622,18 @@ static uint16_t trailer_set(uint16_t length, const uint8_t *data,
     uint8_t model = data[8];
     uint8_t sector = data[9];
     uint8_t sectors;
-    uint8_t expected_sak;
     switch (model) {
     case 1:
         sectors = 16;
-        expected_sak = 8;
         break;
     case 5:
         sectors = 5;
-        expected_sak = 9;
         break;
     case 6:
         sectors = 32;
-        expected_sak = 0x10;
         break;
     case 7:
         sectors = 40;
-        expected_sak = 0x18;
         break;
     default:
         return STATUS_PAR_ERR;
@@ -628,10 +648,11 @@ static uint16_t trailer_set(uint16_t length, const uint8_t *data,
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
-    if (tag.uid_len != data[0] || memcmp(tag.uid, data + 1, tag.uid_len) ||
-        (tag.sak & ~0x20u) != expected_sak) {
+    if (tag.uid_len != data[0] || memcmp(tag.uid, data + 1, tag.uid_len)) {
         return STATUS_HF_TAG_NO;
     }
+    status = classic_model_check(model, &tag);
+    if (status != STATUS_HF_TAG_OK) return status;
     status = pcd_14a_reader_mf1_auth(&tag, data[10] == 1 ? 0x60 : 0x61,
                                      trailer, (uint8_t *)data + 11);
     if (status != STATUS_HF_TAG_OK) {
@@ -717,8 +738,10 @@ static uint16_t trailer_set(uint16_t length, const uint8_t *data,
  * seven padded UID bytes, block, credential(0/KeyA=1/KeyB=2), six key bytes.
  * Preflight/write append 16 observed bytes and 16 target bytes.
  * Read reply: UID length, seven padded UID bytes, ATQA[2], SAK, block[16].
+ * Optional trailing 1 on authenticated model-6 requests requires fresh capacity
+ * evidence. Legacy requests retain explicit known-model repair semantics.
  * Selection overrides belong to this call, never to the next reader operation. */
-static uint16_t maintenance_open(const uint8_t *data, picc_14a_tag_t *tag) {
+static uint16_t maintenance_open(const uint8_t *data, picc_14a_tag_t *tag, bool capacity_check) {
     if (data[1] != 3) {
         uint16_t status = pcd_14a_reader_magic_unlock(data[1] == 1);
         if (status != STATUS_HF_TAG_OK) {
@@ -745,6 +768,10 @@ static uint16_t maintenance_open(const uint8_t *data, picc_14a_tag_t *tag) {
         return STATUS_HF_TAG_NO;
     }
     if (data[1] == 3) {
+        if (capacity_check) {
+            uint16_t status = classic_model_check(data[2], tag);
+            if (status != STATUS_HF_TAG_OK) return status;
+        }
         return pcd_14a_reader_mf1_auth(tag, data[12] == 1 ? 0x60 : 0x61,
                                      data[11], (uint8_t *)data + 13);
     }
@@ -762,12 +789,12 @@ static void maintenance_reply(const picc_14a_tag_t *tag, const uint8_t *block,
     *length = 27;
 }
 
-static uint16_t maintenance_run(const uint8_t *data, uint8_t *output, uint16_t *length) {
+static uint16_t maintenance_run(const uint8_t *data, uint8_t *output, uint16_t *length, bool capacity_check) {
     const uint8_t model = data[2];
     const uint8_t unit = data[11];
     const bool trailer = unit < 128 ? unit % 4 == 3 : unit % 16 == 15;
     picc_14a_tag_t tag;
-    uint16_t status = maintenance_open(data, &tag);
+    uint16_t status = maintenance_open(data, &tag, capacity_check);
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
@@ -795,7 +822,8 @@ static uint16_t maintenance_run(const uint8_t *data, uint8_t *output, uint16_t *
         if (model == 5) {
             sak = 9;
         } else if (model == 6) {
-            sak = 0x10;
+            sak = capacity_check ? tag.sak : after[data[3] == 4 ? 5 : 7];
+            if (sak != 8 && sak != 0x10) return STATUS_PAR_ERR;
         } else if (model == 7) {
             sak = 0x18;
         }
@@ -866,7 +894,7 @@ static uint16_t maintenance_run(const uint8_t *data, uint8_t *output, uint16_t *
             return STATUS_CMD_ERR;
         }
     }
-    status = maintenance_open(request, &tag);
+    status = maintenance_open(request, &tag, capacity_check);
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
@@ -880,8 +908,11 @@ static uint16_t maintenance_run(const uint8_t *data, uint8_t *output, uint16_t *
 
 static uint16_t maintenance(uint16_t size, const uint8_t *data,
                              uint8_t *output, uint16_t *length) {
-    if (size < 19 || data[0] > 3 ||
-        size != (data[0] == 1 || data[0] == 2 ? 51 : 19) ||
+    if (size < 19) return STATUS_PAR_ERR;
+    uint16_t base = data[0] == 1 || data[0] == 2 ? 51 : 19;
+    bool capacity_check = size == base + 1 && data[base] == 1;
+    if (data[0] > 3 || (size != base && !capacity_check) ||
+        (capacity_check && (data[1] != 3 || data[2] != 6)) ||
         (data[0] == 3 && data[11] != 0) ||
         data[1] < 1 || data[1] > 3 ||
         (data[3] != 4 && data[3] != 7) ||
@@ -912,7 +943,7 @@ static uint16_t maintenance(uint16_t size, const uint8_t *data,
     const hf14a_config_t saved = *get_hf14a_config();
     const hf14a_config_t recovery = {2, data[3] == 7 ? 1 : 2, 2, 2};
     set_hf14a_config(&recovery);
-    uint16_t status = maintenance_run(data, output, length);
+    uint16_t status = maintenance_run(data, output, length, capacity_check);
     set_hf14a_config(&saved);
     return status;
 }

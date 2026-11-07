@@ -12,9 +12,17 @@ typedef struct {
     uint8_t uid_len;
     uint8_t uid[10];
     uint8_t sak;
+    uint8_t atqa[2];
 } picc_14a_tag_t;
 
-static picc_14a_tag_t selected = {7, {4, 1, 2, 3, 4, 5, 6}, 0};
+static picc_14a_tag_t selected = {7, {4, 1, 2, 3, 4, 5, 6}, 0, {0}};
+
+static uint16_t mf1_classic_2k_sl1_check(uint8_t uid_length, const uint8_t *uid,
+                                        const uint8_t *atqa, uint8_t sak) {
+    (void)uid_length; (void)uid; (void)atqa; (void)sak;
+    assert(!"Type 2 must not use Classic model evidence");
+    return STATUS_HF_TAG_NO;
+}
 static uint8_t memory[44][4];
 static unsigned scans;
 static unsigned halts;

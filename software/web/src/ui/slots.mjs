@@ -1,7 +1,7 @@
-import { request, withDevice } from '../device/transport.mjs';
+import { deviceTransportType, request, withDevice } from '../device/transport.mjs';
 import { SlotDevice, decodeSlot } from '../device/slots.mjs';
 import { ask } from './dialogs.mjs';
-import { $, escape } from './device-view.mjs';
+import { $, BLE_PAUSED_TYPES, escape } from './device-view.mjs';
 import { be32, family, nickname, typeName } from '../documents/slot-image.mjs';
 
 export function slotView({ run, open, add, notify, afterChange }) {
@@ -76,6 +76,7 @@ export function slotView({ run, open, add, notify, afterChange }) {
   function render() {
     $('slot-strip').replaceChildren();
     $('slots').replaceChildren();
+    const ble = deviceTransportType() === 'ble';
 
     rows.forEach((row, slotIndex) => {
       const hfEnabled = row.hf.type && row.hf.enabled;
@@ -146,6 +147,10 @@ export function slotView({ run, open, add, notify, afterChange }) {
         let description = 'Choose a file';
         if (place.type) {
           description = escape(typeLabel) + (place.enabled ? '' : ' · off');
+        }
+        if (sense === 'hf' && place.enabled && ble && BLE_PAUSED_TYPES.includes(place.type)) {
+          description += ' · <span class="bay-paused">paused over Bluetooth</span>';
+          bay.title = 'Emulation starts once Bluetooth disconnects';
         }
         title.innerHTML = `<strong>${escape(place.name || typeLabel)}</strong><small>${description}</small>`;
         title.disabled = !!place.type && !family(place.type);
@@ -224,6 +229,15 @@ export function slotView({ run, open, add, notify, afterChange }) {
   return {
     refresh,
     mutate,
+    // Stale cards would offer actions the device can no longer receive.
+    disconnected() {
+      rows = [];
+      $('slot-strip').replaceChildren();
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'Connect your Ultra to read its slots.';
+      $('slots').replaceChildren(empty);
+    },
     async choose(sense, index) {
       await refresh();
       if (index !== undefined) {

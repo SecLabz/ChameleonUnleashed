@@ -183,7 +183,8 @@ export async function installFirmware(
   return running;
 }
 
-const updateBase = () => new URL('updates/', new URL(RESOURCE_BASE, globalThis.location?.href));
+const updateBase = (development = false) =>
+  new URL(development ? 'updates/dev/' : 'updates/', new URL(RESOURCE_BASE, globalThis.location?.href));
 function validAsset(asset) {
   return (
     asset &&
@@ -195,8 +196,11 @@ function validAsset(asset) {
   );
 }
 
-export async function loadCatalogue(signal) {
-  const response = await fetch(new URL('catalog.json', updateBase()), { signal, cache: 'no-store' });
+export async function loadCatalogue(signal, development = false) {
+  const response = await fetch(new URL('catalog.json', updateBase(development)), {
+    signal,
+    cache: 'no-store'
+  });
   if (!response.ok) {
     throw new Error('Release list unavailable. You can still choose a local Nordic ZIP.');
   }
@@ -229,11 +233,11 @@ export async function loadCatalogue(signal) {
   }
   return catalogue;
 }
-export async function downloadFirmware(asset, signal, onProgress = () => {}) {
+export async function downloadFirmware(asset, signal, onProgress = () => {}, development = false) {
   if (!validAsset(asset)) {
     throw new Error('Invalid firmware download metadata.');
   }
-  const file = await fetch(new URL(asset.path, updateBase()), { signal, cache: 'no-store' });
+  const file = await fetch(new URL(asset.path, updateBase(development)), { signal, cache: 'no-store' });
   if (!file.ok || !file.body) {
     throw new Error('Firmware download failed. Choose a local Nordic ZIP to continue.');
   }
@@ -270,6 +274,7 @@ if (typeof document !== 'undefined') {
   let localFile;
   let localInfo;
   let fileSelection = 0;
+  let catalogueRequest = 0;
   let busy = false;
   let restored = false;
   let canReturn = false;
@@ -286,7 +291,7 @@ if (typeof document !== 'undefined') {
     selectedSource()?.releases.find((release) => release.version === $('version').value);
   const updateControls = () => {
     const locked = busy || restored;
-    for (const id of ['source', 'version', 'file', 'wipe', 'restart']) {
+    for (const id of ['channel', 'source', 'version', 'file', 'wipe', 'restart']) {
       $(id).disabled = locked;
     }
     $('file').disabled ||= Boolean(device && device.layout !== RECOVERY_LAYOUT);
@@ -311,8 +316,10 @@ if (typeof document !== 'undefined') {
   const selectSource = () => {
     $('version').replaceChildren();
     for (const release of selectedSource()?.releases ?? []) {
+      const development = $('channel').value === 'development';
+      const label = development ? release.version.replace('-dev.', ' · ') : release.version;
       $('version').add(
-        new Option(`${release.version}${release.prerelease ? ' (preview)' : ''}`, release.version)
+        new Option(`${label}${release.prerelease && !development ? ' (preview)' : ''}`, release.version)
       );
     }
     const stable = selectedSource()?.releases.find((release) => !release.prerelease);
@@ -346,9 +353,15 @@ if (typeof document !== 'undefined') {
     }
   };
   const fetchCatalogue = async () => {
+    const generation = ++catalogueRequest;
+    catalogue = undefined;
+    $('source').replaceChildren(new Option('Loading…', ''));
+    $('version').replaceChildren();
+    $('release').textContent = 'Loading releases…';
+    updateControls();
     try {
-      const next = await loadCatalogue();
-      if (busy || restored) {
+      const next = await loadCatalogue(undefined, $('channel').value === 'development');
+      if (generation !== catalogueRequest || busy || restored) {
         return;
       }
       catalogue = next;
@@ -358,7 +371,7 @@ if (typeof document !== 'undefined') {
       }
       selectSource();
     } catch (error) {
-      if (!busy && !restored) {
+      if (generation === catalogueRequest && !busy && !restored) {
         $('release').textContent = error.message;
       }
     }
@@ -385,7 +398,12 @@ if (typeof document !== 'undefined') {
       const asset = release?.packages[release.layout === RECOVERY_LAYOUT ? 'application' : 'full'];
       const bytes = file
         ? new Uint8Array(await file.arrayBuffer())
-        : await downloadFirmware(asset, controller.signal, showProgress);
+        : await downloadFirmware(
+            asset,
+            controller.signal,
+            showProgress,
+            $('channel').value === 'development'
+          );
       const info = await inspectFirmware(bytes, controller.signal);
       replacement = info.restore;
       // Another page or a classic DFU update may have changed recovery since
@@ -453,6 +471,11 @@ if (typeof document !== 'undefined') {
     $('title').textContent = '';
     $('message').textContent = '';
     $('progress').hidden = true;
+  };
+  $('channel').onchange = () => {
+    resetStatus();
+    clearLocal();
+    fetchCatalogue();
   };
   $('source').onchange = () => {
     resetStatus();

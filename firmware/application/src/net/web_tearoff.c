@@ -8,6 +8,8 @@
 #include "hf_reader.h"
 #include "hf_radio.h"
 #include "usb_main.h"
+#include "api.h"
+#include "utils/dataframe.h"
 #include <string.h>
 
 enum { IDLE, PENDING, RUNNING, DONE };
@@ -76,6 +78,8 @@ void web_tearoff_service(void) {
     job.elapsed_ticks += delta;
     job.serviced = now;
     usb_poll();
+    data_frame_process_ble_control();
+    web_session_poll();
 }
 
 void web_tearoff_poll(void) {

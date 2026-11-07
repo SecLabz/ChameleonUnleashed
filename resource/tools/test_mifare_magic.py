@@ -36,7 +36,7 @@ class MagicTest(unittest.TestCase):
     def test_guarded_block0_and_trailer_writes(self):
         source = (RFID / 'reader/hf/nfca_commands.c').read_text()
         functions = '\n'.join(function(source, name) for name in (
-            'block0_set', 'classic_access_valid', 'trailer_set'))
+            'classic_model_check', 'block0_set', 'classic_access_valid', 'trailer_set'))
         fixture = (ROOT / 'resource/tools/tests/mifare_write.c').read_text()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'write.c'

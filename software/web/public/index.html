@@ -6,15 +6,15 @@
     <meta name="theme-color" content="#0a0c11">
     <meta name="referrer" content="no-referrer">
     <title>Chameleon Unleashed</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="/style.css">
-    <script type="module" src="/app.mjs"></script>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <link rel="stylesheet" href="./style.css">
+    <script type="module" src="./app.mjs"></script>
   </head>
 
   <body>
     <div class="shell">
       <header class="app-header">
-        <a class="brand" href="/">
+        <a class="brand" href="./">
           <span class="mark">
             <svg
               viewBox="0 0 24 24"
@@ -29,7 +29,7 @@
           </span>
           Chameleon Unleashed
         </a>
-        <button class="cu-status" id="connection" type="button" data-connection data-view-target="device">
+        <button class="cu-status" id="connection" type="button" data-connection data-state="pending">
           Connecting…
         </button>
       </header>
@@ -37,7 +37,7 @@
       <main>
         <section class="view scan-home" data-view="scan">
           <h1>Scan</h1>
-          <div class="scanner">
+          <div class="scanner" id="scanner">
             <div class="orbit" aria-hidden="true"></div>
             <button class="scan-button" id="scan" type="button" disabled>
               <svg viewBox="0 0 40 40" aria-hidden="true">
@@ -49,13 +49,27 @@
               <span>Tap to Scan</span>
             </button>
           </div>
-          <div class="scan-mode" role="radiogroup" aria-label="Technology">
+          <div class="scan-mode" id="scan-modes" role="radiogroup" aria-label="Technology">
             <button type="button" role="radio" aria-checked="true" data-scan-mode="nfc">
               NFC<small>13.56 MHz</small>
             </button>
             <button type="button" role="radio" aria-checked="false" data-scan-mode="rfid">
               RFID<small>125 kHz</small>
             </button>
+          </div>
+          <div class="scan-connect" id="scan-connect" hidden>
+            <span class="connection-glyph" id="scan-connect-glyph" aria-hidden="true"></span>
+            <h2 id="scan-connect-title">Connect your Ultra</h2>
+            <p id="scan-connect-detail"></p>
+            <div class="empty-actions">
+              <button class="btn primary" id="scan-connect-button" type="button">Connect Bluetooth</button>
+              <button class="btn" id="scan-connect-secondary" type="button" hidden>Retry USB</button>
+            </div>
+            <p class="scan-connect-alt">
+              No Ultra at hand?
+              <button class="link-button" type="button" data-view-target="studio">Open Studio</button>
+              to import, create or edit a tag.
+            </p>
           </div>
         </section>
 
@@ -322,7 +336,8 @@
               <div id="memory"></div>
             </section>
 
-            <section class="lf-card" id="lf-card" hidden>
+            <section class="lf-card" id="lf-card" aria-labelledby="lf-card-title" hidden>
+              <h3 id="lf-card-title">Credential</h3>
               <label class="field" for="lf-format">Format<select id="lf-format"></select></label>
               <div class="lf-fields" id="lf-fields"></div>
               <p class="lf-error" id="lf-error" role="alert" hidden></p>
@@ -366,7 +381,7 @@
             <span><i data-led="red"></i>Both</span>
           </p>
           <div class="slot-grid" id="slots">
-            <p class="empty">Connect the Chameleon to read its slots.</p>
+            <p class="empty">Connect your Ultra to read its slots.</p>
           </div>
         </section>
 
@@ -376,16 +391,41 @@
               <h1>Device</h1>
               <button class="mini-action" id="refresh-device" type="button">Refresh</button>
             </div>
-            <div class="emulation-state pending" id="emulation-state" role="status">
+            <div class="emulation-state pending" id="emulation-state" role="status" hidden>
               <span class="emulation-dot" aria-hidden="true"></span>
               <div class="emulation-copy">
                 <strong id="emulation-title">Checking emulation…</strong>
                 <span id="emulation-detail">Reading device state</span>
               </div>
             </div>
-            <div class="card device-card">
-              <div id="device-info"><p class="memory-hint">Connecting…</p></div>
-              <a class="device-link" href="/update">
+            <section
+              class="card device-card"
+              id="connection-card"
+              data-state="checking"
+              aria-labelledby="connection-title"
+            >
+              <div id="device-info">
+                <div class="connection-head">
+                  <span class="connection-glyph" id="connection-glyph" aria-hidden="true"></span>
+                  <div class="connection-copy">
+                    <h2 class="cu-model" id="connection-title">Connecting…</h2>
+                    <p class="cu-sub" id="connection-help" role="status">Looking for your Ultra over USB.</p>
+                  </div>
+                  <span class="cu-mode" id="device-mode" hidden></span>
+                </div>
+                <div class="device-list" id="device-rows" hidden></div>
+              </div>
+              <p class="connection-note" id="connection-emulation" role="status" hidden></p>
+              <div class="connection-actions" id="connection-actions" hidden>
+                <button class="btn" id="use-usb" type="button" hidden>Use USB</button>
+                <button class="btn" id="disconnect-bluetooth" type="button" hidden>
+                  Disconnect Bluetooth
+                </button>
+                <button class="btn primary" id="connect-bluetooth" type="button" hidden>
+                  Connect Bluetooth
+                </button>
+              </div>
+              <a class="device-link" id="firmware-update-link" href="./update">
                 <span class="device-link-icon" aria-hidden="true">
                   <svg
                     viewBox="0 0 24 24"
@@ -399,10 +439,11 @@
                     <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
                   </svg>
                 </span>
-                Firmware update
+                <span class="device-link-copy">Firmware update</span>
+                <small class="device-link-note" id="firmware-update-note" hidden>Requires USB</small>
               </a>
-            </div>
-            <div id="device-settings"></div>
+            </section>
+            <div id="device-settings" hidden></div>
             <section class="card" id="offline-resources" aria-labelledby="offline-title">
               <div class="cu-hero-top">
                 <h3 id="offline-title">Offline use</h3>
@@ -438,7 +479,7 @@
     </div>
 
     <nav aria-label="Navigation">
-      <a class="brand" href="/">
+      <a class="brand" href="./">
         <span class="mark">
           <svg
             viewBox="0 0 24 24"
@@ -492,11 +533,11 @@
         Device
       </button>
       <div class="nav-foot">
-        <p class="nav-slot" id="nav-slot">
+        <p class="nav-slot" id="nav-slot" hidden>
           <span class="nav-slot-title" id="nav-slot-title">Checking emulation…</span>
           <span class="nav-slot-detail" id="nav-slot-detail" hidden></span>
         </p>
-        <button class="cu-status" id="nav-connection" type="button" data-connection data-view-target="device">
+        <button class="cu-status" id="nav-connection" type="button" data-connection data-state="pending">
           Connecting…
         </button>
       </div>

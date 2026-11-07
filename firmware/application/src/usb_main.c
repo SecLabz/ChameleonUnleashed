@@ -266,7 +266,9 @@ void usb_cdc_tearoff_end(void) {
     final_expected = true;
 }
 
-bool usb_work_pending(void) { return tud_task_event_ready() || usb_irq_work_pending(); }
+bool usb_work_pending(void) {
+    return tud_task_event_ready() || usb_irq_work_pending() || network_work_pending();
+}
 
 void usb_poll(void) {
     reset_transport();

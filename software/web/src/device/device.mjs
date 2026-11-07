@@ -140,6 +140,9 @@ export class Device extends DeviceSession {
     if (change) {
       request.push(...change.before, ...change.after);
     }
+    if (options.capacityCheck) {
+      request.push(1);
+    }
     const bytes =
       change && !check
         ? await this.writeCommand(COMMAND.CLASSIC_MAINTENANCE, request)

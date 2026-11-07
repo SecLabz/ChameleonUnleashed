@@ -716,6 +716,9 @@ firmware/application/compile_commands.json
 software/src/target_arch_detect.c
 
 software/web/test-results/
+software/web/test-results-hardware/
+software/web/test-results-hosted/
+software/web/test-results-mobile/
 software/web/playwright-report/
 
 # Local credentials and development output

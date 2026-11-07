@@ -67,32 +67,71 @@ int main(void) {
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
-static bool enabled = true, g_is_ble_connected, idle, resume;
-static unsigned feeds, resumes, windows;
+static bool enabled = true, g_is_ble_connected, idle, resume, rf_only = true, field;
+static bool usb_pending;
+static bool usb_work_pending(void) { return usb_pending; }
+static unsigned feeds, resumes, windows, pauses;
 static uint32_t granted_us;
-static bool advertising_pause(bool *restore) { *restore = resume; return idle; }
+static bool ble_slave_rf_only(void) { return rf_only; }
+static bool nfcv_radio_field_present(void) { return field; }
+static bool advertising_pause(bool *restore) { pauses++; *restore = resume; return idle; }
 static void bsp_wdt_feed(void) { feeds++; }
 static void advertising_start(bool erase) { assert(!erase); resumes++; }
 static void poll_window(void) {}
 static bool rf_timeslot_run(uint32_t us, bool high, bool extend, void (*work)(void)) {
-    assert(high == !g_is_ble_connected && extend == idle && work == poll_window);
+    bool discovery = !rf_only && !field;
+    assert(high == (!g_is_ble_connected && !discovery));
+    assert(extend == (!discovery && idle) && work == poll_window);
     granted_us = us; windows++; return true;
 }
 ''' + function(source, 'nfcv_radio_poll') + r'''
 int main(void) {
     /* Advertising never started at RF wake: long enough for full-memory replies,
      * including the 43 ms high-rate and 174 ms low-rate SLIX security response. */
+    assert(!usb_work_pending());
     idle = true;
     nfcv_radio_poll();
     assert(granted_us == 1500000 && feeds == 1 && !resumes);
-    resume = true;
+    rf_only = false; field = true; resume = true;
     nfcv_radio_poll(); assert(resumes == 1);
+    /* Full boots without an RF field must leave advertising running even if
+     * it could have been paused. Stop/start on each poll starves discovery. */
+    field = false;
+    nfcv_radio_poll();
+    assert(granted_us == 25000 && pauses == 2 && resumes == 1 && feeds == 2);
+    field = true;
     idle = resume = false;
     nfcv_radio_poll(); assert(granted_us == 25000 && resumes == 1);
     g_is_ble_connected = true;
     nfcv_radio_poll(); assert(granted_us == 10000 && feeds == 2);
+    /* Quiet HTTP transfers must not request a fresh RF grant per packet.
+     * A real field still gets the same bounded radio service during USB. */
+    usb_pending = true; field = false;
+    nfcv_radio_poll(); assert(windows == 5 && pauses == 4);
+    field = true;
+    nfcv_radio_poll(); assert(windows == 6 && granted_us == 10000);
     enabled = false;
-    nfcv_radio_poll(); assert(windows == 4);
+    nfcv_radio_poll(); assert(windows == 6);
+    return 0;
+}
+''')
+
+    def test_usb_pending_includes_tcp_work_after_usb_events_are_drained(self):
+        source = (SRC / 'usb_main.c').read_text()
+        run_c(r'''
+#include <assert.h>
+#include <stdbool.h>
+static bool queued, irq, tcp;
+static bool tud_task_event_ready(void) { return queued; }
+static bool usb_irq_work_pending(void) { return irq; }
+static bool network_work_pending(void) { return tcp; }
+''' + function(source, 'usb_work_pending') + r'''
+int main(void) {
+    assert(!usb_work_pending());
+    tcp = true; assert(usb_work_pending());
+    tcp = false; queued = true; assert(usb_work_pending());
+    queued = false; irq = true; assert(usb_work_pending());
+    irq = false; assert(!usb_work_pending());
     return 0;
 }
 ''')

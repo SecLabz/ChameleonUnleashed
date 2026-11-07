@@ -139,6 +139,9 @@ section {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+.fields .channel-field {
+  grid-column: 1 / -1;
+}
 .fields > div {
   min-width: 0;
 }

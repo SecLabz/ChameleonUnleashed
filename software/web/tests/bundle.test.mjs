@@ -13,7 +13,7 @@ test('the bundled app has no module waterfall and its Worker runs the core', {
   const html = await readFile(new URL('index.html', site), 'utf8');
 
   assert.equal((html.match(/<script\b/g) || []).length, 1);
-  assert.match(html, /<script type="module" src="\/app.mjs">/);
+  assert.match(html, /<script type="module" src="\.\/app.mjs">/);
 
   for (const name of ['app.mjs', 'worker.mjs']) {
     const metadata = JSON.parse(await readFile(new URL(`../${name}.json`, site), 'utf8'));

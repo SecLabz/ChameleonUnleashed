@@ -33,7 +33,7 @@ static uint16_t pcd_14a_reader_mf1_read''', 1)
         fixture = fixture.replace('assert(milliseconds == 8);', 'assert(milliseconds == 5 || milliseconds == 8);')
         source = (HF / 'nfca_commands.c').read_text()
         functions = '\n'.join(function(source, name) for name in (
-            'classic_access_valid', 'trailer_set', 'maintenance_open', 'maintenance_reply',
+            'classic_model_check', 'classic_access_valid', 'trailer_set', 'maintenance_open', 'maintenance_reply',
             'maintenance_run', 'maintenance'))
         body = (ROOT / 'resource/tools/tests/classic_maintenance.c').read_text()
         with tempfile.TemporaryDirectory() as directory:

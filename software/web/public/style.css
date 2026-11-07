@@ -63,7 +63,7 @@ input:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 .brand:focus-visible,
-label:focus-within {
+label:not(.field):has(:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -127,7 +127,8 @@ main {
 
 nav {
   position: fixed;
-  z-index: 10;
+  /* Remain reachable above sticky document actions on short screens. */
+  z-index: 20;
   right: 12px;
   bottom: calc(10px + var(--safe-bottom));
   left: 12px;
@@ -205,6 +206,45 @@ nav > .brand,
   border-color: rgba(255, 112, 112, 0.3);
 }
 
+/* Disconnected Bluetooth: the pill itself is the one-tap way back. */
+.cu-status[data-state="disconnected"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.cu-status[data-state="disconnected"]:hover {
+  border-color: var(--accent);
+}
+
+.cu-status[data-state="pending"] {
+  color: var(--muted);
+  cursor: progress;
+}
+
+.cu-status .cu-glyph {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--accent);
+}
+
+.cu-spin {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cu-spin 0.8s linear infinite;
+}
+
+@keyframes cu-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .cu-batt {
   position: relative;
   width: 24px;
@@ -273,6 +313,10 @@ nav > .brand,
 
 .nav-slot[data-state="offline"]::before {
   background: var(--danger);
+}
+
+.nav-slot[data-state="paused"]::before {
+  background: var(--warn);
 }
 
 /* ── Shared components ──────────────────────────────────────────────── */
@@ -523,6 +567,7 @@ nav > .brand,
 
 .field input:focus,
 .field textarea:focus,
+.field select:focus-visible,
 .dialog-input:focus {
   border-color: rgba(138, 124, 255, 0.55);
   box-shadow: 0 0 0 3px rgba(138, 124, 255, 0.12);
@@ -542,8 +587,14 @@ nav > .brand,
   background-color: var(--field);
   color: var(--ink);
   font: inherit;
+  font-size: 14px;
+  font-weight: 600;
   text-transform: none;
   letter-spacing: 0;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .dialog-head {
@@ -565,7 +616,7 @@ nav > .brand,
 select:not([multiple]) {
   appearance: none;
   padding-right: 52px;
-  background-image: url("/chevron-down.svg");
+  background-image: url("./chevron-down.svg");
   background-repeat: no-repeat;
   background-position: right 20px center;
   background-size: 14px 9px;
@@ -601,6 +652,30 @@ select:not([multiple]) {
 .toast.visible {
   transform: none;
   opacity: 1;
+}
+
+.toast.actionable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toast.actionable.visible {
+  pointer-events: auto;
+}
+
+.toast-action {
+  flex: none;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid currentColor;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* Menus are <details>: the summary is the trigger, .menu-list the popover. */
@@ -1548,6 +1623,12 @@ body:has(#scan-dialog[open]) {
   color: var(--warn);
 }
 
+#hf-details {
+  margin: 10px 0 0;
+  font: 12px / 1.6 var(--mono);
+  overflow-wrap: anywhere;
+}
+
 .doc-status {
   margin: 0;
   color: var(--muted);
@@ -2057,11 +2138,9 @@ body:has(#scan-dialog[open]) {
   min-width: 0;
 }
 
-.lf-card select {
-  appearance: auto;
-  background-image: none;
-  padding-right: 13px;
-  font-size: 14px;
+.lf-card > h3 {
+  margin: 0 0 16px;
+  font-size: 15px;
 }
 
 .lf-fields .memory-hint {
@@ -2389,6 +2468,10 @@ body:has(#scan-dialog[open]) {
   font-size: 12px;
 }
 
+.bay-paused {
+  color: var(--warn);
+}
+
 .bay-open:hover strong {
   color: var(--accent);
 }
@@ -2472,15 +2555,145 @@ body:has(#scan-dialog[open]) {
 
 .cu-model {
   display: block;
+  margin: 0;
   font-size: 20px;
   letter-spacing: -0.02em;
 }
 
 .cu-sub {
   display: block;
-  margin-top: 4px;
+  margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Connection ─────────────────────────────────────────────────────── */
+.connection-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.connection-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--accent-line);
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.connection-glyph .cu-glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.connection-glyph .cu-spin {
+  width: 18px;
+  height: 18px;
+}
+
+[data-state="lost"] .connection-glyph,
+[data-state="error"] .connection-glyph,
+[data-state="unreachable"] .connection-glyph {
+  border-color: var(--warn-line);
+  background: rgba(240, 180, 90, 0.1);
+  color: var(--warn);
+}
+
+[data-state="unsupported"] .connection-glyph {
+  border-color: var(--line-strong);
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.connection-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+  background: rgba(240, 180, 90, 0.07);
+  color: #f4d4a3;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+#connection-card[data-state="connected"] .connection-actions {
+  margin-top: 4px;
+}
+
+.scan-connect {
+  display: grid;
+  justify-items: center;
+  max-width: 420px;
+  margin: auto;
+  padding: 24px 0;
+}
+
+.scan-connect .connection-glyph {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  border-radius: 20px;
+}
+
+.scan-connect .connection-glyph .cu-glyph {
+  width: 28px;
+  height: 28px;
+}
+
+.scan-connect h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+
+.scan-connect > p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.scan-connect .empty-actions > .btn {
+  min-width: 200px;
+}
+
+.scan-connect .empty-actions:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+.scan-connect > .scan-connect-alt {
+  margin-top: 28px;
+  font-size: 13px;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .cu-mode {
@@ -2545,6 +2758,36 @@ body:has(#scan-dialog[open]) {
 .device-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+#connection-card:not([data-state="connected"]) .device-link {
+  margin-top: 18px;
+}
+
+.device-link-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Over Bluetooth the row explains the requirement instead of navigating. */
+.device-link[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.device-link[aria-disabled="true"]::after {
+  display: none;
+}
+
+.device-link[aria-disabled="true"]:hover {
+  background: none;
+}
+
+.device-link[aria-disabled="true"] .device-link-icon {
+  background: var(--panel-soft);
+  color: var(--muted);
 }
 
 .device-link-icon {
@@ -2881,6 +3124,13 @@ body:has(#scan-dialog[open]) {
     width: fit-content;
   }
 
+  /* Without a device the connection pill is the whole footer. */
+  .nav-foot:has(.nav-slot[hidden]) .cu-status {
+    grid-column: 1 / -1;
+    justify-content: center;
+    width: 100%;
+  }
+
   .scan-home {
     max-width: 660px;
     margin: auto;
@@ -3173,6 +3423,11 @@ a {
 .emulation-state.active .emulation-dot {
   background: var(--success);
   box-shadow: 0 0 0 3px rgba(67, 214, 155, 0.16);
+}
+
+.emulation-state.paused .emulation-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(240, 180, 90, 0.16);
 }
 
 .emulation-copy {
@@ -3493,18 +3748,26 @@ a {
   margin: 1rem 0;
 }
 .type2-content h3 {
-  margin-top: 0;
+  margin: 0;
+}
+
+.type2-content > .memory-hint {
+  margin-top: 4px;
 }
 .type2-content form {
   display: grid;
   gap: 0.75rem;
   margin-top: 16px;
 }
+/* NDEF content is prose or a URL, not hexadecimal bytes. */
 .type2-content textarea {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  font: inherit;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 .type2-content .ndef-preview {
   white-space: pre-wrap;

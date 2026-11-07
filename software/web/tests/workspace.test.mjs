@@ -1282,6 +1282,177 @@ for (const scenario of ['changed UID', 'lost reply', 'mismatch', 'stop', 'cleanu
     }));
 }
 
+for (const scenario of [
+  'upper 2K data',
+  '2K clone',
+  'cancel 2K',
+  '2K source on 1K',
+  '1K source on 2K',
+  '2K becomes 1K during review',
+  '1K becomes 2K during review',
+  '2K ATS changes during review',
+  '1K unknown ATS',
+  'legacy inspection',
+  'unsupported inspection',
+  'invalid ATS',
+  'lost upper write reply'
+]) {
+  test(`Classic copy establishes fresh target capacity: ${scenario}`, (t) =>
+    runtime(async () => {
+      const oneKSource = scenario.startsWith('1K');
+      const document = await readClassicDocument(oneKSource ? 8 : 16);
+      const targetMemory = structuredClone(document.memory);
+      const card = { ...document.card, sak: 8, ats: [] };
+      const ats = [12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6, 0x60, 0xd3];
+      // Neither a saved source ATS nor its model establishes the target's size.
+      document.card.ats = ats.slice(0, -2);
+      document.classicObservation = { card: structuredClone(card), type: 1002 };
+      editBlock(document, 1, Array(16).fill(42));
+      if (!oneKSource) {
+        editBlock(document, 126, Array(16).fill(43));
+      }
+      let targetTwoK = !scenario.startsWith('2K source on') && scenario !== '1K becomes 2K during review';
+      let inspections = 0;
+      let changedAts = false;
+      let reviewed = false;
+      let ended = false;
+      const writes = [];
+      const shouldReachReview = [
+        'upper 2K data',
+        '2K clone',
+        'cancel 2K',
+        '2K becomes 1K during review',
+        '1K becomes 2K during review',
+        '2K ATS changes during review',
+        'lost upper write reply'
+      ].includes(scenario);
+      t.mock.method(Device.prototype, 'begin', async () => card);
+      t.mock.method(Device.prototype, 'end', async () => {
+        ended = true;
+      });
+      t.mock.method(Device.prototype, 'command', async (command, payload) => {
+        if (scenario === '2K clone' && command === 2000) {
+          return Uint8Array.from([4, ...card.uid, 4, 0, 8, 0]);
+        }
+        assert.equal(command, 2040);
+        assert.equal(payload.length, 16 + payload[14] * 6);
+        assert.equal(payload.at(-1), 1);
+        inspections++;
+        if (scenario === 'unsupported inspection') {
+          throw Object.assign(new Error('Unsupported inspection'), { status: 0x67 });
+        }
+        const legacy = [0, 0, 0, 1, 0, ...Array(6).fill(0)];
+        if (scenario === 'legacy inspection') {
+          return Uint8Array.from(legacy);
+        }
+        let frame = targetTwoK ? [...ats] : [];
+        if (scenario === '1K unknown ATS') {
+          frame = [2, 0, 16, 45];
+        } else if (changedAts) {
+          frame = [12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 0, 0x35, 0xc7, 0x60, 0xd3];
+        }
+        if (scenario === 'invalid ATS') {
+          frame[13] ^= 1;
+        }
+        return Uint8Array.from([...legacy, 1, frame.length, ...frame]);
+      });
+      t.mock.method(Device.prototype, 'findKey', async () => {
+        assert(shouldReachReview, 'Capacity must be checked before reading target memory');
+        return Array(6).fill(255);
+      });
+      t.mock.method(Device.prototype, 'readBlock', async (block) => [...targetMemory[block]]);
+      t.mock.method(Device.prototype, 'writeCommand', async (command, payload) => {
+        assert.equal(command, 2030);
+        assert.equal(payload[0], 6);
+        assert.equal(inspections, 2);
+        writes.push(payload[9]);
+        if (scenario === 'lost upper write reply' && payload[9] === 126) {
+          throw new Error('Write outcome unknown');
+        }
+        targetMemory[payload[9]] = payload.slice(43);
+        return Uint8Array.from(payload.slice(43));
+      });
+      const work = copyToTag(document, undefined, () => {}, {
+        requestCredential: async () => assert.fail('Classic copy uses recovered keys'),
+        confirmCopy: async (plan) => {
+          assert(shouldReachReview);
+          reviewed = true;
+          assert.equal(plan.writes, oneKSource ? 1 : 2);
+          if (scenario === '2K ATS changes during review') {
+            changedAts = true;
+          } else if (scenario.includes('during review')) {
+            targetTwoK = !targetTwoK;
+          }
+          if (scenario === 'cancel 2K') {
+            return null;
+          }
+          return scenario === '2K clone' ? 'clone' : 'data';
+        }
+      });
+      if (['upper 2K data', 'cancel 2K', '2K clone'].includes(scenario)) {
+        await work;
+      } else {
+        const reason =
+          {
+            'lost upper write reply': /1\/2.*outcome unknown/,
+            'legacy inspection': /firmware.*capacity/i,
+            'unsupported inspection': /firmware.*capacity/i,
+            'invalid ATS': /ATS/,
+            '1K unknown ATS': /ATS/,
+            '2K ATS changes during review': /target changed during review/
+          }[scenario] || /target Classic size differs/;
+        await assert.rejects(work, reason);
+      }
+      assert.equal(reviewed, shouldReachReview);
+      assert.deepEqual(
+        writes,
+        ['upper 2K data', '2K clone', 'lost upper write reply'].includes(scenario) ? [1, 126] : []
+      );
+      let expectedInspections = reviewed && scenario !== 'cancel 2K' ? 2 : 1;
+      if (scenario === '2K clone') {
+        expectedInspections++;
+      }
+      assert.equal(inspections, expectedInspections);
+      assert(ended);
+    }));
+}
+
+for (const sak of [9, 16, 24]) {
+  test(`Classic copy keeps the unambiguous capacity path (SAK ${sak})`, (t) =>
+    runtime(async () => {
+      const document = await readClassicDocument(sak);
+      document.card.sak = sak;
+      document.memory[0][5] = sak;
+      const target = structuredClone(document.memory);
+      const lastData = document.geometry.blocks - 2;
+      editBlock(document, lastData, Array(16).fill(42));
+      let ended = false;
+      const writes = [];
+      t.mock.method(Device.prototype, 'begin', async () => structuredClone(document.card));
+      t.mock.method(Device.prototype, 'end', async () => {
+        ended = true;
+      });
+      t.mock.method(Device.prototype, 'command', async () => assert.fail('No additional capability probes'));
+      t.mock.method(Device.prototype, 'findKey', async () => Array(6).fill(255));
+      t.mock.method(Device.prototype, 'readBlock', async (block) => [...target[block]]);
+      t.mock.method(Device.prototype, 'writeCommand', async (command, payload) => {
+        assert.equal(command, 2030);
+        assert.equal(payload[0], { 9: 5, 16: 6, 24: 7 }[sak]);
+        writes.push(payload[9]);
+        return Uint8Array.from(payload.slice(43));
+      });
+      await copyToTag(document, undefined, () => {}, {
+        requestCredential: async () => assert.fail('No Type 2 credential'),
+        confirmCopy: async ({ writes }) => {
+          assert.equal(writes, 1);
+          return 'data';
+        }
+      });
+      assert.deepEqual(writes, [lastData]);
+      assert(ended);
+    }));
+}
+
 for (const scenario of ['cancel', 'same tag', 'other tag', 'already matches']) {
   test(`Classic copy invalidates the read reference only when writing the original tag (${scenario})`, (t) =>
     runtime(async () => {
@@ -1301,6 +1472,13 @@ for (const scenario of ['cancel', 'same tag', 'other tag', 'already matches']) {
       t.mock.method(Device.prototype, 'begin', async () => card);
       t.mock.method(Device.prototype, 'findKey', async () => Array(6).fill(255));
       t.mock.method(Device.prototype, 'readBlock', async (block) => [...targetMemory[block]]);
+      t.mock.method(Device.prototype, 'command', async (command) => {
+        if (command === 2032) {
+          return Uint8Array.from([0, 0, 2]);
+        }
+        assert.equal(command, 2040);
+        return Uint8Array.from([0, 0, 0, 1, 0, ...Array(6).fill(0), 1, 0]);
+      });
       t.mock.method(Device.prototype, 'writeCommand', async (command, payload) => {
         assert.equal(command, 2030);
         assert.equal(payload[9], 1);
@@ -1329,6 +1507,7 @@ for (const scenario of [
   'large sector',
   'hidden original keys',
   'denied',
+  'command rejected',
   'lost trailer reply',
   'stop'
 ]) {
@@ -1341,7 +1520,7 @@ for (const scenario of [
       const after = [...document.memory[group.trailer]];
       after.splice(0, 6, 1, 2, 3, 4, 5, 6);
       after.splice(10, 6, 6, 5, 4, 3, 2, 1);
-      if (scenario === 'key B') {
+      if (['key B', 'command rejected'].includes(scenario)) {
         reading.keys[sector].origin_b = 'Dictionary';
         reading.memory[group.trailer].splice(6, 3, 0x7f, 0x07, 0x88);
       }
@@ -1364,7 +1543,11 @@ for (const scenario of [
         assert.equal(payload[9], sector);
         assert.deepEqual(payload.slice(17, 21), reading.memory[group.trailer].slice(6, 10));
         events.push(`check ${payload[10]}`);
-        if (scenario === 'denied' || (scenario === 'key B' && payload[10] === 1)) {
+        if (scenario === 'command rejected' || (scenario === 'key B' && payload[10] === 1)) {
+          // trailer_set returns CMD_ERR for denied permissions or stale access bytes.
+          throw Object.assign(new Error('Command rejected'), { status: 0x75 });
+        }
+        if (scenario === 'denied') {
           throw Object.assign(new Error('Permissions denied'), { status: 0x70 });
         }
         return new Uint8Array();
@@ -1397,15 +1580,20 @@ for (const scenario of [
           return true;
         }
       });
-      if (['denied', 'lost trailer reply', 'stop'].includes(scenario)) {
-        await assert.rejects(work, scenario === 'denied' ? /0\/2.*Sector/ : /1\/2.*Read the tag again/);
+      if (['denied', 'command rejected', 'lost trailer reply', 'stop'].includes(scenario)) {
+        await assert.rejects(
+          work,
+          ['denied', 'command rejected'].includes(scenario) ? /0\/2.*Sector/ : /1\/2.*Read the tag again/
+        );
       } else {
         await work;
         assert.match(progress.at(-1), /2 blocks written and verified.*Read the tag again/);
         assert.deepEqual(reading.memory[group.trailer], after);
       }
-      const expected = scenario === 'key B' ? ['check 1', 'check 2'] : ['check 1'];
-      if (scenario !== 'denied') {
+      const expected = ['key B', 'command rejected'].includes(scenario)
+        ? ['check 1', 'check 2']
+        : ['check 1'];
+      if (!['denied', 'command rejected'].includes(scenario)) {
         expected.push('write 2030');
         if (scenario !== 'stop') {
           expected.push('write 2034');
@@ -1443,6 +1631,9 @@ for (const scenario of ['copy', 'changed keys', 'tag removed', 'bad capture']) {
         ended = true;
       });
       t.mock.method(Device.prototype, 'command', async (command, payload) => {
+        if (command === 2040) {
+          return Uint8Array.from([0, 0, 0, 1, 0, ...Array(6).fill(0), 1, 0]);
+        }
         if (command === 2026) {
           return new Uint8Array();
         }
@@ -1579,6 +1770,9 @@ for (const scenario of [
         gen2: scenario === 'CUID' && key ? 3 : 0
       }));
       t.mock.method(Device.prototype, 'command', async (command, payload) => {
+        if (command === 2040) {
+          return Uint8Array.from([0, 0, 0, 1, 0, ...Array(6).fill(0), 1, 0]);
+        }
         if (command === 2038) {
           assert.equal(payload.length, 60);
           assert.equal(payload[10], scenario === 'CUID' ? 1 : 0);

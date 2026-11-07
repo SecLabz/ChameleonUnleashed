@@ -1115,6 +1115,8 @@ int main(void) {
         lesc_event_process();
         // Button event process
         button_press_process();
+        // Leases must expire on battery too, independently of USB network polling.
+        web_session_poll();
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // Field generator rainbow animation

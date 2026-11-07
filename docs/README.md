@@ -4,6 +4,8 @@
 - [USB browser updates and permanent recovery](web-updates.md)
 - [Native CLI](../software/rust/README.md)
 - [USB web interface](../software/web/README.md)
+- [Web Bluetooth feasibility and autonomous validation](web-bluetooth-feasibility.md) (French)
+- [Web Bluetooth build, offline package and hardware bench](web-bluetooth.md)
 - [Performance & measurements](performance.md)
 - [Release packages](releases.md)
 - [Upstream wiki](https://github.com/RfidResearchGroup/ChameleonUltra/wiki) for hardware and the original Python client

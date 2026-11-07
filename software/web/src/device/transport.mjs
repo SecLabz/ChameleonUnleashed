@@ -1,4 +1,5 @@
 // @ts-check
+import { HOSTED } from '../runtime/environment.mjs';
 
 /** @param {Iterable<number> | ArrayLike<number>} bytes */
 export const hex = (bytes) =>
@@ -18,8 +19,27 @@ export class HttpError extends Error {
   }
 }
 
+/** @type {{request(path: string, data?: Uint8Array<ArrayBuffer>): Promise<any>} | null} */
+let deviceTransport = HOSTED
+  ? {
+      async request() {
+        throw new Error('Connect your Ultra with the Bluetooth button.');
+      }
+    }
+  : null;
+
+/** @param {typeof deviceTransport} transport */
+export function setDeviceTransport(transport) {
+  deviceTransport = transport;
+}
+
+export const deviceTransportType = () => (deviceTransport ? 'ble' : 'usb');
+
 /** @param {string} path @param {Uint8Array<ArrayBuffer>} [data] */
 export async function request(path, data) {
+  if (deviceTransport) {
+    return deviceTransport.request(path, data);
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
 

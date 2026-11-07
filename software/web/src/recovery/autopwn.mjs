@@ -11,6 +11,12 @@ import { filterDictionary as filterCandidates } from './dictionary.mjs';
 const verified = (key) => (key ? { Verified: key } : 'NoVerifiedKey');
 
 const isRecoverable = (error) => error.status === 6 || error.status === 0x69;
+const CLASSIC_SELECTORS = new Map([
+  [1000, 9],
+  [1001, 8],
+  [1002, 16],
+  [1003, 24]
+]);
 
 export async function runAutoPwn({
   dictionary = '',
@@ -19,15 +25,39 @@ export async function runAutoPwn({
   device = new Device(signal),
   workerFactory,
   initialCard,
-  expectedUid
+  expectedUid,
+  expectedModel
 } = {}) {
   let engine;
   let hardnestedEngine;
   let recoverySession;
   let snapshot;
   let geometry;
+  let geometrySelector;
   let card;
   const memory = [];
+  // A checked sector read both authenticates its candidate and returns memory.
+  // Keep these observations only for this read operation, never across devices
+  // or writes. Each credential/sector is captured once; missing blocks retain
+  // the existing individual-read fallback and remain unknown on failure.
+  const sectorReads = new Map();
+  async function readSector(sector, key, isKeyB) {
+    const id = `${sector}:${isKeyB}:${hex(key)}`;
+    if (!sectorReads.has(id)) {
+      const blocks = await device.readSector(sector, key, isKeyB, geometry);
+      sectorReads.set(
+        id,
+        blocks.map((block) => block && [...block])
+      );
+    }
+    const blocks = sectorReads.get(id);
+    blocks.forEach((block, offset) => {
+      if (block) {
+        memory[geometry.sectors[sector].first + offset] = [...block];
+      }
+    });
+    return blocks;
+  }
 
   const update = (extra) => {
     geometry?.sectors.forEach((sector, index) => {
@@ -64,7 +94,7 @@ export async function runAutoPwn({
   const untestedKeys = (target, keys) =>
     keys.filter((key) => !testedKeysByTarget.get(targetId(target))?.has(hex(key)));
 
-  async function verify(target, candidates, onTested = () => {}) {
+  async function verify(target, candidates, onTested = () => {}, capture = true) {
     check();
 
     const selected = untestedKeys(target, candidates);
@@ -72,12 +102,26 @@ export async function runAutoPwn({
       return null;
     }
 
-    return device.findKey(target.sector, target.is_key_b, selected, geometry, (keys) => {
+    const tested = (keys) => {
       const tested = testedKeysByTarget.get(targetId(target)) ?? new Set();
       keys.forEach((key) => tested.add(hex(key)));
       testedKeysByTarget.set(targetId(target), tested);
       onTested(keys);
-    });
+    };
+    if (capture && selected.length === 1) {
+      try {
+        await readSector(target.sector, selected[0], target.is_key_b);
+        tested(selected);
+        return selected[0];
+      } catch (error) {
+        if (error.status !== 6) {
+          throw error;
+        }
+        tested(selected);
+        return null;
+      }
+    }
+    return device.findKey(target.sector, target.is_key_b, selected, geometry, tested);
   }
 
   async function collect(source, target, count, chained = false) {
@@ -269,10 +313,18 @@ export async function runAutoPwn({
       case 'VerifyCandidates':
         return { CandidateKey: await verify(args, args.candidates) };
       case 'SweepKey':
-        return { Sweep: { hit: !!(await verify(args, [args.key])), physically_tested: true } };
+        // Reuse sweeps often reject the same key on many sectors. Keep the
+        // firmware's short-lived authentication session for those failures;
+        // a checked sector read would reselect for each rejected candidate.
+        return {
+          Sweep: { hit: !!(await verify(args, [args.key], () => {}, false)), physically_tested: true }
+        };
       case 'ExtractTrailer': {
         try {
-          const block = await device.readBlock(geometry.sectors[args.sector].trailer, args.key_a, false);
+          await readSector(args.sector, args.key_a, false);
+          const trailer = geometry.sectors[args.sector].trailer;
+          const block = memory[trailer] || (await device.readBlock(trailer, args.key_a, false));
+          memory[trailer] = [...block];
           const { key } = await call({ op: 'trailer_key_b', block });
           return { TrailerKey: key };
         } catch (error) {
@@ -319,7 +371,28 @@ export async function runAutoPwn({
       throw new Error('The tag UID changed. Scan the current tag before recovery.');
     }
 
-    geometry = await call({ op: 'classic_geometry', sak: card.sak });
+    geometrySelector = card.sak;
+    if (expectedModel !== undefined) {
+      const known = expectedModel?.card;
+      const selector = CLASSIC_SELECTORS.get(expectedModel?.type);
+      if (!expectedUid || !selector || !Array.isArray(known?.uid) || hex(known.uid) !== expectedUid) {
+        throw new Error('Reading an existing Classic model requires the same UID and a valid model.');
+      }
+      if (!Array.isArray(known.atqa) || known.sak !== card.sak || hex(known.atqa) !== hex(card.atqa)) {
+        throw new Error(
+          'The tag identity differs from the open model. Scan the current tag before recovery.'
+        );
+      }
+      // A known 2K document uses selector 16 internally, while its observed
+      // SL1 identity can have SAK 08. Preserve both its size and real identity.
+      geometrySelector = selector;
+      // Basic selection does not read ATS. Keep the open model's ATS after
+      // identity checks, while giving any newly observed ATS precedence.
+      if (!card.ats?.length && known.ats?.length) {
+        card = { ...card, ats: [...known.ats] };
+      }
+    }
+    geometry = await call({ op: 'classic_geometry', sak: geometrySelector });
     memory.length = geometry.blocks;
     memory.fill(null);
 
@@ -372,7 +445,7 @@ export async function runAutoPwn({
         }
 
         try {
-          const blocks = await device.readSector(sector, key, isKeyB, geometry);
+          const blocks = await readSector(sector, key, isKeyB);
           blocks.forEach((bytes, index) => {
             if (bytes) {
               memory[sectorGeometry.first + index] = bytes;
@@ -414,8 +487,9 @@ export async function runAutoPwn({
 
     if (complete) {
       try {
-        dump = (await call({ op: 'classic_export', uid: card.uid, sak: card.sak, memory: memory.flat() }))
-          .text;
+        dump = (
+          await call({ op: 'classic_export', uid: card.uid, sak: geometrySelector, memory: memory.flat() })
+        ).text;
       } catch {
         /* Complete memory can still be retained when this .nfc identity is unsupported. */
       }

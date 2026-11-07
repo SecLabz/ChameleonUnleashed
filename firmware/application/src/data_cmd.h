@@ -8,6 +8,7 @@
 // ******************************************************************
 //
 #define DATA_CMD_GET_APP_VERSION                (1000)
+#define DATA_CMD_WEB_API                        (1090)
 #define DATA_CMD_CHANGE_DEVICE_MODE             (1001)
 #define DATA_CMD_GET_DEVICE_MODE                (1002)
 #define DATA_CMD_SET_ACTIVE_SLOT                (1003)

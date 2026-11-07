@@ -49,6 +49,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
         'long_ms': 1000,
         'pairing': False,
     }
+    initial_settings = deepcopy(settings)
     bank = [dict(hf=None, lf=None) for _ in range(8)]
     bank[0]['hf'] = dict(
         name='Test Classic',
@@ -181,6 +182,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
             self.respond(b'')
             return
         if path == '/test/reset':
+            cls.settings = deepcopy(cls.initial_settings)
             cls.classic_memory = [block_bytes(block) for block in range(256)]
             cls.lf_memory = [0x00148041, 0xFF800000, 0x0034A800, 0, 0, 0, 0]
             cls.bank = deepcopy(cls.initial_bank)
@@ -266,7 +268,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
             else:
                 response = bytes([4]) + cls.classic_memory[0][:4] + bytes([4, 0, 8, 0])
         elif command == 2039:
-            if len(data) not in (19, 51):
+            if len(data) not in (19, 20, 51, 52):
                 status = 0x60
             else:
                 operation, method, model, uid_length = data[:4]
@@ -283,21 +285,27 @@ class SimulatedCard(BaseHTTPRequestHandler):
                 if method == 3 and block == trailer:
                     before_matches = old[6:10] == data[25:29]
                     observed = bytes(6) + old[6:]
-                if data[4:4 + uid_length] not in (cls.classic_memory[0][:uid_length], bytes(uid_length)):
+                checked = len(data) in (20, 52) and data[-1] == 1
+                if checked and model == 6 and cls.tag_kind != 'classic2k':
+                    status = 1
+                elif data[4:4 + uid_length] not in (cls.classic_memory[0][:uid_length], bytes(uid_length)):
                     status = 1
                 elif method == 3 and (data[13:19] != key or (data[12] == 2 and key_b_readable)):
                     status = 6
                 elif operation == 2 and block == 0 and cls.tag_kind == 'fixed-classic':
                     status = 0x75
                 elif operation in (0, 3):
-                    response = bytes([4]) + cls.classic_memory[0][:4] + bytes(3) + bytes([4, 0, 8]) + observed
+                    response = bytes([4]) + cls.classic_memory[0][:4] + bytes(3) + bytes([4, 0, cls.classic_memory[0][5]]) + observed
                 elif not before_matches:
                     status = 0x75
                 elif operation == 2:
                     cls.classic_memory[block] = data[35:51]
         elif command == 2040:
-            flags = 0 if cls.tag_kind == 'fixed-classic' else 1
+            flags = 0 if cls.tag_kind in ('fixed-classic', 'classic2k') else 1
             response = bytes([0, flags, 0, 1, 0]) + bytes(6)
+            if len(data) == 16 + 6 * data[14] and data[-1] == 1:
+                ats = bytes.fromhex('0c75778002c1052f2f01bcd660d3') if cls.tag_kind == 'classic2k' else b''
+                response += bytes([1, len(ats)]) + ats
         elif command == 2032:
             response = bytes([0, 1, 0])
         elif command == 2002:
@@ -396,12 +404,14 @@ class SimulatedCard(BaseHTTPRequestHandler):
                 cls.classic_memory[0] = data[43:59]
                 response = cls.classic_memory[0]
         elif command == 2030:
+            model = 6 if cls.tag_kind == 'classic2k' else 1
+            blocks = 128 if model == 6 else 64
             if (
-                cls.tag_kind != 'classic'
+                cls.tag_kind not in ('classic', 'fixed-classic', 'classic2k')
                 or len(data) != 59
-                or data[:9] != bytes([1, 4]) + cls.classic_memory[0][:4] + bytes(3)
+                or data[:9] != bytes([model, 4]) + cls.classic_memory[0][:4] + bytes(3)
                 or data[9] == 0
-                or data[9] >= 64
+                or data[9] >= blocks
                 or data[9] % 4 == 3
             ):
                 status = 0x60

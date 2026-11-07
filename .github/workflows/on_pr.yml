@@ -12,6 +12,8 @@ concurrency:
 jobs:
   firmware_pipeline:
     name: Build Firmware
+    # develop already builds and publishes on push.
+    if: github.head_ref != 'develop'
     permissions:
       contents: read
     uses: ./.github/workflows/build_firmware.yml
@@ -20,6 +22,7 @@ jobs:
       publish-builder: false
   client_pipeline:
     name: Build and test clients
+    if: github.head_ref != 'develop'
     permissions:
       contents: read
     uses: ./.github/workflows/build_client.yml

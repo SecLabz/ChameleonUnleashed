@@ -177,6 +177,87 @@ async function catalogue(page, count = 1, ready = Promise.resolve()) {
   });
 }
 
+test('development channel installs only its explicitly selected snapshot', async ({ page }) => {
+  const model = await mockDevice(page);
+  await catalogue(page);
+  const bytes = files.normal;
+  const identity = createHash('sha256').update(bytes).digest('hex');
+  const requests = [];
+  await page.route(config.baseUrl + 'updates/dev/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    requests.push(path);
+    if (path.endsWith('/catalog.json')) {
+      await route.fulfill({
+        json: {
+          format: 1,
+          sources: [
+            {
+              id: 'unleashed',
+              label: 'Unleashed',
+              releases: [
+                {
+                  version: 'v1.0.1-dev.abcdef0',
+                  prerelease: true,
+                  layout: 2,
+                  packages: {
+                    application: { size: bytes.length, sha256: identity, path: `files/${identity}.zip` }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        headers: { 'Access-Control-Allow-Origin': '*' }
+      });
+    } else {
+      await route.fulfill({ body: bytes, headers: { 'Access-Control-Allow-Origin': '*' } });
+    }
+  });
+  await page.goto('/update.html');
+  await expect(page.locator('#channel')).toHaveValue('stable');
+  await expect(page.locator('#version')).toHaveValue('v1.0.1');
+  expect(requests).toHaveLength(0);
+  await page.locator('#channel').selectOption('development');
+  await expect(page.locator('#version')).toHaveValue('v1.0.1-dev.abcdef0');
+  await page.screenshot({ path: test.info().outputPath('development-channel.png'), fullPage: true });
+  await page.locator('#update').click();
+  await expect(page.locator('#title')).toHaveText('Your Ultra is up to date');
+  expect(model.committed()).toBe(true);
+  expect(requests.some((path) => path.endsWith(`/updates/dev/files/${identity}.zip`))).toBe(true);
+});
+
+test('development channel ignores a late catalogue after returning to stable', async ({ page }) => {
+  await mockDevice(page);
+  await catalogue(page);
+  let release;
+  const ready = new Promise((resolve) => {
+    release = resolve;
+  });
+  await page.route(config.baseUrl + 'updates/dev/catalog.json', async (route) => {
+    await ready;
+    await route.fulfill({
+      json: { format: 1, sources: [] },
+      headers: { 'Access-Control-Allow-Origin': '*' }
+    });
+  });
+  await page.goto('/update.html');
+  await expect(page.locator('#version')).toHaveValue('v1.0.1');
+  const requested = page.waitForRequest((request) => request.url().endsWith('/updates/dev/catalog.json'));
+  await page.locator('#channel').selectOption('development');
+  await requested;
+  await expect(page.locator('#update')).toBeDisabled();
+  await page.locator('#channel').selectOption('stable');
+  await expect(page.locator('#version')).toHaveValue('v1.0.1');
+  const response = page.waitForResponse((response) => response.url().endsWith('/updates/dev/catalog.json'));
+  release();
+  await response;
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  );
+  await expect(page.locator('#version')).toHaveValue('v1.0.1');
+  await expect(page.locator('#update')).toBeEnabled();
+});
+
 test('a late catalogue cannot unlock installation controls during a transfer', async ({ page }) => {
   await mockDevice(page);
   let releaseCatalogue;

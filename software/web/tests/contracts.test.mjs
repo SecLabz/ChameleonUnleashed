@@ -50,6 +50,7 @@ class Card {
     this.missing = missing;
     this.ended = false;
     this.reads = 0;
+    this.sectorReads = 0;
     this.card = { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4] };
   }
 
@@ -94,6 +95,10 @@ class Card {
   }
 
   async readSector(sector, key, isKeyB, geometry) {
+    this.sectorReads++;
+    if (!key.every((byte) => byte === 255)) {
+      throw Object.assign(new Error('Authentication rejected'), { status: 6 });
+    }
     const { first, count } = geometry.sectors[sector];
     const blocks = Array(count).fill(null);
     for (let i = 0; i < count; i++) {
@@ -366,6 +371,8 @@ test('actual shared WASM recovers keys, reads and exports without magic inspecti
     assert.match(result.dump, /Filetype: Flipper NFC device/);
     assert.equal(finalPhase, 'Read complete');
     assert.equal(device.ended, true);
+    assert.equal(device.sectorReads, 16);
+    assert.equal(device.reads, 64, 'verified sector data must not be read again for trailer extraction');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -399,6 +406,72 @@ test('Classic retry rejects a changed UID before key or memory operations', asyn
   try {
     await assert.rejects(runAutoPwn({ device, expectedUid: 'AABBCCDD', workerFactory }), /UID changed/);
     assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+for (const missing of [-1, 126]) {
+  test(`a known 2K document keeps 128 blocks with an observed SAK 08 (missing=${missing})`, async () => {
+    globalThis.fetch = async () => new Response(wasm);
+    const device = new Card(missing);
+    const ats = [12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6];
+    try {
+      const result = await runAutoPwn({
+        device,
+        workerFactory,
+        expectedUid: '01020304',
+        expectedModel: { type: 1002, card: { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4], ats } }
+      });
+      assert.equal(result.card.sak, 8, 'the model selector must not rewrite the observed RF identity');
+      assert.deepEqual(result.card.ats, ats, 'selection alone must not erase the known ATS');
+      assert.equal(result.geometry.blocks, 128);
+      assert.equal(result.geometry.sectors.length, 32);
+      assert.equal(result.memory.length, 128);
+      assert.equal(result.summary.resolved_keys, 64);
+      if (missing < 0) {
+        assert.equal(result.complete, true);
+        assert.match(result.dump, /Mifare Classic type: 2K/);
+        assert.match(result.dump, /SAK: 08/);
+        assert.match(result.dump, /Block 127:/);
+      } else {
+        assert.equal(result.memory[126], null);
+        assert(result.memory[127]);
+        assert.equal(result.complete, false);
+        assert.equal(result.dump, null);
+      }
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('an existing Classic model hint requires the same UID and a compatible observed identity', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const known = { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4] };
+    for (const options of [
+      { expectedModel: { type: 1002, card: known } },
+      { expectedModel: { type: 1003, card: { ...known, sak: 24 } }, expectedUid: '01020304' },
+      { expectedModel: { type: 1002, card: known }, expectedUid: 'AABBCCDD' },
+      { expectedModel: { type: 9999, card: known }, expectedUid: '01020304' },
+      { expectedModel: { type: 1002, card: { ...known, atqa: [0, 2] } }, expectedUid: '01020304' }
+    ]) {
+      const device = new Card();
+      device.findKey = async () => assert.fail('An incompatible model must not start recovery');
+      const updates = [];
+      await assert.rejects(
+        runAutoPwn({ device, workerFactory, ...options, onUpdate: (next) => updates.push(next) }),
+        /UID changed|model|same UID/
+      );
+      assert(
+        updates.every((next) => !next.geometry),
+        'existing memory must not be replaced'
+      );
+      assert.equal(device.reads, 0);
+      assert(device.ended);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

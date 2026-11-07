@@ -8,6 +8,7 @@
 #include "update_api.h"
 #include "app_status.h"
 #include "data_cmd.h"
+#include "ble_api.h"
 api_response_t web_device_request(const char *method,const char *uri,const uint8_t *body,
     size_t size,uint8_t *output,size_t capacity){
     return (api_response_t){404,"application/octet-stream",0};
@@ -19,6 +20,8 @@ static bool tearoff_active, tearoff_cancelled, serial_tearoff;
 static bool rf_only_boot;
 static bool update_entering;
 static unsigned update_requests;
+static uint16_t nus_payload_limit = 244;
+uint16_t ble_nus_payload_limit(void) { return nus_payload_limit; }
 bool web_update_entering(void) { return update_entering; }
 api_response_t web_update_application_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *out, size_t capacity) {
@@ -156,6 +159,105 @@ static http_response_t http(const char *text){
     return http_dispatch_request(&request,output);
 }
 
+static uint8_t ble_request[BLE_API_REQUEST_HEADER + BLE_API_BODY_MAX + 1];
+static uint8_t ble_reply[BLE_API_RESPONSE_MAX];
+static uint16_t ble_length;
+static unsigned ble(unsigned operation, uint32_t lease, unsigned argument) {
+    memset(ble_request, 0, sizeof(ble_request));
+    ble_request[0] = BLE_API_VERSION;
+    ble_request[1] = 0x12; ble_request[2] = 0x34;
+    ble_request[3] = 0x56; ble_request[4] = 0x78;
+    ble_request[5] = operation;
+    for (unsigned i = 0; i < 4; i++) ble_request[6 + i] = lease >> (24 - i * 8);
+    ble_request[10] = argument >> 8; ble_request[11] = argument;
+    assert(ble_api_request(ble_request, BLE_API_REQUEST_HEADER, ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_SUCCESS);
+    assert(ble_length >= BLE_API_RESPONSE_HEADER && ble_reply[0] == BLE_API_VERSION);
+    assert(!memcmp(ble_request + 1, ble_reply + 1, 4));
+    return (unsigned)ble_reply[5] << 8 | ble_reply[6];
+}
+
+static uint32_t ble_open(unsigned operation) {
+    assert(ble(operation, 0, 0) == 200 && ble_reply[7] == 1);
+    assert(ble_length < sizeof(ble_reply));
+    ble_reply[ble_length] = 0;
+    unsigned lease = 0;
+    assert(sscanf((char *)ble_reply + BLE_API_RESPONSE_HEADER, "{\"session\":%u}", &lease) == 1);
+    assert(lease);
+    return lease;
+}
+
+static void ble_lifecycle(void) {
+    assert(ble(BLE_API_HELLO, 0, 0) == 200 && ble_length == 14 && ble_reply[7] == 0);
+    assert(ble_reply[8] == BLE_API_VERSION && ble_reply[9] == 4 && ble_reply[11] == 2);
+    assert(ble_reply[13] & 2);
+    assert(ble(BLE_API_TRANSPORT_INFO, 0, 0) == 200 && ble_length == 11);
+    assert(ble_reply[8] == 1 && ble_reply[9] == 0 && ble_reply[10] == 244);
+    nus_payload_limit = 20;
+    assert(ble(BLE_API_TRANSPORT_INFO, 0, 0) == 200 && ble_reply[10] == 20);
+    nus_payload_limit = 244;
+    assert(ble(BLE_API_TRANSPORT_INFO, 1, 0) == 400);
+    assert(ble(BLE_API_TRANSPORT_INFO, 0, 1) == 400);
+    assert(ble(BLE_API_HELLO, 1, 0) == 400);
+    assert(ble(255, 0, 0) == 400);
+    assert(ble(BLE_API_SLOT, 0, 8) == 400);
+    assert(ble(BLE_API_COMMAND, 0, 2000) == 400);
+    assert(ble(BLE_API_SETTINGS, 0, 1) == 400);
+    assert(ble(BLE_API_STATUS, 0, 0) == 200 && ble_reply[7] == 1);
+
+    mode = 2;
+    uint32_t lease = ble_open(BLE_API_READER_SESSION);
+    assert(mode == 1 && web_session_active());
+    char uri[64];
+    snprintf(uri, sizeof(uri), "/api/end?id=%lu", (unsigned long)lease);
+    assert(api(uri).status == 409 && web_session_active());
+    assert(api("/api/slots/session").status == 409);
+    assert(ble(BLE_API_COMMAND, lease, 2000) == 200 && ble_length == 11);
+    const uint8_t expected[] = {0, STATUS_HF_TAG_OK, 42};
+    assert(!memcmp(ble_reply + BLE_API_RESPONSE_HEADER, expected, sizeof(expected)));
+    /* USB network teardown must not release a BLE-owned RF lease. */
+    int before = closes;
+    web_session_disconnect(API_SOURCE_HTTP); web_session_poll();
+    assert(web_session_active() && mode == 1 && closes == before);
+    /* Actual BLE disconnect is cleaned up outside its interrupt callback. */
+    web_session_disconnect(API_SOURCE_BLE);
+    assert(mode == 1);
+    web_session_poll();
+    assert(!web_session_active() && mode == 2 && closes > before);
+    assert(ble(BLE_API_COMMAND, lease, 2000) == 409);
+
+    lease = ble_open(BLE_API_SLOT_SESSION);
+    assert(mode == 2 && ble(BLE_API_SLOT_OPEN, lease, 0) == 200);
+    assert(ble(BLE_API_COMMAND, lease, 2000) == 409);
+    assert(ble(BLE_API_END, lease, 0) == 200 && !web_session_active());
+    lease = ble_open(BLE_API_READER_SESSION);
+    ticks += 16384 * 31; web_session_poll();
+    assert(!web_session_active() && mode == 2);
+    assert(ble(BLE_API_KEEPALIVE, lease, 0) == 409);
+
+    assert(api("/api/session").status == 200);
+    unsigned http_lease = 0;
+    assert(sscanf((char *)output, "{\"session\":%u}", &http_lease) == 1);
+    assert(ble(BLE_API_END, http_lease, 0) == 409);
+    assert(ble(BLE_API_COMMAND, http_lease, 2000) == 409);
+    web_session_disconnect(API_SOURCE_BLE); web_session_poll();
+    assert(web_session_active());
+    web_session_disconnect(API_SOURCE_HTTP); web_session_poll();
+    assert(!web_session_active() && mode == 2);
+
+    assert(ble(BLE_API_STATUS, 0, 0) == 200);
+    ble_request[0]++;
+    assert(ble_api_request(ble_request, BLE_API_REQUEST_HEADER, ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_PAR_ERR && !ble_length);
+    ble_request[0] = BLE_API_VERSION;
+    assert(ble_api_request(ble_request, sizeof(ble_request), ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_PAR_ERR && !ble_length);
+    assert(ble_api_request(ble_request, BLE_API_REQUEST_HEADER - 1, ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_PAR_ERR && !ble_length);
+    assert(ble_api_request(ble_request, BLE_API_REQUEST_HEADER + 1, ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_SUCCESS && ble_reply[6] == (400 & 255));
+}
+
 int main(void){
     update_entering = true;
     assert(web_session_active());
@@ -198,6 +300,7 @@ int main(void){
     http_request_t request;
     const char *partial="POST /api/session HTTP/1.1\r\nHost: 192.168.16.1\r\nContent-Length: 1\r\n\r\n";
     assert(http_parse_request((const uint8_t *)partial,strlen(partial),&request)==0);
+    ble_lifecycle();
     return 0;
 }
 

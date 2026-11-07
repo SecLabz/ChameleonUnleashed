@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { RESOURCE_BASE } from '../../../../.cache/web/assets/modules/runtime/assets.mjs';
 import { createEngine } from '../../../../.cache/web/assets/modules/runtime/nfc-wasm/engine.mjs';
+import { classicFixture, keyB } from '../hardware/classic-fixture.mjs';
 
 const draftKey = 'chameleon-studio-v1';
 
@@ -135,6 +136,114 @@ test('scan, edit validation, NFC/JSON/MCT downloads and recent drafts use the re
   await importFile(page, 'capture.json', json);
 
   await expect(page.locator('#memory-status')).toHaveText('64/64 blocks known');
+});
+
+test('fresh Plus SL1 ATS identifies 2K before reading all 128 blocks', async ({ page, request }) => {
+  await request.post('/test/reset', { data: Buffer.from('classic2k') });
+  const commands = [];
+  page.on('request', (entry) => {
+    const match = new URL(entry.url()).pathname.match(/^\/api\/command\/(\d+)$/);
+    if (match) {
+      commands.push(Number(match[1]));
+    }
+  });
+  await scan(page, false);
+  await expect(page.locator('#studio-family')).toHaveText('Classic 2K');
+  const identified = JSON.parse(await exported(page, '#export-json')).document;
+  expect(identified.type).toBe(1002);
+  expect(identified.card).toMatchObject({ uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4] });
+  expect(identified.card.ats).toEqual([12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6]);
+  expect(identified.memory).toEqual(Array(128).fill(null));
+  expect(commands).toEqual([2000, 2040]);
+  const upper = Array.from({ length: 16 }, (_, index) => 0xb0 + index);
+  await request.post('/test/classic-block', { data: Buffer.from([126, ...upper]) });
+  await page.locator('#read').click();
+  await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+  const captured = JSON.parse(await exported(page, '#export-json')).document;
+  expect(captured.type).toBe(1002);
+  expect(captured.card.sak).toBe(8);
+  expect(captured.card.ats).toEqual(identified.card.ats);
+  expect(captured.memory).toHaveLength(128);
+  expect(captured.memory[126]).toEqual(upper);
+  expect(captured.recoveredKeys).toHaveLength(32);
+  expect(commands.every((number) => [2000, 2040, 2002, 2008, 2015, 2026, 2027].includes(number))).toBe(true);
+});
+
+test('rereading a known Classic 2K document preserves its model and reads the upper half', async ({
+  page,
+  request
+}) => {
+  const commands = [];
+  page.on('request', (entry) => {
+    const match = new URL(entry.url()).pathname.match(/^\/api\/command\/(\d+)$/);
+    if (match) {
+      commands.push({ number: Number(match[1]), data: [...(entry.postDataBuffer() || [])] });
+    }
+  });
+  await page.getByRole('button', { name: 'Studio', exact: true }).click();
+  await page.locator('#create').click();
+  await page.locator('#create-identity summary').click();
+  await page.locator('#create-uid').fill('01020304');
+  await page.locator('#create-all summary').click();
+  await page.locator('[data-create="1002"]').click();
+  await expect(page.locator('#studio-family')).toHaveText('Classic 2K');
+  const lastData = Array.from({ length: 16 }, (_, index) => 0xa0 + index);
+  expect((await request.post('/test/classic-block', { data: Buffer.from([126, ...lastData]) })).ok()).toBe(
+    true
+  );
+  await page.locator('#read').click();
+  await page
+    .getByRole('dialog', { name: 'Read fresh memory?', exact: true })
+    .getByRole('button', { name: 'Recover', exact: true })
+    .click();
+  await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+  const captured = JSON.parse(await exported(page, '#export-json')).document;
+  expect(captured.type).toBe(1002);
+  expect(captured.card).toMatchObject({ uid: [1, 2, 3, 4], sak: 8 });
+  expect(captured.memory).toHaveLength(128);
+  expect(captured.memory[126]).toEqual(lastData);
+  expect(captured.memory[127]).toEqual([...Array(6).fill(255), 255, 7, 128, 105, ...Array(6).fill(255)]);
+  expect(captured.recoveredKeys).toHaveLength(32);
+  expect(commands.filter((entry) => entry.number === 2027).map((entry) => entry.data[1])).toContain(31);
+  expect(commands.every((entry) => [2000, 2002, 2008, 2015, 2026, 2027].includes(entry.number))).toBe(true);
+  await expect(page.locator('#studio-family')).toHaveText('Classic 2K');
+  await expect(page.locator('#memory-status')).toHaveText('128/128 blocks known');
+  await page.reload();
+  await expect(page.locator('#studio-family')).toHaveText('Classic 2K');
+  await expect(page.locator('#memory-status')).toHaveText('128/128 blocks known');
+});
+
+test('a Classic reread with a changed RF identity preserves the complete open document', async ({ page }) => {
+  const commands = [];
+  page.on('request', (entry) => {
+    const match = new URL(entry.url()).pathname.match(/^\/api\/command\/(\d+)$/);
+    if (match) {
+      commands.push(Number(match[1]));
+    }
+  });
+  await page.getByRole('button', { name: 'Studio', exact: true }).click();
+  await page.locator('#create').click();
+  await page.locator('#create-identity summary').click();
+  await page.locator('#create-uid').fill('01020304');
+  await page.locator('#create-all summary').click();
+  await page.locator('[data-create="1003"]').click();
+  const memory = page.locator('#memory textarea');
+  const lines = (await memory.inputValue()).split('\n');
+  lines[254] = 'AABBCCDDEEFF0123456789ABCDEF0123';
+  await memory.fill(lines.join('\n'));
+  const before = JSON.parse(await exported(page, '#export-json')).document;
+  await page.locator('#read').click();
+  await page
+    .getByRole('dialog', { name: 'Read fresh memory?', exact: true })
+    .getByRole('button', { name: 'Recover', exact: true })
+    .click();
+  await expect(page.locator('#status')).toContainText('tag identity differs');
+  await expect(page.locator('#stop')).toBeHidden();
+  const after = JSON.parse(await exported(page, '#export-json')).document;
+  expect(after).toEqual(before);
+  expect(commands).toEqual([2000]);
+  await expect(page.locator('#studio-family')).toHaveText('Classic 4K');
+  await expect(page.locator('#memory-status')).toHaveText('256/256 blocks known');
 });
 
 for (const failure of ['uid', 'missing', 'cancelled']) {
@@ -442,20 +551,16 @@ test('ST25TB scanning preserves blocks and metadata through export and reload', 
   await expect(details).toContainText('Emulator Chip ID was explicitly chosen');
 });
 
-test('Stop before reading memory preserves recovered keys through reload and JSON export', async ({
+test('Stop with no returned memory preserves recovered keys through reload and JSON export', async ({
   page
 }) => {
   let release;
-  let calls = 0;
   const waiting = new Promise((resolve) => {
-    page.route('**/api/command/2015?*', async (route) => {
-      calls++;
-      if (calls === 2) {
-        release = () => route.continue();
-        resolve();
-      } else {
-        await route.continue();
-      }
+    page.route('**/api/command/2027?*', async (route) => {
+      // The dictionary key passed its key check, but no sector data
+      // is returned. Stop must retain that key without inventing memory.
+      release = () => route.fulfill({ body: Buffer.from([0, 6]) });
+      resolve();
     });
   });
   await scan(page, false);
@@ -1575,6 +1680,111 @@ test('Classic rejects a trailer permission failure before writing any data', asy
   expect(writes).toBe(0);
 });
 
+for (const mode of ['cancel', 'data', 'clone']) {
+  test(`Plus SL1 2K copy checks capacity and upper data (mode=${mode})`, async ({ page, request }) => {
+    await request.post('/test/reset', { data: 'classic2k' });
+    await request.post('/test/classic-block', { data: Buffer.from([126, ...Array(16).fill(55)]) });
+    await scan(page, false);
+    await page.locator('#read').click();
+    await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+    await expect(page.locator('#memory-status')).toHaveText('128/128 blocks known');
+    const memory = page.locator('#memory textarea');
+    const lines = (await memory.inputValue()).split('\n');
+    lines[1] = '11'.repeat(16);
+    lines[126] = '22'.repeat(16);
+    await memory.fill(lines.join('\n'));
+    const inspections = [];
+    const writes = [];
+    page.on('request', (entry) => {
+      if (entry.url().includes('/api/command/2040?')) {
+        inspections.push([...entry.postDataBuffer()]);
+      }
+      if (entry.url().includes('/api/command/2030?')) {
+        writes.push([...entry.postDataBuffer()]);
+      }
+    });
+    await page.locator('#save-menu summary').click();
+    await page.locator('#copy-tag').click();
+    const dialog = page.getByRole('dialog', { name: 'Copy to a tag', exact: true });
+    await expect(dialog).toBeVisible();
+    if (mode === 'clone') {
+      await dialog.getByRole('radio', { name: /^Clone tag/ }).check();
+    }
+    const accepted = mode !== 'cancel';
+    const action = mode === 'clone' ? 'Clone tag' : 'Copy data';
+    await expect(dialog.getByRole('button', { name: action, exact: true })).toBeEnabled();
+    expect(writes).toEqual([]);
+    await dialog.getByRole('button', { name: accepted ? action : 'Cancel', exact: true }).click();
+    await expect(page.locator('#status')).toHaveText(
+      {
+        data: '2 blocks written and verified · data copy',
+        clone: 'Clone verified · data, block 0, keys and access rights match',
+        cancel: 'Copy cancelled'
+      }[mode]
+    );
+    await expect(page.locator('#stop')).toBeHidden();
+    expect(inspections).toHaveLength({ data: 2, clone: 3, cancel: 1 }[mode]);
+    expect(
+      inspections.every((payload) => payload.at(-1) === 1 && payload.length === 16 + 6 * payload[14])
+    ).toBe(true);
+    expect(writes.map((payload) => [payload[0], payload[9]])).toEqual(
+      accepted
+        ? [
+            [6, 1],
+            [6, 126]
+          ]
+        : []
+    );
+    await page.locator('#read').click();
+    await page
+      .getByRole('dialog', { name: 'Read fresh memory?', exact: true })
+      .getByRole('button', { name: 'Recover', exact: true })
+      .click();
+    await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+    const captured = JSON.parse(await exported(page, '#export-json')).document;
+    expect(captured.type).toBe(1002);
+    expect(captured.memory).toHaveLength(128);
+    expect(captured.memory[1]).toEqual(Array(16).fill(accepted ? 0x11 : 0));
+    expect(captured.memory[126]).toEqual(Array(16).fill(accepted ? 0x22 : 55));
+  });
+}
+
+for (const scenario of ['2K source on 1K', '1K source on 2K', 'legacy firmware']) {
+  test(`Classic copy refuses an unverified or different target capacity: ${scenario}`, async ({
+    page,
+    request
+  }) => {
+    const oneKSource = scenario.startsWith('1K');
+    await request.post('/test/reset', { data: oneKSource ? 'fixed-classic' : 'classic2k' });
+    await scan(page, false);
+    await page.locator('#read').click();
+    await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+    await request.post('/test/reset', { data: oneKSource ? 'classic2k' : 'fixed-classic' });
+    if (scenario === 'legacy firmware') {
+      await page.route('**/api/command/2040?*', (route) =>
+        route.fulfill({ body: Buffer.from([0, 0, 0, 0, 0, 1, 0, ...Array(6).fill(0)]) })
+      );
+    }
+    const commands = [];
+    page.on('request', (entry) => {
+      const match = new URL(entry.url()).pathname.match(/^\/api\/command\/(\d+)$/);
+      if (match) {
+        commands.push(Number(match[1]));
+      }
+    });
+    await page.locator('#save-menu summary').click();
+    await page.locator('#copy-tag').click();
+    await expect(page.locator('#status')).toContainText(
+      scenario === 'legacy firmware'
+        ? 'firmware to verify the target Classic capacity'
+        : 'target Classic size differs'
+    );
+    await expect(page.locator('#stop')).toBeHidden();
+    expect(commands).toEqual([2000, 2040]);
+    await expect(page.getByRole('dialog', { name: 'Copy to a tag', exact: true })).toHaveCount(0);
+  });
+}
+
 test('Classic copy animates inspection, counts verified blocks and waits for cleanup before success', async ({
   page
 }) => {
@@ -1921,6 +2131,108 @@ test('Factory format previews the physical tag, cancels without writing and veri
   await expect(page.locator('#identity-title')).toHaveText('Memory not read');
 });
 
+test('Plus SL1 2K format cancels intact, resets all 127 writable blocks and then sends no writes', async ({
+  page,
+  request
+}) => {
+  await request.post('/test/reset', { data: 'classic2k' });
+  const fixture = classicFixture('2k');
+  // The software card uses this UID. Every data block is nonzero and all
+  // trailers differ from factory defaults, including readable Key B.
+  fixture.blocks[0].splice(0, 5, 1, 2, 3, 4, 4);
+  const trailers = fixture.sectors.map((sector) => sector.trailer);
+  for (const trailer of trailers) {
+    fixture.blocks[trailer] = [...Array(6).fill(255), 255, 7, 128, 0x42, ...keyB];
+  }
+  for (const [index, block] of fixture.blocks.entries()) {
+    await request.post('/test/classic-block', { data: Buffer.from([index, ...block]) });
+  }
+  await scan(page, false);
+  const operations = [];
+  page.on('request', (entry) => {
+    if (entry.url().includes('/api/command/2039?')) {
+      operations.push([...entry.postDataBuffer()]);
+    }
+  });
+  const open = async () => {
+    await page.locator('#more-menu summary').click();
+    await page.locator('#format-tag').click();
+    await expect(page.getByRole('button', { name: 'Format card', exact: true })).toBeEnabled();
+  };
+  await open();
+  await expect(page.locator('[data-changes]')).toHaveText('95 data blocks to erase · reset 32 sectors');
+  expect(operations.length).toBeGreaterThan(0);
+  expect(
+    operations.every((data) => data[2] === 6 && [20, 52].includes(data.length) && data.at(-1) === 1)
+  ).toBe(true);
+  expect(operations.some((data) => data[11] === 127 && data[0] === 1)).toBe(true);
+  expect(operations.some((data) => data[0] === 2)).toBe(false);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.locator('#read').click();
+  await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+  expect(JSON.parse(await exported(page, '#export-json')).document.memory).toEqual(fixture.blocks);
+  await open();
+  await page.getByRole('button', { name: 'Format card', exact: true }).click();
+  await expect(page.locator('#status')).toContainText('Factory format verified');
+  const dataBlocks = fixture.blocks
+    .map((_, index) => index)
+    .filter((index) => index && !trailers.includes(index));
+  expect(operations.filter((data) => data[0] === 2).map((data) => data[11])).toEqual([
+    ...dataBlocks,
+    ...trailers
+  ]);
+  await page.locator('#read').click();
+  await page
+    .getByRole('dialog', { name: 'Read fresh memory?', exact: true })
+    .getByRole('button', { name: 'Recover', exact: true })
+    .click();
+  await expect(page.locator('#status')).toHaveText('Read complete', { timeout: 20000 });
+  const result = JSON.parse(await exported(page, '#export-json')).document;
+  expect(result.type).toBe(1002);
+  expect(result.card.sak).toBe(8);
+  expect(result.memory).toHaveLength(128);
+  const formatted = fixture.blocks.map((block, index) => {
+    if (index === 0) {
+      return block;
+    }
+    return trailers.includes(index)
+      ? [...Array(6).fill(255), 255, 7, 128, index === 127 ? 188 : 105, ...Array(6).fill(255)]
+      : Array(16).fill(0);
+  });
+  expect(result.memory).toEqual(formatted);
+  await page.locator('#more-menu summary').click();
+  await page.locator('#format-tag').click();
+  await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeEnabled();
+  await expect(page.locator('[data-changes]')).toHaveText('Card already formatted · no writes needed');
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  expect(operations.filter((data) => data[0] === 2)).toHaveLength(127);
+  expect(JSON.parse(await exported(page, '#export-json')).document.memory).toEqual(formatted);
+});
+
+test('a stale 2K document cannot authorize formatting a same-identity 1K target', async ({
+  page,
+  request
+}) => {
+  await request.post('/test/reset', { data: 'classic2k' });
+  await scan(page, false);
+  await request.post('/test/reset', { data: 'fixed-classic' });
+  const operations = [];
+  page.on('request', (entry) => {
+    if (entry.url().includes('/api/command/2039?')) {
+      operations.push([...entry.postDataBuffer()]);
+    }
+  });
+  await page.locator('#more-menu summary').click();
+  await page.locator('#format-tag').click();
+  await expect(page.getByRole('button', { name: 'Check again', exact: true })).toBeEnabled();
+  await expect(page.locator('dialog[open]')).toContainText('0 blocks written and verified. Card not found');
+  expect(operations.length).toBeGreaterThan(0);
+  expect(operations.every((data) => data[2] === 6 && data[0] !== 2)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Format card', exact: true })).toBeHidden();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.locator('#stop')).toBeHidden();
+});
+
 test('Factory format refuses a denied final trailer before any writes', async ({ page }) => {
   await scan(page, false);
   let writes = 0;
@@ -2065,6 +2377,38 @@ test('maintenance is scoped to Classic documents and failed NFC scans expose tro
   await expect(page.locator('[data-changes]')).toHaveText('Identification unchanged');
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(page.locator('#stop')).toBeHidden();
+});
+
+test('manual known-model 2K repair keeps legacy requests for an unreadable identity', async ({
+  page,
+  request
+}) => {
+  await request.post('/test/classic-block', {
+    data: Buffer.from([0, 1, 2, 3, 4, 5, 0, 4, 0, ...Array(8).fill(42)])
+  });
+  await page.route('**/api/command/2000?*', (route) => route.fulfill({ body: Buffer.from([0, 5]) }));
+  const operations = [];
+  page.on('request', (entry) => {
+    if (entry.url().includes('/api/command/2039?')) {
+      operations.push([...entry.postDataBuffer()]);
+    }
+  });
+  await page.locator('#scan').click();
+  await page.getByRole('button', { name: 'Troubleshoot MIFARE Classic…', exact: true }).click();
+  await page.getByLabel('Known generation', { exact: true }).selectOption('3');
+  await page.getByLabel('Known card model', { exact: true }).selectOption('6');
+  await page.getByRole('button', { name: 'Check again', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Apply repair', exact: true })).toBeEnabled();
+  expect(operations.length).toBeGreaterThan(0);
+  expect(operations.every((data) => data[1] === 3 && data[2] === 6 && [19, 51].includes(data.length))).toBe(
+    true
+  );
+  const preview = operations.find((data) => data[0] === 1);
+  expect(preview[39]).toBe(4);
+  expect(preview[40]).toBe(8);
+  await page.getByRole('button', { name: 'Apply repair', exact: true }).click();
+  await expect(page.locator('#status')).toContainText('Repair verified');
+  expect(operations.filter((data) => data[0] === 2)).toHaveLength(1);
 });
 
 test('Factory format supports a fixed UID and preserves block 0 while erasing data', async ({

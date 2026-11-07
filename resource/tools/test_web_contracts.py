@@ -222,7 +222,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
                 str(ROOT / 'resource/tools/tests/network_progress.c'),
                 *map(str, sources), str(lwip / 'netif/ethernet.c'), '-o', str(binary),
             ], check=True)
-            for scenario in ('empty_rx', 'syn', 'data', 'fin', 'ack', 'parallel', 'disconnect',
+            for scenario in ('work', 'empty_rx', 'syn', 'data', 'fin', 'ack', 'parallel', 'disconnect',
                              'responses', 'asset', 'nested', 'response_reconnect', 'late_data'):
                 with self.subTest(scenario=scenario):
                     subprocess.run([str(binary), scenario], check=True, timeout=5)
@@ -232,7 +232,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
             directory=Path(tmp)
             (directory/'app_timer.h').write_text('#include <stdint.h>\n#define APP_TIMER_TICKS(ms) ((ms)*16384u/1000u)\nuint32_t app_timer_cnt_get(void);\nuint32_t app_timer_cnt_diff_compute(uint32_t,uint32_t);\n')
             (directory/'rfid_main.h').write_text('extern bool g_is_tag_emulating;\ntypedef int device_mode_t;\n#define DEVICE_MODE_READER 1\nint get_device_mode(void);\nvoid reader_mode_enter(void);\nvoid tag_mode_enter(void);\n')
-            (directory/'ble_main.h').write_text('#include <stdbool.h>\nbool ble_slave_rf_only(void);\n')
+            (directory/'ble_main.h').write_text('#include <stdbool.h>\n#include <stdint.h>\nbool ble_slave_rf_only(void);\nuint16_t ble_nus_payload_limit(void);\n')
             origin = resource_origin('https://' + 'a' * (RESOURCE_ORIGIN_MAX_BYTES - 20) + '.cdn.example/')
             (directory/'web_assets.h').write_text(
                 '#include <string.h>\n#define WEB_RESOURCE_CONNECT "\'self\' ' + origin + '"\n'
@@ -243,7 +243,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
                 '-DGIT_VERSION="host-test"','-I',str(directory),'-I',str(NET),
                 '-I',str(ROOT/'firmware/application/src'),'-I',str(ROOT/'firmware/application/src/rfid/reader/hf'),
                 '-I',str(ROOT/'firmware/application/src/rfid'),
-                str(ROOT/'resource/tools/tests/web_api.c'),str(NET/'api.c'),str(NET/'http.c'),'-o',str(binary)],check=True)
+                str(ROOT/'resource/tools/tests/web_api.c'),str(NET/'api.c'),str(NET/'ble_api.c'),str(NET/'http.c'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 
 
@@ -281,7 +281,7 @@ class WebBuildTests(unittest.TestCase):
     def test_source_provenance_distinguishes_clean_local_and_unversioned_builds(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            self.assertEqual(source_version(directory), {'revision': None, 'dirty': None})
+            self.assertEqual(source_version(directory), {'revision': None, 'dirty': None, 'committedAt': None})
             subprocess.run(['git', 'init', '-q', str(directory)], check=True)
             subprocess.run([
                 'git', '-C', str(directory), '-c', 'user.name=Test',
@@ -290,9 +290,10 @@ class WebBuildTests(unittest.TestCase):
             ], check=True)
             revision = subprocess.check_output(
                 ['git', '-C', str(directory), 'rev-parse', 'HEAD'], text=True).strip()
-            self.assertEqual(source_version(directory), {'revision': revision, 'dirty': False})
+            timestamp = int(subprocess.check_output(['git', '-C', str(directory), 'show', '-s', '--format=%ct']))
+            self.assertEqual(source_version(directory), {'revision': revision, 'dirty': False, 'committedAt': timestamp})
             (directory / 'local.txt').write_text('edited sources')
-            self.assertEqual(source_version(directory), {'revision': revision, 'dirty': True})
+            self.assertEqual(source_version(directory), {'revision': revision, 'dirty': True, 'committedAt': timestamp})
 
 
 if __name__ == '__main__':

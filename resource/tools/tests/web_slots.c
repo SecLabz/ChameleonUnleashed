@@ -269,6 +269,20 @@ int main(void) {
     seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_1024,1);seed(0,TAG_SENSE_LF,TAG_TYPE_EM410X,2);
     seed(1,TAG_SENSE_HF,TAG_TYPE_MIFARE_Mini,3);seed(1,TAG_SENSE_LF,TAG_TYPE_VIKING,4);
     tag_emulation_load_data();tag_emulation_sense_run();
+    /* Re-selecting the same small image after a larger slot must not hash
+     * unused bytes left by the other card in the shared HF buffer. */
+    assert(tag_emulation_select_checked(1,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    uint32_t mini_revision=tag_emulation_place_revision(1,TAG_SENSE_HF);
+    uint32_t viking_revision=tag_emulation_place_revision(1,TAG_SENSE_LF);
+    seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_4096,1);
+    seed(0,TAG_SENSE_LF,TAG_TYPE_IOPROX,2);
+    assert(tag_emulation_select_checked(0,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    assert(tag_emulation_select_checked(1,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    assert(tag_emulation_place_revision(1,TAG_SENSE_HF)==mini_revision);
+    assert(tag_emulation_place_revision(1,TAG_SENSE_LF)==viking_revision);
+    seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_1024,1);
+    seed(0,TAG_SENSE_LF,TAG_TYPE_EM410X,2);
+    assert(tag_emulation_select_checked(0,(uint8_t *)decoded_words,sizeof(decoded_words)));
     unsigned unchanged_hf=hf_sense_changes;
     tag_emulation_place_revision(0,TAG_SENSE_HF);
     assert(hf_sense_changes==unchanged_hf);

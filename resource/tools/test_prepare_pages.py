@@ -11,6 +11,7 @@ from zipfile import ZipFile, ZipInfo
 from mirror_firmware import SOURCES
 from prepare_pages import prepare, cdn_files, merge_resources
 from test_web_update import fixtures, archive
+from hosted_web import FILES, BUNDLE_FILES, shell
 
 
 def zipped(files):
@@ -21,11 +22,25 @@ def zipped(files):
     return output.getvalue()
 
 
-def resources(identity):
+def resources(identity, app_timestamp=None, revision=None):
     path = 'core/' + hashlib.sha256(identity.encode()).hexdigest() + '/'
     files = {path + 'module.wasm': identity.encode(), path + 'LICENSE': b'license',
              path + 'manifest.json': b'{"version":1}'}
-    manifest = {'version': 1, 'projectVersion': '1.1.0', 'resources': [
+    descriptor = {}
+    if app_timestamp is not None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name in FILES:
+                data = (b'<head><title>Chameleon</title></head><body><div class="shell"></div></body>'
+                        if revision else b'<head></head>') if name == 'index.html' else (identity + ':' + name).encode()
+                (directory / name).write_bytes(data)
+            version, app = shell(directory)
+        prefix = f'web/{version}/'
+        files.update({prefix + name: data for name, data in app.items()})
+        descriptor = {'source': {'committedAt': app_timestamp}, 'webApp': {'version': version, 'path': prefix}}
+        if revision is not None:
+            descriptor['source'].update(revision=revision, dirty=False)
+    manifest = {'version': 1, 'projectVersion': '1.1.0', **descriptor, 'resources': [
         {'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
         for name, data in files.items()]}
     data = json.dumps(manifest).encode()
@@ -44,10 +59,10 @@ class PagesTests(unittest.TestCase):
         self.download_counts = {}
         self.app = archive(*fixtures()['normal'])
 
-    def add_release(self, day, legacy=False, **flags):
+    def add_release(self, day, legacy=False, app_timestamp=None, **flags):
         repo = SOURCES[0][2]
         tag = f'v1.0.{day}'
-        cdn = resources(tag)
+        cdn = resources(tag, app_timestamp)
         bundle = {**{'cdn/' + name: data for name, data in cdn.items()},
                   'firmware/application.zip': archive(*fixtures()['legacy']) if legacy else self.app,
                   'cdn/updates/latest.json': b'old download index',
@@ -107,7 +122,8 @@ class PagesTests(unittest.TestCase):
         for name, data in current.items():
             self.assertEqual((self.output / name).read_bytes(), data)
         actual = {p.relative_to(self.output).as_posix() for p in self.output.rglob('*') if p.is_file()}
-        self.assertEqual(actual, {*current, 'core/old/module.wasm', 'updates/catalog.json', '.nojekyll'})
+        self.assertEqual(actual, {*current, 'core/old/module.wasm', 'updates/catalog.json',
+                                  'updates/dev/catalog.json', '.nojekyll'})
 
     def test_corrupt_resources_and_network_errors_leave_no_partial_site(self):
         self.add_release(1)
@@ -186,6 +202,61 @@ class PagesTests(unittest.TestCase):
         self.assertEqual((destination / 'core/build/manifest.json').read_bytes(), b'newest')
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             merge_resources({'core/build/module.wasm': b'different bytes'}, destination)
+
+    def test_app_uses_newest_source_commit_and_preserves_all_immutable_bundles(self):
+        old = self.add_release(1, app_timestamp=100)
+        newest = self.add_release(2, app_timestamp=300)
+        current = resources('intermediate CI build', app_timestamp=200)
+        cdn = self.root / 'current.zip'
+        cdn.write_bytes(zipped(current))
+        prepare(self.output, resource_archive=cdn, get=self.get)
+        expected = {name.rsplit('/', 1)[-1]: data for name, data in newest.items() if name.startswith('web/')}
+        self.assertEqual(set(expected), set(BUNDLE_FILES))
+        for name, data in expected.items():
+            self.assertEqual((self.output / 'app' / name).read_bytes(), data)
+        for files in (old, current, newest):
+            for name, data in files.items():
+                self.assertEqual((self.output / name).read_bytes(), data)
+
+    def test_baseline_and_prereleases_cannot_replace_the_stable_app(self):
+        stable = self.add_release(1, app_timestamp=100)
+        self.add_release(2, app_timestamp=500, prerelease=True)
+        current = resources('newer development build', app_timestamp=300)
+        baseline = self.root / 'baseline'
+        for name, data in current.items():
+            path = baseline / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        prepare(self.output, baseline=baseline, get=self.get)
+        app = next(data for name, data in stable.items() if name.startswith('web/') and name.endswith('/app.mjs'))
+        self.assertEqual((self.output / 'app/app.mjs').read_bytes(), app)
+
+    def test_invalid_web_descriptors_and_worker_pins_abort_before_publishing(self):
+        for failure in ('path', 'timestamp', 'missing_worker', 'html_version', 'worker_pin'):
+            with self.subTest(failure=failure):
+                files = resources('app fixture', app_timestamp=300)
+                name = next(name for name in files if name.startswith('releases/'))
+                manifest = json.loads(files.pop(name))
+                prefix = manifest['webApp']['path']
+                if failure == 'path':
+                    manifest['webApp']['path'] = '../app/'
+                elif failure == 'timestamp':
+                    manifest['source']['committedAt'] = 0
+                elif failure == 'missing_worker':
+                    del files[prefix + 'worker.mjs']
+                elif failure == 'html_version':
+                    files[prefix + 'index.html'] = b'<head></head>'
+                else:
+                    line, template = files[prefix + 'sw.mjs'].split(b'\n', 1)
+                    config = json.loads(line.decode().removeprefix('globalThis.CHAMELEON_SHELL = ')[:-1])
+                    config['files'][0]['sha256'] = '0' * 64
+                    files[prefix + 'sw.mjs'] = ('globalThis.CHAMELEON_SHELL = ' + json.dumps(config) + ';\n').encode() + template
+                manifest['resources'] = [{'path': path, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                                         for path, data in files.items()]
+                data = json.dumps(manifest).encode()
+                files['releases/' + hashlib.sha256(data).hexdigest() + '.json'] = data
+                with self.assertRaises(ValueError):
+                    cdn_files(zipped(files))
 
 
 if __name__ == '__main__': unittest.main()

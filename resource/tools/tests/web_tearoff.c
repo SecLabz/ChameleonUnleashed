@@ -10,6 +10,8 @@
 
 static uint32_t ticks;
 static unsigned commands, polls;
+static unsigned ble_polls, lease_polls;
+static bool cancel_from_ble;
 static uint16_t command_status, result_size = 64;
 static const uint8_t start[] = {0xd0, 2, 0x33, 1, 2, 3, 4, 5, 5, 0x78, 0x56, 0x34, 0x12};
 static const uint8_t expected[] = {
@@ -20,6 +22,11 @@ static const uint8_t expected[] = {
 uint32_t app_timer_cnt_get(void) { return ticks; }
 uint32_t app_timer_cnt_diff_compute(uint32_t now, uint32_t before) { return now - before; }
 void usb_poll(void) { polls++; }
+void data_frame_process_ble_control(void) {
+    ble_polls++;
+    if (cancel_from_ble) web_tearoff_cancel();
+}
+void web_session_poll(void) { lease_polls++; }
 hf_tearoff_timing_t hf_radio_tearoff_timing_result(void) {
     return (hf_tearoff_timing_t){.writes = 9};
 }
@@ -35,6 +42,8 @@ uint16_t hf_reader_command(uint16_t command, uint16_t length, const uint8_t *dat
     web_tearoff_progress(4, 0x12345678, 999); /* Initial reports retain the last delay. */
     ticks += APP_TIMER_TICKS(60);
     web_tearoff_service();
+    assert(ble_polls == polls && lease_polls == polls);
+    assert(web_tearoff_cancelled() == cancel_from_ble);
     assert(web_tearoff_state(state) == 20);
     assert(state[0] == 2 && state[3] == 1 && state[12] == 9);
     assert(state[16] == 0x41 && state[17] == 1);
@@ -95,5 +104,9 @@ int main(void) {
     web_tearoff_poll();
     web_tearoff_state(state);
     assert(commands == 3 && state[1] == 5);
+    assert(web_tearoff_start(start, sizeof(start)));
+    cancel_from_ble = true;
+    web_tearoff_poll();
+    assert(ble_polls == 4 && web_tearoff_cancelled());
     puts("ST25TB HTTP request bytes, progress, result, cancellation and invalid input passed");
 }

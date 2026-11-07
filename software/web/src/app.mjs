@@ -19,7 +19,7 @@ import {
   maintainTag
 } from './ui/tag-write.mjs';
 import { classicReadSnapshot } from './documents/classic-write.mjs';
-import { $, deviceViews } from './ui/device-view.mjs';
+import { $, BLE_PAUSED_TYPES, deviceViews } from './ui/device-view.mjs';
 import { offlineView } from './ui/offline.mjs';
 import { decodeSlot } from './device/slots.mjs';
 import {
@@ -52,7 +52,14 @@ import {
   typeName
 } from './documents/slot-image.mjs';
 
-const state = { document: null, controller: null, connected: false, deviceInfo: null, cleanDocument: null };
+const state = {
+  document: null,
+  controller: null,
+  connected: false,
+  deviceInfo: null,
+  transport: null,
+  cleanDocument: null
+};
 let toastTimer;
 let draftTimer;
 let activeView;
@@ -78,18 +85,44 @@ let scanTechnology = 'nfc';
 const DRAFT = 'chameleon-studio-v1';
 const DICTIONARY = 'chameleon-dictionary-v1';
 
-function notify(message, error = false) {
+/** @param {{ label: string, run: () => unknown }} [action] One follow-up the message offers. */
+function notify(message, error = false, action) {
   clearTimeout(toastTimer);
-  $('toast').textContent = message;
-  $('toast').className = `toast visible${error ? ' error' : ''}`;
-  toastTimer = setTimeout(() => $('toast').classList.remove('visible'), 5000);
+  const toast = $('toast');
+  toast.replaceChildren(message);
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.onclick = () => {
+      hideToast();
+      action.run();
+    };
+    toast.append(button);
+  }
+  toast.className = `toast visible${error ? ' error' : ''}${action ? ' actionable' : ''}`;
+  toastTimer = setTimeout(hideToast, action ? 10000 : 5000);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('toast').classList.remove('visible');
+  // A hidden toast must not leave a focusable action behind.
+  $('toast').querySelector('.toast-action')?.remove();
 }
 
 const views = deviceViews({
   notify,
-  onConnection(value, info) {
+  canConnect: () => !state.controller,
+  open: () => view('device'),
+  onConnection(value, info, detail) {
     state.connected = value;
     state.deviceInfo = info;
+    state.transport = value ? detail : null;
+    if (!value && detail !== 'error') {
+      slots.disconnected();
+    }
     controls();
   }
 });
@@ -135,7 +168,8 @@ function view(name) {
     offline.refresh();
   }
   if (name === 'slots') {
-    slots.refresh().catch((error) => notify(error.message, true));
+    // Without a device, the Slots page explains how to connect instead.
+    slots.refresh().catch((error) => state.connected && notify(error.message, true));
   }
 }
 
@@ -541,10 +575,19 @@ async function saveToSlot(activate = false) {
       }
       render();
       saveDraft();
+      const paused = activate && views.bluetooth() && BLE_PAUSED_TYPES.includes(state.document.type);
       $('status').textContent = activate
         ? `Slot ${selected.slot + 1} saved and selected for emulation`
         : `Saved and verified on slot ${selected.slot + 1}`;
-      notify($('status').textContent);
+      if (paused) {
+        $('status').textContent =
+          `Slot ${selected.slot + 1} saved · emulation starts once Bluetooth disconnects`;
+      }
+      notify(
+        $('status').textContent,
+        false,
+        paused ? { label: 'Disconnect', run: () => views.disconnect() } : undefined
+      );
     });
   });
   await views.refresh();
@@ -677,9 +720,24 @@ async function scan() {
       await readDesfire(device, card, updateDesfire);
     }
     if (classic) {
-      const observation = await inspectClassic(device, card, (message) => {
-        $('status').textContent = message;
-      });
+      const observation = await inspectClassic(
+        device,
+        card,
+        (message) => {
+          $('status').textContent = message;
+        },
+        { modelEvidence: true }
+      );
+      if (observation.ats) {
+        card.ats = observation.ats;
+      }
+      if (observation.type === 1002) {
+        const geometry = await withRuntime(
+          (call) => call({ op: 'classic_geometry', sak: 16 }),
+          state.controller.signal
+        );
+        updateClassic({ card, geometry, memory: Array(geometry.blocks).fill(null) });
+      }
       state.document.classicObservation = observation;
       $('status').textContent = 'Tag identified · Memory not read';
       render();
@@ -787,6 +845,10 @@ async function recoverClassic(device, expectedUid, initialCard) {
       device,
       initialCard,
       expectedUid,
+      expectedModel:
+        document.kind === 'classic' && document.type
+          ? { type: document.type, card: document.card }
+          : undefined,
       onUpdate(next) {
         if (next.geometry) {
           reading = next;

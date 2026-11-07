@@ -151,7 +151,7 @@ def mirror(destination, limit=RELEASE_LIMIT, get=fetch, on_resources=None):
             if source_id == 'unleashed':
                 if not eligible and on_resources is None:
                     continue
-                asset = next((asset for asset in assets if re.fullmatch(
+                asset = next((asset for asset in sorted(assets, key=lambda a: a.get('created_at', ''), reverse=True) if re.fullmatch(
                     r'ChameleonUnleashed-.+-firmware-resources\.zip', asset['name'])), None)
             else:
                 if not eligible:
@@ -163,7 +163,7 @@ def mirror(destination, limit=RELEASE_LIMIT, get=fetch, on_resources=None):
             # rather than replacing a working catalogue with a truncated list.
             data = verified_asset(repo, asset, get)
             if source_id == 'unleashed' and on_resources is not None:
-                on_resources(data)
+                on_resources(data, release)
             if not eligible:
                 continue
             try:

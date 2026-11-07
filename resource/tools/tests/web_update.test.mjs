@@ -151,6 +151,30 @@ test('catalogue accepts both known sources and rejects arbitrary repository iden
   await assert.rejects(loadCatalogue(), /Invalid/);
 });
 
+test('development catalogue and firmware are opt-in and remain separate from stable', async () => {
+  globalThis.location = { href: 'http://192.168.16.1/update' };
+  const paths = [];
+  globalThis.fetch = async (url) => {
+    paths.push(url.pathname);
+    return Response.json({ format: 1, sources: [] });
+  };
+  await loadCatalogue();
+  await loadCatalogue(undefined, true);
+  assert.match(paths[0], /\/updates\/catalog\.json$/);
+  assert.match(paths[1], /\/updates\/dev\/catalog\.json$/);
+  const bytes = await fixture('normal');
+  const identity = await sha256(bytes);
+  const asset = { size: bytes.length, sha256: identity, path: `files/${identity}.zip` };
+  globalThis.fetch = async (url) => {
+    paths.push(url.pathname);
+    return new Response(bytes);
+  };
+  await downloadFirmware(asset, undefined, undefined, true);
+  assert.match(paths[2], new RegExp(`/updates/dev/files/${identity}\\.zip$`));
+  await downloadFirmware(asset);
+  assert.match(paths[3], new RegExp(`/updates/files/${identity}\\.zip$`));
+});
+
 test('malformed catalogue entries and more than five versions are rejected before rendering', async () => {
   const asset = { size: 22, sha256: 'a'.repeat(64), path: `files/${'a'.repeat(64)}.zip` };
   const source = { id: 'unleashed', label: 'Unleashed', releases: [

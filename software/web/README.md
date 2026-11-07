@@ -4,7 +4,21 @@ Connect an Ultra with matching firmware over USB and open
 [192.168.16.1](http://192.168.16.1). Use one active browser client.
 Internet access is needed to download the matching app resources.
 
-To update, choose **Device → Update firmware** and select a release or local ZIP.
+For Bluetooth, use the standalone app on HTTPS or localhost, wake the Ultra,
+and choose **Connect Bluetooth** in Chrome or another compatible browser.
+The connection pill (top right on mobile, bottom left on desktop) shows the link
+and battery. After a disconnection it becomes **Reconnect**.
+The firmware must include Web API contract 1; an older firmware needs a USB
+update first. The hosted app works directly over BLE and does not require
+the USB network connection. Safari and Firefox do not provide native Web Bluetooth.
+[Build, compatibility and test bench →](../../docs/web-bluetooth.md)
+
+NFC-V and NFC-B emulation pause while Bluetooth is connected; Slots and Device
+mark them as paused. Transfer the slot image over BLE, then choose
+**Device → Disconnect Bluetooth** to emulate. This restriction applies to
+emulation, not the reader functions.
+
+Firmware updates require USB. Choose **Device → Firmware update** and select a release or local ZIP.
 You can also use the CLI with a release archive.
 [First installation and recovery →](../../docs/web-updates.md)
 
@@ -39,3 +53,8 @@ Resources are saved automatically in the browser when Internet is available.
 Before going offline, check **Device → Offline use → Ready offline** in the
 browser you will use. Use **Retry** if preparation is incomplete.
 **Session only** does not survive a reload.
+
+In the hosted Bluetooth app, **Ready offline** also checks the HTML, stylesheet,
+icons, app bundle and worker. Close and reopen that same URL once before leaving
+Internet access. Browser storage can be evicted; export important documents.
+Firmware updates continue to require USB.

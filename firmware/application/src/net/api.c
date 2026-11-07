@@ -18,6 +18,7 @@
 #include "nfca_session.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "ble_main.h"
 
 #define ST25TB_TEAROFF_ROUTE "/api/st25tb/tearoff/"
@@ -26,6 +27,8 @@ static uint32_t session, next_session, renewed;
 static device_mode_t previous_mode;
 static bool reader_session;
 static bool end_after_tearoff;
+static api_source_t session_source;
+static atomic_uchar disconnected_sources;
 extern volatile bool m_is_field_on;
 
 void web_session_end(void) {
@@ -43,7 +46,14 @@ void web_session_end(void) {
     end_after_tearoff = false;
 }
 
+void web_session_disconnect(api_source_t source) {
+    if (source == API_SOURCE_HTTP || source == API_SOURCE_BLE)
+        atomic_fetch_or(&disconnected_sources, 1u << source);
+}
+
 void web_session_poll(void) {
+    unsigned disconnected = atomic_exchange(&disconnected_sources, 0);
+    if (session && (disconnected & (1u << session_source))) web_session_end();
     if (end_after_tearoff && !web_tearoff_active()) web_session_end();
     if (session && app_timer_cnt_diff_compute(app_timer_cnt_get(), renewed) >= APP_TIMER_TICKS(30000)) {
         web_session_end();
@@ -76,13 +86,22 @@ static bool number(const char **text, uint32_t *value) {
 
 api_response_t api_dispatch_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *output, size_t capacity) {
+    return api_dispatch_from(API_SOURCE_HTTP, method, uri, body, size, output, capacity);
+}
+
+api_response_t api_dispatch_from(api_source_t source, const char *method, const char *uri,
+    const uint8_t *body, size_t size, uint8_t *output, size_t capacity) {
+    if (source != API_SOURCE_HTTP && source != API_SOURCE_BLE) return result(400, 0);
+    web_session_poll();
+    if (session && session_source != source && strcmp(method, "GET")) return result(409, 0);
     if (web_update_entering() && strcmp(method, "GET")) return result(409, 0);
     /* Existing GET routes inspect metadata only; session and setting changes
      * are POST and remain unavailable until the explicit full restart. */
     if (ble_slave_rf_only() && strcmp(method, "GET"))
         return result(409, 0);
-    web_session_poll();
     if (!strcmp(method, "POST") && (usb_cdc_tearoff_running() || hf_sniff_active())) return result(409, 0);
+    if (!strcmp(method, "GET") && !strcmp(uri, "/api/update"))
+        return web_update_application_request(method, uri, body, size, output, capacity);
     api_response_t device = web_device_request(method, uri, body, size, output, capacity);
     if (device.status != 404) return device;
     if (!strcmp(method, "GET") && !strcmp(uri, "/api/status")) {
@@ -102,6 +121,7 @@ api_response_t api_dispatch_request(const char *method, const char *uri,
         previous_mode = get_device_mode();
         reader_session = !slot_session;
         session = ++next_session;
+        session_source = source;
         renewed = app_timer_cnt_get();
         web_slots_reset();
         if (reader_session && previous_mode != DEVICE_MODE_READER) reader_mode_enter();

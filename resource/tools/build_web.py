@@ -53,11 +53,12 @@ def source_version(directory):
     revision = subprocess.run(['git', '-C', str(directory), 'rev-parse', '--verify', 'HEAD'],
                               capture_output=True, text=True)
     if revision.returncode:
-        return {'revision': None, 'dirty': None}
+        return {'revision': None, 'dirty': None, 'committedAt': None}
 
     status = subprocess.check_output([
         'git', '-C', str(directory), 'status', '--porcelain', '--untracked-files=normal'])
-    return {'revision': revision.stdout.strip(), 'dirty': bool(status)}
+    timestamp = subprocess.check_output(['git', '-C', str(directory), 'show', '-s', '--format=%ct', 'HEAD'])
+    return {'revision': revision.stdout.strip(), 'dirty': bool(status), 'committedAt': int(timestamp)}
 
 
 def fingerprint(directory, shared=False):
@@ -221,8 +222,11 @@ def main():
     manifest = {'version': 2, 'abi': 1, 'tablePack': table, 'modules': modules}
     (cdn / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (ROOT / '.cache/web/hardnested.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    frontend = hashlib.sha256(''.join(fingerprint(WEB / name)
+                             for name in ('src', 'public', 'hosted')).encode()
+                             + (ROOT / 'software/rust/chameleon-client/src/lf_hid.rs').read_bytes()).hexdigest()
     build = {'projectVersion': config['projectVersion'], 'source': source,
-             'shared': shared_version, 'resourceBase': config['baseUrl']}
+             'shared': shared_version, 'resourceBase': config['baseUrl'], 'frontendSha256': frontend}
     if args.resources_only:
         from package_cdn import copy_asset
 
@@ -280,6 +284,11 @@ def main():
                ' return NULL;', '}']
     (out / 'web_assets.h').write_text('\n'.join(header) + '\n')
     (out / 'sizes.json').write_text(json.dumps(sizes, indent=2) + '\n')
+    # The resource-only command must never silently package an older frontend
+    # with newer modules. Capture the frontend's exact pins and file hashes.
+    site_build = {'build': build, 'core': core_asset, 'hardnested': modules,
+                  'tables': table, 'files': sizes}
+    (out / 'site-build.json').write_text(json.dumps(site_build, indent=2) + '\n')
     # Capture provenance with the built modules, not with a later packaging checkout.
     (ROOT / '.cache/web/cdn-build.json').write_text(json.dumps(build, indent=2) + '\n')
     print(f'Embedded assets: {sum(v["gzip"] for v in sizes.values())} gzip bytes')

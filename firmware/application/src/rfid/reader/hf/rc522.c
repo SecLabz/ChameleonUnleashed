@@ -267,22 +267,23 @@ uint16_t pcd_14a_reader_timeout_get() {
     return g_com_timeout_ms;
 }
 
-/* The first wake-up after an unfinished authentication can be ignored. Use
- * the RTC counter for short retries; the BSP timer advances only every 10 ms. */
+/* Measure each transaction from the RTC. The shared BSP clock advances by
+ * 10 ms and its next callback can occur immediately after a counter reset.
+ * First wake-ups keep their 1 ms budget; all other waits use the configured
+ * budget. A latched completion remains valid if an interrupt delayed polling. */
 static bool wait_for_irq(uint8_t wait_for, uint8_t *irq) {
     uint32_t wait_started = mf1_capture_clock();
-    uint32_t started_ticks = m_short_wakeup_wait ? app_timer_cnt_get() : 0;
-    bsp_set_timer(g_timeout_auto_timer, 0);
-    bool not_timeout;
+    uint32_t started_ticks = app_timer_cnt_get();
+    uint32_t timeout_ticks = APP_TIMER_TICKS(m_short_wakeup_wait ? 1 : g_com_timeout_ms);
+    bool completed;
     do {
         *irq = read_register_single(ComIrqReg);
-        not_timeout = m_short_wakeup_wait
-            ? app_timer_cnt_diff_compute(app_timer_cnt_get(), started_ticks) < APP_TIMER_TICKS(1)
-            : NO_TIMEOUT_1MS(g_timeout_auto_timer, g_com_timeout_ms);
-    } while (not_timeout && !(*irq & wait_for));
+        completed = (*irq & wait_for) != 0;
+    } while (!completed &&
+             app_timer_cnt_diff_compute(app_timer_cnt_get(), started_ticks) < timeout_ticks);
     mf1_capture_stats.wait_cycles += mf1_capture_elapsed(wait_started);
-    if (mf1_capture_stats.enabled && !not_timeout) mf1_capture_stats.timeouts++;
-    return not_timeout;
+    if (mf1_capture_stats.enabled && !completed) mf1_capture_stats.timeouts++;
+    return completed;
 }
 
 /**
@@ -724,6 +725,9 @@ uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
     // which case we need to make a cascade 2 request and select - this is a long UID
     // While the UID is not complete, the 3nd bit (from the right) is set in the SAK.
     for (; do_cascade; cascade_level++) {
+        if (cascade_level >= 3) {
+            return STATUS_HF_ERR_STAT;
+        }
         // SELECT_* (L1: 0x93, L2: 0x95, L3: 0x97)
         uint8_t sel_all[]    = { PICC_ANTICOLL1, 0x20 };
         uint8_t sel_uid[]    = { PICC_ANTICOLL1, 0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -740,7 +744,13 @@ uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
             NRF_LOG_INFO("Err at tag collision.\n");
             return status;
         } else {  // no collision, use the response to SELECT_ALL as current uid
-            memcpy(uid_resp, resp, 5); // UID + original BCC
+            // A short NAK or truncated reply is not a UID with a bad BCC.
+            // Reject it before reading bytes that were not received, including
+            // when the caller explicitly allows BCC repair.
+            if (len != sizeof(uid_resp) * 8) {
+                return STATUS_HF_ERR_STAT;
+            }
+            memcpy(uid_resp, resp, sizeof(uid_resp)); // UID + original BCC
         }
 
         uint8_t uid_resp_len = 4;
@@ -768,7 +778,7 @@ uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
 
         // send 9x 70 Choose a card
         status = pcd_14a_reader_bytes_transfer(PCD_TRANSCEIVE, sel_uid, sizeof(sel_uid), resp, &len, U8ARR_BIT_LEN(resp));
-        if (status != STATUS_HF_TAG_OK) {
+        if (status != STATUS_HF_TAG_OK || len != 24) {
             NRF_LOG_INFO("Err at sak receive.\n");
             return STATUS_HF_ERR_STAT;
         }

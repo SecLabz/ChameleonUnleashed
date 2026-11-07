@@ -9,12 +9,13 @@ reinstallation and updates. [Step-by-step instructions](../README.md#quick-insta
 ## Update through a browser
 
 1. Connect the Ultra over USB to a compatible device and open [192.168.16.1](http://192.168.16.1).
-2. Choose **Device → Update firmware**.
+2. Choose **Device → Firmware update**.
 3. Select the firmware and version, then install. Keep USB connected until completion.
 
 You can also choose a Nordic DFU ZIP with **Update from a file**.
 A local ZIP works without Internet; downloading a release requires Internet access.
 The selector offers up to five compatible stable versions of Unleashed and Official.
+Choose **Development** to install the latest development build; it may be unstable.
 
 ## First installation and versions
 

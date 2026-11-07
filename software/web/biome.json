@@ -10,6 +10,9 @@
       "!src/vendor/**",
       "!build-lock.json",
       "!test-results/**",
+      "!test-results-hardware/**",
+      "!test-results-hosted/**",
+      "!test-results-mobile/**",
       "!playwright-report/**"
     ]
   },

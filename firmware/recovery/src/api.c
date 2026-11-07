@@ -62,5 +62,6 @@ api_response_t api_dispatch_request(const char *method, const char *uri,
 }
 
 void web_session_end(void) {} /* USB reconnects never invalidate accepted flash bytes. */
+void web_session_disconnect(api_source_t source) { (void)source; }
 void web_session_poll(void) {}
 bool web_session_active(void) { return web_update_active(); }

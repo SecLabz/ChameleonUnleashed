@@ -11,8 +11,13 @@ import subprocess
 from package_release import PLATFORMS
 
 
-def superseded(assets, archives):
-    if len(archives) != len(PLATFORMS) + 1:
+def superseded(assets, archives, development=False):
+    if development:
+        from development import RESOURCE_PACKAGE
+        import re
+        if len(archives) != 1 or not re.fullmatch(RESOURCE_PACKAGE, next(iter(archives))):
+            raise ValueError('Expected one development firmware/resources package')
+    elif len(archives) != len(PLATFORMS) + 1:
         raise ValueError('Expected all five packaged release archives')
     uploaded = {asset['name']: asset for asset in assets}
     for name, data in archives.items():
@@ -28,13 +33,18 @@ def main():
     parser.add_argument('--repo', default=os.environ.get('GITHUB_REPOSITORY'))
     parser.add_argument('--tag', required=True)
     parser.add_argument('--archives', type=Path, required=True)
+    parser.add_argument('--development', action='store_true')
     args = parser.parse_args()
     if not args.repo:
         parser.error('--repo or GITHUB_REPOSITORY is required')
     archives = {path.name: path.read_bytes() for path in args.archives.glob('*.zip')}
     release = json.loads(subprocess.check_output([
         'gh', 'api', f'repos/{args.repo}/releases/tags/{args.tag}']))
-    for asset in superseded(release['assets'], archives):
+    if args.development and args.tag != 'dev':
+        parser.error('Development cleanup is restricted to the dev pre-release')
+    if args.development and (not release.get('prerelease') or release.get('draft')):
+        raise ValueError('Expected a public development pre-release')
+    for asset in superseded(release['assets'], archives, args.development):
         subprocess.run(['gh', 'api', '--method', 'DELETE',
                         f"repos/{args.repo}/releases/assets/{asset['id']}"], check=True)
         print('Removed superseded download:', asset['name'])

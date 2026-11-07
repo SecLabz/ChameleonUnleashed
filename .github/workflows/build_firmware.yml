@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      run-tests:
+        description: Run automated checks and tests before packaging
+        required: false
+        type: boolean
+        default: true
       publish-builder:
         description: Build and publish the firmware builder image
         required: false
@@ -153,6 +158,7 @@ jobs:
         with:
           node-version: 24
       - name: Check and test the native CLI
+        if: ${{ inputs.run-tests }}
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.shared.outputs.rust }}
         run: |
@@ -166,16 +172,31 @@ jobs:
       - name: Install hardware test dependency
         run: python3 -m pip install pyserial==3.5 cryptography==43.0.3
       - name: Check web interface and host fixtures
+        if: ${{ inputs.run-tests }}
         run: |
           npm ci --prefix software/web
           npm run check --prefix software/web
           npm test --prefix software/web
           python3 -m unittest discover -s resource/tools -p 'test_*.py' -v
+          python3 -m unittest discover -s software/web/tests/hardware -p 'test_pm3_*.py' -v
       - name: Test web interface in browsers
-        if: ${{ inputs.browser-tests }}
+        if: ${{ inputs.run-tests && inputs.browser-tests }}
         run: |
           npm exec --prefix software/web -- playwright install --with-deps chromium webkit
           npm run test:browser --prefix software/web
+          npm run test:hosted --prefix software/web
+          npm run test:mobile --prefix software/web
+      - name: Retain failed browser evidence
+        if: ${{ failure() && inputs.run-tests && inputs.browser-tests }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.device_type }}-web-browser-failures
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            software/web/test-results/
+            software/web/test-results-hosted/
+            software/web/test-results-mobile/
       - name: Build firmware
         run: |
           docker run --rm -v ${PWD}:/workdir -e CURRENT_DEVICE_TYPE=${{ matrix.device_type }} "${{ needs.build_fw_builder.outputs.image_ref }}" firmware/build.sh

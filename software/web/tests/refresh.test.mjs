@@ -107,6 +107,44 @@ test('a manual device refresh can await an existing refresh and errors do not pr
   assert.deepEqual(notices, [], 'background refresh stays silent');
 });
 
+test('the connection card, pill and Scan prompt share one USB connection state', async (t) => {
+  const get = dom(t);
+  let fail = true;
+  t.mock.method(globalThis, 'fetch', async (path) => {
+    if (fail) {
+      throw new Error('Failed to fetch');
+    }
+    return response(path);
+  });
+
+  const views = deviceViews({ notify() {}, onConnection() {} });
+  assert.equal(get('connection-title').textContent, 'Connecting…');
+  assert.equal(get('connection').dataset.state, 'pending');
+  assert.equal(get('scan-connect').hidden, true, 'Scan waits for the first check');
+
+  await views.refresh();
+  assert.equal(get('connection-title').textContent, 'Ultra not reachable');
+  assert.equal(get('connection').textContent, 'Not connected');
+  assert.equal(get('connection').dataset.state, 'offline');
+  assert.equal(get('scan-connect').hidden, false);
+  assert.equal(get('scanner').hidden, true);
+  assert.equal(get('scan-connect-button').textContent, 'Retry');
+  assert.equal(get('device-settings').hidden, true, 'stale settings are not editable');
+  assert.equal(get('emulation-state').hidden, true);
+  assert.equal(get('connect-bluetooth').hidden, true, 'the USB-served app has no Web Bluetooth');
+
+  fail = false;
+  await views.refresh();
+  assert.equal(get('connection-title').textContent, 'Chameleon Ultra');
+  assert.equal(get('connection-help').textContent, 'Connected over USB');
+  assert.equal(get('connection').dataset.state, 'connected');
+  assert.equal(get('scan-connect').hidden, true);
+  assert.equal(get('scanner').hidden, false);
+  assert.equal(get('device-settings').hidden, false);
+  assert.equal(get('connection-actions').hidden, true, 'USB alone offers no transport actions');
+  assert.equal(get('firmware-update-note').hidden, true, 'firmware updates are available over USB');
+});
+
 test('concurrent slot refreshes wait for all eight slots instead of returning premature success', async (t) => {
   const get = dom(t);
   let release;

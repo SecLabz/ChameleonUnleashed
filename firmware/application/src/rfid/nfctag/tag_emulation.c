@@ -230,7 +230,11 @@ bool tag_emulation_load_by_buffer(tag_specific_type_t tag_type, bool update_crc)
     }
 
     int length = loader(tag_type, buffer);
-    if (length > 0 && update_crc) {
+    if (length <= 0 || length > buffer->length) return false;
+    // Revisions include the live buffer. A smaller image must not retain
+    // another slot's bytes beyond its native data, including in shadow mode.
+    memset(buffer->buffer + length, 0, buffer->length - length);
+    if (update_crc) {
         // afterReadingIsCompleted,WeCanSaveACrcOfTheCurrentDataWhenItIsStoredLater,ItCanBeUsedAsAReferenceForChangesComparison
         calc_14a_crc_lut(buffer->buffer, length, (uint8_t *)buffer->crc);
         return true;
@@ -262,6 +266,7 @@ static bool load_data_by_tag_type(uint8_t slot, tag_specific_type_t tag_type) {
     // The callback must see the record length, not the larger shared buffer.
     int length = loader(tag_type, &image);
     if (length <= 0 || length > image.length) return false;
+    memset(image.buffer + length, 0, buffer->length - length);
     calc_14a_crc_lut(image.buffer, length, (uint8_t *)image.crc);
     return true;
 }

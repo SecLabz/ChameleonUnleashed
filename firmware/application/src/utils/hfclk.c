@@ -11,7 +11,7 @@ enum { HFCLK_START_TIMEOUT_US = 10000, HFCLK_POLL_INTERVAL_US = 10 };
 uint8_t app_hfclk_owners(void) { return owners; }
 
 static uint32_t change(uint8_t owner, uint8_t acquire) {
-    if (owner != HFCLK_USB && owner != HFCLK_LF && owner != HFCLK_NFC) return NRF_ERROR_INVALID_PARAM;
+    if (owner != HFCLK_USB && owner != HFCLK_LF && owner != HFCLK_NFC && owner != HFCLK_READER) return NRF_ERROR_INVALID_PARAM;
     uint8_t nested;
     uint32_t result = sd_nvic_critical_region_enter(&nested);
     if (result) return result;

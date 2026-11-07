@@ -15,7 +15,7 @@ Choose the archive for your computer. It contains the CLI, `firmware.zip` and
 Extract the archive, keep `firmware.zip` intact and follow `INSTALL.txt`.
 [Step-by-step instructions](../README.md#quick-installation).
 
-You can also update from **Device → Update firmware** in the USB web interface.
+You can also update from **Device → Firmware update** in the USB web interface.
 [Browser updates and recovery](web-updates.md).
 
 For standalone firmware, HEX images or web resources, use
@@ -30,4 +30,7 @@ For standalone firmware, HEX images or web resources, use
 | `images/` | HEX images for direct programming. |
 | `cdn/` | Matching web resources for self-hosting. Keep older resources available. |
 
-The `dev` pre-release contains development builds. Prefer a stable release for normal use.
+The `dev` pre-release contains the latest build from `develop`, without desktop
+clients. Its archive includes `firmware/install.zip` for the CLI and
+`firmware/application.zip` for web recovery. The matching Bluetooth site is under
+`dev/app/` on GitHub Pages. Development builds may be unstable.

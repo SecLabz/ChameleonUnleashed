@@ -1,86 +1,15 @@
 #!/usr/bin/env python3
 """Rebuild Pages from release archives, without committing firmware to Git."""
 import argparse
-import hashlib
-import io
 import json
-from pathlib import Path, PurePosixPath
-import stat
+from pathlib import Path
 import tempfile
-from zipfile import ZipFile
 
-from mirror_firmware import fetch, mirror
+from mirror_firmware import fetch, mirror, save_atomic
+from hosted_web import archived_shell
+from development import DEVELOPMENT_TAG, manifest, stage as stage_development
 
-RESOURCE_FOLDERS = {'core', 'hardnested', 'tables', 'releases'}
-MAX_EXPANDED = 256 * 1024 * 1024
-
-
-def resource_path(name):
-    path = PurePosixPath(name)
-    if (not path.name or path.is_absolute() or '..' in path.parts or '\\' in name
-            or ':' in name or path.as_posix() != name or path.parts[0] not in RESOURCE_FOLDERS):
-        raise ValueError('Unexpected resource path: ' + name)
-    return path
-
-
-def cdn_files(data, prefix=''):
-    files = {}
-    expanded = 0
-    with ZipFile(io.BytesIO(data)) as archive:
-        entries = archive.infolist()
-        if len(entries) > 4096 or len({entry.filename for entry in entries}) != len(entries):
-            raise ValueError('Duplicate or excessive archive entries')
-        for entry in entries:
-            if not entry.filename.startswith(prefix) or entry.is_dir():
-                continue
-            name = entry.filename[len(prefix):]
-            # Releases already bundle their update ZIP under cdn/updates/.
-            # The live catalogue publishes only its selected five per source.
-            if name.startswith('updates/'):
-                continue
-            resource_path(name)
-            expanded += entry.file_size
-            if (stat.S_ISLNK(entry.external_attr >> 16) or entry.flag_bits & 1
-                    or entry.file_size > 64 * 1024 * 1024 or expanded > MAX_EXPANDED):
-                raise ValueError('Unsafe or oversized resource archive')
-            files[name] = archive.read(entry)
-    manifests = [name for name in files if name.startswith('releases/') and name.endswith('.json')]
-    if len(manifests) != 1:
-        raise ValueError('Expected exactly one CDN release manifest')
-    manifest_path = manifests[0]
-    manifest_bytes = files[manifest_path]
-    if manifest_path != 'releases/' + hashlib.sha256(manifest_bytes).hexdigest() + '.json':
-        raise ValueError('CDN release manifest differs from its content address')
-    manifest = json.loads(manifest_bytes)
-    if manifest.get('version') != 1 or not manifest.get('projectVersion'):
-        raise ValueError('Unsupported CDN release manifest')
-    expected = {manifest_path}
-    for asset in manifest['resources']:
-        name = asset['path']
-        resource_path(name)
-        if name in expected:
-            raise ValueError('Duplicate CDN manifest resource')
-        expected.add(name)
-        contents = files[name]
-        if len(contents) != asset['size'] or hashlib.sha256(contents).hexdigest() != asset['sha256']:
-            raise ValueError('CDN resource differs from its manifest: ' + name)
-    if set(files) != expected:
-        raise ValueError('CDN archive contains unlisted resources')
-    return files
-
-
-def merge_resources(files, destination):
-    """Newest archive is applied first; old resources remain available by hash."""
-    for name, contents in files.items():
-        path = destination / resource_path(name)
-        if path.exists():
-            # Folder manifests are discovery metadata, unlike immutable modules
-            # and content-addressed release manifests. Keep the newest metadata.
-            if path.name == 'manifest.json' or path.read_bytes() == contents:
-                continue
-            raise ValueError('Conflicting published resource: ' + name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(contents)
+from web_resources import RESOURCE_FOLDERS, resource_path, cdn_files, merge_resources
 
 
 def baseline_files(directory):
@@ -108,13 +37,36 @@ def prepare(output, baseline=None, resource_archive=None, get=fetch):
     with tempfile.TemporaryDirectory(dir=output.parent, prefix='.pages-') as temporary:
         site = Path(temporary) / 'site'
         site.mkdir()
+        selected = None
+        development = None
+        development_catalogue = {'format': 1, 'sources': []}
+
+        def receive(data, release):
+            nonlocal selected, development, development_catalogue
+            if release.get('tag_name') == DEVELOPMENT_TAG:
+                development, development_catalogue = stage_development(data, release, site)
+                return
+            files = cdn_files(data, prefix='cdn/')
+            merge_resources(files, site)
+            _, document = manifest(files)
+            candidate = archived_shell(document, files)
+            if not release.get('prerelease') and candidate and (selected is None or candidate[0] > selected[0]):
+                selected = candidate
+
         # A current CI build may precede the latest stable release (dev builds).
         if resource_archive is not None:
             merge_resources(cdn_files(resource_archive.read_bytes()), site)
-        catalogue = mirror(site / 'updates', get=get,
-                           on_resources=lambda data: merge_resources(cdn_files(data, prefix='cdn/'), site))
+        catalogue = mirror(site / 'updates', get=get, on_resources=receive)
         if baseline is not None:
             merge_resources(baseline_files(baseline), site)
+        for candidate, folder in ((selected, 'app'), (development, 'dev/app')):
+            if candidate is None:
+                continue
+            app = site / folder
+            app.mkdir()
+            for name, contents in candidate[1].items():
+                (app / name).write_bytes(contents)
+        save_atomic(site / 'updates/dev/catalog.json', (json.dumps(development_catalogue, indent=2) + '\n').encode())
         (site / '.nojekyll').write_bytes(b'')
         if output.exists():
             output.rmdir()

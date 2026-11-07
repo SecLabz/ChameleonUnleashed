@@ -25,6 +25,18 @@ static bool corrupt_written_key_b;
 static unsigned new_key_a_authentications;
 static unsigned new_key_b_authentications;
 static bool unauthenticated;
+static uint8_t selected_sak = 8;
+static bool selected_sak_from_block0;
+static uint16_t capacity_status = STATUS_HF_TAG_NO;
+static unsigned capacity_checks;
+
+uint16_t mf1_classic_2k_sl1_check(uint8_t uid_length, const uint8_t *uid,
+                                  const uint8_t *atqa, uint8_t sak) {
+    assert(uid_length == 4 && !memcmp(uid, memory[0], 4));
+    assert(sak == 8 && atqa[0] == 4 && atqa[1] == 0);
+    capacity_checks++;
+    return capacity_status;
+}
 
 static uint16_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag) {
     if (lost_activation && writes) {
@@ -33,7 +45,8 @@ static uint16_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag) {
     memset(tag, 0, sizeof(*tag));
     memcpy(tag->uid, memory[0], 4);
     tag->uid_len = 4;
-    tag->sak = incompatible_activation && writes ? 9 : 8;
+    tag->sak = incompatible_activation && writes ? 9 :
+        selected_sak_from_block0 ? memory[0][5] : selected_sak;
     tag->atqa[0] = 4;
     if (++scans == replace_scan) {
         tag->uid[0] ^= 1;
@@ -112,6 +125,10 @@ uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
 /* WRITE FUNCTIONS */
 
 static void reset(void) {
+    selected_sak = 8;
+    selected_sak_from_block0 = false;
+    capacity_status = STATUS_HF_TAG_NO;
+    capacity_checks = 0;
     writes = 0;
     scans = 0;
     replace_scan = 0;

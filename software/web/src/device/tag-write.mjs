@@ -13,6 +13,7 @@ import { scanNfcA } from './hf-reader.mjs';
 import { COMMAND } from './commands.mjs';
 import { withDevice } from './transport.mjs';
 import { Device, hex } from './device.mjs';
+import { inspectClassic } from './classic-inspect.mjs';
 import { filterDictionary } from '../recovery/dictionary.mjs';
 
 const MODELS = {
@@ -49,6 +50,29 @@ export function supportsPhysicalCopy(source) {
 
 const bytesEqual = (left, right) =>
   !!left && !!right && left.length === right.length && left.every((value, index) => value === right[index]);
+
+async function classicCopyCapacity(device, source, card, onProgress) {
+  const sak = card.sak & ~0x20;
+  let blocks = { 9: 20, 8: 64, 16: 128, 24: 256 }[sak];
+  let ats = card.ats || [];
+  if (sak === 8) {
+    // SAK 08 is shared by 1K and Plus SL1 2K. A source image or cached scan
+    // cannot establish the capacity of a different physical target.
+    const observation = await inspectClassic(device, card, onProgress, { modelEvidence: true });
+    if (!observation.modelEvidence) {
+      throw new Error('Update the firmware to verify the target Classic capacity before copying.');
+    }
+    ats = observation.ats || [];
+    if (ats.length && observation.type !== 1002) {
+      throw new Error('The target Classic capacity cannot be established from its ATS.');
+    }
+    blocks = observation.type === 1002 ? 128 : 64;
+  }
+  if (source.geometry.blocks !== blocks) {
+    throw new Error('The target Classic size differs');
+  }
+  return ats;
+}
 
 function isUserUnit(document, index) {
   if (document.kind === 'classic') {
@@ -400,7 +424,9 @@ async function checkTrailers(device, model, uid, units, sectorKeys) {
         credentials[unit.index] = credential;
         break;
       } catch (error) {
-        if (![2, 6, 7, 0x70].includes(error.status)) {
+        // This read-only preflight can reject A's permissions with CMD_ERR.
+        // Try the other known key; no writes run until every trailer passes.
+        if (![2, 6, 7, 0x70, 0x75].includes(error.status)) {
           const reason =
             error.status === 0x60
               ? 'Invalid trailer access bytes, or firmware needs updating'
@@ -709,11 +735,8 @@ export async function copyToTag(
       if ((source.kind === 'classic') !== [8, 9, 16, 24].includes(card.sak & ~0x20)) {
         throw new Error('The target tag family differs');
       }
-      if (
-        source.kind === 'classic' &&
-        source.geometry.blocks !== { 9: 20, 8: 64, 16: 128, 24: 256 }[card.sak & ~0x20]
-      ) {
-        throw new Error('The target Classic size differs');
+      if (source.kind === 'classic') {
+        card.ats = await classicCopyCapacity(device, source, card, onProgress);
       }
       if (source.kind === 'type2' && card.uid.length !== 7) {
         throw new Error('Expected a seven-byte Type 2 UID');
@@ -816,6 +839,12 @@ export async function copyToTag(
       total = cloning ? clone.writes : plan.writes.length;
 
       onProgress('Checking that the target has not changed…');
+      if (source.kind === 'classic') {
+        const ats = await classicCopyCapacity(device, source, card, onProgress);
+        if (!bytesEqual(card.ats, ats)) {
+          throw new Error('The target changed during review. No writes were sent.');
+        }
+      }
       const current = await withRuntime(
         (call) =>
           source.kind === 'classic'
@@ -899,8 +928,14 @@ export async function copyToTag(
           !bytesEqual(observed.uid, source.card.uid) ||
           !bytesEqual(observed.atqa, source.card.atqa) ||
           observed.sak !== source.card.sak ||
-          !bytesEqual(observed.ats || [], source.card.ats || [])
+          (observed.ats?.length && !bytesEqual(observed.ats, source.card.ats || []))
         ) {
+          throw new Error('The target radio identity does not match the source');
+        }
+        // The Classic scan can omit RATS. Obtain fresh bound ATS evidence for
+        // SL1 targets before comparing activation data after cloning.
+        observed.ats = await classicCopyCapacity(device, source, observed, onProgress);
+        if (!bytesEqual(observed.ats, source.card.ats || [])) {
           throw new Error('The target radio identity does not match the source');
         }
       }

@@ -56,7 +56,7 @@ The first use needs Internet access to download matching CDN resources, which
 are saved in your browser. Before going offline, check
 **Device → Offline use → Ready offline**. [Web guide →](software/web/README.md)
 
-To update, choose **Device → Update firmware**, or use the CLI with a release archive.
+To update, choose **Device → Firmware update**, or use the CLI with a release archive.
 [Updates and recovery →](docs/web-updates.md)
 
 ## Native CLI

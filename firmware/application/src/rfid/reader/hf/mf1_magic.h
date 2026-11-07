@@ -41,8 +41,20 @@ uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
  * then six bytes per essential key in priority order. Reply: the unchanged
  * three-byte magic evidence, PRNG (0..2), verified credential (0/1/2), key[6]
  * (zero when absent). No memory image is read and no write data is sent.
- * Success binds all observations to the supplied UID/ATQA/SAK. */
+ * Success binds all observations to the supplied UID/ATQA/SAK. An optional
+ * trailing request byte 1 appends evidence-version 1, ATS length (0..64), and
+ * that many raw ATS bytes including CRC-A. Legacy requests retain 11 bytes.
+ * ATS comes from the existing RATS probe; invalid TL/CRC/bit lengths return
+ * no ATS. Later identity failures suppress the entire reply. */
 uint16_t mf1_classic_inspect(uint16_t length, const uint8_t *data,
                              uint8_t *output, uint16_t *output_length);
+
+/* Read-only Plus S/X SL1 2K capacity evidence for guarded mutations. Require
+ * SAK 08, matching UID/ATQA layout and a valid known ATS (TL, CRC, history).
+ * Reselect the same UID/ATQA/SAK before returning success in Classic state.
+ * Failure leaves RF off and Crypto1 disabled. Restore timeout/configuration;
+ * no authentication, memory read, WRITE opcode or write data is sent. */
+uint16_t mf1_classic_2k_sl1_check(uint8_t uid_length, const uint8_t *uid,
+                                 const uint8_t *atqa, uint8_t sak);
 
 #endif
