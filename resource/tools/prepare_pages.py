@@ -13,6 +13,7 @@ from web_resources import RESOURCE_FOLDERS, resource_path, cdn_files, merge_reso
 
 
 def baseline_files(directory):
+    """Keep stable resources without resurrecting previous development builds."""
     files = {}
     for folder in sorted(RESOURCE_FOLDERS):
         root = directory / folder
@@ -25,7 +26,22 @@ def baseline_files(directory):
                 name = path.relative_to(directory).as_posix()
                 resource_path(name)
                 files[name] = path.read_bytes()
-    return files
+    manifests = {name: json.loads(data) for name, data in files.items()
+                 if name.startswith('releases/') and name.endswith('.json')}
+    development_revisions = {document.get('source', {}).get('revision')
+                             for document in manifests.values()
+                             if document.get('channel') == 'development'} - {None}
+    discarded = set()
+    retained = set()
+    for name, document in manifests.items():
+        paths = {name, *(resource_path(asset['path']).as_posix() for asset in document['resources'])}
+        # Older dev packages also retained the unlabelled original web variant.
+        development = (document.get('channel') == 'development'
+                       or document.get('source', {}).get('revision') in development_revisions)
+        (discarded if development else retained).update(paths)
+    # Modules and tables shared with stable releases must remain available.
+    discarded.difference_update(retained)
+    return {name: data for name, data in files.items() if name not in discarded}
 
 
 def prepare(output, baseline=None, resource_archive=None, get=fetch):

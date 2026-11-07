@@ -1,4 +1,4 @@
-"""Exercise branch snapshots, durable resources and isolated stable/dev deployments."""
+"""Exercise current-only development snapshots and isolated stable/dev deployments."""
 import hashlib
 import io
 import json
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from zipfile import ZipFile
 
-from development import prepare, previous_resources, latest_development, manifest
+from development import prepare, latest_development, manifest
 from bootloader_version import read_version as bootloader_version
 from mirror_firmware import SOURCES
 from package_release import PLATFORMS
@@ -15,6 +15,7 @@ from prepare_pages import prepare as prepare_pages
 from sync_release_assets import superseded
 from test_prepare_pages import resources, zipped
 from test_web_update import archive, fixtures, signed_packet
+from web_resources import cdn_files
 
 
 class DevelopmentTests(unittest.TestCase):
@@ -74,13 +75,15 @@ class DevelopmentTests(unittest.TestCase):
             return json.dumps(self.releases[repo]).encode()
         return self.downloads[url]
 
-    def test_replacement_retains_old_resources_without_old_installable_firmware(self):
+    def test_replacement_contains_only_current_firmware_and_resources(self):
         first_name, first, original_first = self.build('a' * 40)
         name, second, original_second = self.build('b' * 40, first)
-        retained = previous_resources(second)
-        for original in (original_first, original_second):
-            for key, value in original.items():
-                self.assertEqual(retained[key], value)
+        current = cdn_files(second, prefix='cdn/')
+        for key in original_first.keys() - original_second.keys():
+            self.assertNotIn(key, current)
+        for key, value in original_second.items():
+            if key.startswith(('core/', 'hardnested/', 'tables/')):
+                self.assertEqual(current[key], value)
         self.assertTrue(name.endswith('-dev.bbbbbbb-firmware-resources.zip'))
         self.assertEqual(len(list((self.root / 'b').glob('*.zip'))), len(PLATFORMS) + 1)
         for platform in PLATFORMS:
@@ -94,7 +97,9 @@ class DevelopmentTests(unittest.TestCase):
             self.assertEqual(package.read('firmware/application.zip'), self.application)
             self.assertEqual(package.read('firmware/install.zip'), self.installer)
             self.assertNotIn(first_name, package.namelist())
-            self.assertFalse(any(key.startswith('history/firmware/') for key in package.namelist()))
+            self.assertFalse(any(key.startswith('history/') for key in package.namelist()))
+            self.assertEqual({key.split('/')[0] for key in package.namelist()},
+                             {'README.txt', 'firmware', 'images', 'cdn'})
             current = {key.removeprefix('cdn/'): package.read(key)
                        for key in package.namelist() if key.startswith('cdn/')}
             _, document = manifest(current)
@@ -130,7 +135,7 @@ class DevelopmentTests(unittest.TestCase):
         entry = dev['sources'][0]['releases'][0]
         self.assertTrue(entry['prerelease'])
         self.assertIn('bbbbbbb', entry['version'])
-        for key, value in previous_resources(current).items():
+        for key, value in cdn_files(current, prefix='cdn/').items():
             self.assertEqual((site / key).read_bytes(), value)
         # Every subsequent deployment, including a stable refresh, uses the
         # same durable dev package rather than an expiring CI artifact.
@@ -139,27 +144,75 @@ class DevelopmentTests(unittest.TestCase):
         self.assertEqual((site / 'dev/app/index.html').read_bytes(), (again / 'dev/app/index.html').read_bytes())
         self.assertEqual(latest_development(get=self.get), current)
 
-    def test_bad_commit_corrupt_history_and_mismatched_installer_do_not_leave_output(self):
-        _, previous, current = self.build('a' * 40)
+    def test_bad_commit_previous_bootloader_and_mismatched_installer_do_not_leave_output(self):
+        self.build('a' * 40)
         output = self.root / 'invalid'
         with self.assertRaisesRegex(ValueError, 'source commit'):
             prepare(self.artifacts, output, 'b' * 40)
         with self.assertRaises(Exception):
             prepare(self.artifacts, output, 'a' * 40, b'bad previous archive')
-        broken = dict(previous_resources(previous))
-        key = next(key for key in broken if key.endswith('.wasm'))
-        broken[key] = b'corrupt old module'
-        with ZipFile(io.BytesIO(previous)) as archive_file:
-            previous_files = {name: archive_file.read(name) for name in archive_file.namelist()}
-        previous_files.update({'history/' + key: value for key, value in broken.items()})
-        with self.assertRaises(ValueError):
-            prepare(self.artifacts, output, 'a' * 40,
-                    zipped(previous_files))
         data = fixtures()
         (self.artifacts / 'chameleon-unleashed-install.zip').write_bytes(archive(*data['old'], *data['system']))
         with self.assertRaisesRegex(ValueError, 'Installer differs'):
             prepare(self.artifacts, output, 'a' * 40)
         self.assertFalse(output.exists())
+
+    def test_legacy_history_is_neither_copied_nor_published(self):
+        _, previous, _ = self.build('a' * 40)
+        history = {'history/core/obsolete/module.wasm': b'obsolete',
+                   'history/releases/obsolete.json': b'invalid obsolete manifest'}
+        with ZipFile(io.BytesIO(previous)) as package:
+            files = {name: package.read(name) for name in package.namelist()}
+        name, current, _ = self.build('b' * 40, zipped({**files, **history}))
+        with ZipFile(io.BytesIO(current)) as package:
+            files = {name: package.read(name) for name in package.namelist()}
+            self.assertFalse(any(key.startswith('history/') for key in files))
+        # Already published archives may still carry history during migration.
+        self.publish('dev', name, zipped({**files, **history}), prerelease=True)
+        site = self.root / 'site'
+        prepare_pages(site, get=self.get)
+        for key, value in cdn_files(current, prefix='cdn/').items():
+            self.assertEqual((site / key).read_bytes(), value)
+        self.assertFalse((site / 'core/obsolete').exists())
+        self.assertFalse((site / 'releases/obsolete.json').exists())
+
+    def test_pages_drops_previous_dev_resources_from_baseline_and_keeps_stable(self):
+        first_name, first, original_first = self.build('a' * 40)
+        stable = resources('stable', app_timestamp=50, revision='1' * 40)
+        # A stable release may still need a module also used by the old dev build.
+        shared = next(key for key in original_first if key.endswith('.wasm'))
+        manifest_name, document = manifest(stable)
+        stable[shared] = original_first[shared]
+        document['resources'].append({'path': shared, 'size': len(stable[shared]),
+                                      'sha256': hashlib.sha256(stable[shared]).hexdigest()})
+        del stable[manifest_name]
+        contents = json.dumps(document).encode()
+        stable['releases/' + hashlib.sha256(contents).hexdigest() + '.json'] = contents
+        stable_bundle = zipped({**{'cdn/' + key: value for key, value in stable.items()},
+                               'firmware/application.zip': self.application})
+        self.publish('v1.0.0', 'ChameleonUnleashed-v1.0.0-firmware-resources.zip', stable_bundle)
+        self.publish('dev', first_name, first, prerelease=True)
+        baseline = self.root / 'baseline'
+        prepare_pages(baseline, get=self.get)
+        # Legacy deployments also contain the original, unlabelled web variant.
+        for key, value in original_first.items():
+            path = baseline / key
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(value)
+        self.releases[SOURCES[0][2]] = [item for item in self.releases[SOURCES[0][2]]
+                                       if item['tag_name'] != 'dev']
+        name, current, _ = self.build('b' * 40, first)
+        self.publish('dev', name, current, prerelease=True)
+        site = self.root / 'site'
+        prepare_pages(site, baseline=baseline, get=self.get)
+        required = {**stable, **cdn_files(current, prefix='cdn/')}
+        obsolete = {**original_first, **cdn_files(first, prefix='cdn/')}
+        for key in obsolete.keys() - required.keys():
+            self.assertFalse((site / key).exists(), key)
+        for key, value in required.items():
+            self.assertEqual((site / key).read_bytes(), value)
+        self.assertIn('content="' + 'b' * 40 + '"', (site / 'dev/app/index.html').read_text())
+        self.assertEqual(len(list((site / 'updates/dev/files').glob('*.zip'))), 1)
 
     def test_failed_upload_cannot_delete_the_previous_development_package(self):
         self.build('a' * 40)

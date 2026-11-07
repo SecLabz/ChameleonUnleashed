@@ -21,7 +21,7 @@ def resource_path(name):
     return path
 
 
-def cdn_files(data, prefix='', history=False):
+def cdn_files(data, prefix=''):
     files = {}
     expanded = 0
     with ZipFile(io.BytesIO(data)) as archive:
@@ -43,7 +43,7 @@ def cdn_files(data, prefix='', history=False):
                 raise ValueError('Unsafe or oversized resource archive')
             files[name] = archive.read(entry)
     manifests = [name for name in files if name.startswith('releases/') and name.endswith('.json')]
-    if not manifests or (not history and len(manifests) != 1):
+    if len(manifests) != 1:
         raise ValueError('Expected exactly one CDN release manifest')
     expected = set(manifests)
     for manifest_path in manifests:
@@ -61,10 +61,6 @@ def cdn_files(data, prefix='', history=False):
                 raise ValueError('Duplicate CDN manifest resource')
             listed.add(name)
             contents = files[name]
-            # Folder discovery metadata follows the newest build. Runtime
-            # modules and immutable manifests must always retain their pins.
-            if history and name.endswith('/manifest.json'):
-                continue
             if len(contents) != asset['size'] or hashlib.sha256(contents).hexdigest() != asset['sha256']:
                 raise ValueError('CDN resource differs from its manifest: ' + name)
         expected.update(listed)

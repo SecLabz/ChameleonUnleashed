@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the latest development firmware and retain its immutable web resources."""
+"""Package only the latest development firmware and its matching web resources."""
 import argparse
 import hashlib
 import io
@@ -56,12 +56,6 @@ def development_resources(files, revision):
     return current
 
 
-def previous_resources(data):
-    with ZipFile(io.BytesIO(data)) as archive:
-        retained = any(name.startswith('history/') for name in archive.namelist())
-    return cdn_files(data, prefix='history/' if retained else 'cdn/', history=retained)
-
-
 def latest_development(repo=SOURCES[0][2], get=fetch):
     release = next((item for item in releases(repo, get)
                     if item.get('tag_name') == DEVELOPMENT_TAG), None)
@@ -78,7 +72,6 @@ def stage(data, release, site):
     """Publish one verified dev package alongside the independent stable channel."""
     files = cdn_files(data, prefix='cdn/')
     merge_resources(files, site)
-    merge_resources(previous_resources(data), site)
     _, document = manifest(files)
     catalogue = {'format': 1, 'sources': []}
     if document.get('channel') != 'development':
@@ -140,21 +133,13 @@ def prepare(artifacts, output, revision, previous=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent, prefix='.development-') as temporary:
         staging = Path(temporary)
-        history = staging / 'history'
-        merge_resources(current, history)
-        merge_resources(original, history)
-        if previous is not None:
-            merge_resources(previous_resources(previous), history)
         packages = staging / 'packages'
         names = package_release(artifacts, packages, document['projectVersion'], development=True)
         name = next(name for name in names if re.fullmatch(RESOURCE_PACKAGE, name))
         contents = {key: data for key, data in read_zip(packages / name).items() if not key.startswith('cdn/')}
         contents.update({'cdn/' + key: data for key, data in current.items()})
-        contents.update({'history/' + path.relative_to(history).as_posix(): path.read_bytes()
-                         for path in history.rglob('*') if path.is_file()})
         write_zip(packages / name, contents)
-        # Validate the complete retained set before replacing the public package.
-        previous_resources((packages / name).read_bytes())
+        cdn_files((packages / name).read_bytes(), prefix='cdn/')
         if output.exists():
             output.rmdir()
         packages.replace(output)

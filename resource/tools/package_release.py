@@ -134,21 +134,56 @@ def prepare(artifacts, output, version, tag=None, development=False):
         **{'cdn/' + name: data for name, data in firmware['cdn'].items()},
         'README.txt': f"""ChameleonUnleashed {label} - firmware & web resources
 
-firmware/install.zip      Install, reinstall or update through the CLI.
-firmware/bootloader.zip   Separate bootloader for DFU clients that need it.
-firmware/application.zip  Update a device that already has web recovery.
-firmware/system.zip       Firmware with bootloader and SoftDevice.
-images/                   HEX images for direct programming.
-cdn/                      Web resources for self-hosting.
+START HERE
+
+For installation, reinstallation or a CLI update, use firmware/install.zip:
+  chameleon flash firmware/install.zip
+
+The CLI is not included here. Download the archive for your computer if you
+need it; its firmware.zip is identical to firmware/install.zip in this archive.
 
 You can also update in a browser on a compatible USB-connected device:
 http://192.168.16.1 > Device > Update firmware.
 
+FIRMWARE PACKAGES - ONE APPLICATION BUILD, DIFFERENT COMPONENTS
+
+All packages below belong to {label}. Choose by installation method;
+the four ZIPs are not successive firmware versions.
+
+firmware/install.zip      Application with web recovery + bootloader.
+                          Recommended for installation and CLI updates.
+                          Does not include the SoftDevice.
+firmware/application.zip  Application with web recovery, without bootloader
+                          or SoftDevice. Update an Ultra that already has
+                          the matching Unleashed bootloader.
+firmware/bootloader.zip   Bootloader only, for DFU clients that need a
+                          separate package. Does not include the application.
+firmware/system.zip       Application with web recovery + bootloader +
+                          S140 SoftDevice (the Nordic Bluetooth stack),
+                          for DFU clients supporting this combined package.
+images/                   HEX images for direct hardware programming.
+
 Keep the DFU ZIPs intact. Export saved tags before the first bootloader
 migration, system updates or switching firmware. First installation requires S140 7.2.0.
 
-For self-hosting, publish cdn/ at the firmware's configured resource URL.
-Use matching firmware and resources, and keep older resources available.
+WEB RESOURCES
+
+cdn/ contains the web interface, modules and tables matching this build.
+Development archives contain only the current build, without a history/ folder.
+Long file and folder names are content hashes, not version numbers or dates.
+
+For self-hosting, publish the contents of cdn/ at the firmware's configured
+resource URL, preserving the relative paths. Keep resources for stable releases
+available; replace development resources when publishing a new development build.
+
+VERSIONS
+
+A -dev.<commit> suffix identifies a development build, which may be unstable.
+The commit distinguishes builds even when their numeric version is unchanged.
+The dev release downloads and hosted resources are replaced for each new build.
+Older development builds may need updating to use the hosted web resources.
+For published stable versions, see GitHub Releases:
+https://github.com/SecLabz/ChameleonUnleashed/releases
 
 Guide: https://github.com/SecLabz/ChameleonUnleashed/blob/main/docs/web-updates.md
 """.encode(),
