@@ -7,6 +7,11 @@ on:
     tags:
       - '**'
   workflow_dispatch:
+    inputs:
+      run-tests:
+        description: Run automated test suites for development builds
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,93 +48,18 @@ jobs:
       contents: read
     uses: ./.github/workflows/build_client.yml
   publish_resources:
-    name: Publish matching resources
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')
-    needs: firmware_pipeline
-    runs-on: ubuntu-latest
+    name: Publish stable and development resources
+    needs: [firmware_pipeline, client_pipeline, create_release]
+    if: >-
+      always() && needs.firmware_pipeline.result == 'success' &&
+      needs.client_pipeline.result == 'success' &&
+      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+       needs.create_release.result == 'success')
     permissions:
-      contents: write
+      contents: read
       pages: write
       id-token: write
-    concurrency:
-      group: github-pages
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Check out the repo
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Download matching release artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: release-artifacts-ultra
-          path: release-artifacts
-      - name: Extract matching resources
-        run: |
-          mkdir -p .cache/pages/resources
-          unzip -q release-artifacts/chameleon-unleashed-cdn.zip -d .cache/pages/resources
-      - name: Preserve published resources on gh-pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .cache/pages/resources
-          keep_files: true
-          commit_message: 'build(cdn): publish matching resources'
-      - name: Check out all published versions
-        uses: actions/checkout@v7
-        with:
-          ref: gh-pages
-          path: .cache/pages/published
-          persist-credentials: false
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: .cache/pages/published
-      - name: Deploy GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-  create_dev_release:
-    permissions:
-      contents: write
-    name: Create dev pre-release with artifacts
-    runs-on: ubuntu-latest
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    needs:
-      - firmware_pipeline
-      - client_pipeline
-      - publish_resources
-    steps:
-      - name: Check out the repo
-        uses: actions/checkout@v7
-      - name: Download release artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: release-artifacts-*
-          merge-multiple: true
-          path: release-artifacts
-      - name: Package versioned downloads
-        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --development
-      - name: Upload to dev release
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: .github/release-description.txt
-          tag_name: dev
-          name: Development release
-          draft: false
-          prerelease: true
-          target_commitish: ${{ github.sha }}
-          files: release-packages/*
-      - name: Verify uploads and remove superseded downloads
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 resource/tools/sync_release_assets.py --tag dev --archives release-packages
-      - name: Fix up release tag
-        run: |
-          git tag -f dev
-          git push origin refs/tags/dev --force
+    uses: SecLabz/ChameleonUnleashed/.github/workflows/mirror_firmware.yml@develop
   create_release:
     permissions:
       contents: write
@@ -139,7 +69,6 @@ jobs:
     needs:
       - firmware_pipeline
       - client_pipeline
-      - publish_resources
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
