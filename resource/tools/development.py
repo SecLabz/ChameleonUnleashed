@@ -11,8 +11,9 @@ import tempfile
 from zipfile import ZipFile
 
 from hosted_web import FILES, archived_shell, bundle, markers
+from bootloader_version import check_transition, read_version as bootloader_version
 from mirror_firmware import SOURCES, application_zip, catalogue_package, fetch, releases, save_atomic, verified_asset
-from nordic_update import inspect_zip
+from nordic_update import MAX_ZIP, inspect_zip
 from package_release import prepare as package_release, read_zip, write_zip
 from web_resources import cdn_files, merge_resources
 
@@ -125,6 +126,20 @@ def prepare(artifacts, output, revision, previous=None):
     installed = inspect_zip((artifacts / 'chameleon-unleashed-install.zip').read_bytes())
     if installed['application']['payload'] != inspect_zip(application)['application']['payload']:
         raise ValueError('Installer differs from the development application')
+    bootloader = inspect_zip((artifacts / 'chameleon-unleashed-bootloader.zip').read_bytes())['bootloader']
+    if bootloader['version'] != bootloader_version():
+        raise ValueError('Bootloader package differs from its declared revision')
+    if (installed.get('bootloader', {}).get('payload') != bootloader['payload']
+            or installed['bootloader']['version'] != bootloader['version']):
+        raise ValueError('Installer differs from the development bootloader')
+    previous_bootloader = None
+    if previous is not None:
+        with ZipFile(io.BytesIO(previous)) as archive:
+            entry = archive.getinfo('firmware/bootloader.zip')
+            if entry.file_size > MAX_ZIP:
+                raise ValueError('Previous bootloader package is too large')
+            previous_bootloader = inspect_zip(archive.read(entry))['bootloader']
+    check_transition(bootloader, previous_bootloader)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent, prefix='.development-') as temporary:
         staging = Path(temporary)

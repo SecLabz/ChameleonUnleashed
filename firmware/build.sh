@@ -16,9 +16,7 @@ softdevice_id=0x0100
 
 # Keep the application version independent from the bootloader counter.
 application_version=$(python3 ../resource/tools/project_version.py --dfu) || exit 1
-# Stock devices can already carry bootloader version 3. The migration must
-# advance that counter; the new permanent web ABI uses layout version 2.
-bootloader_version=5
+bootloader_version=$(python3 ../resource/tools/bootloader_version.py) || exit 1
 
 device_type=${CURRENT_DEVICE_TYPE:-ultra}
 case $device_type in
@@ -81,7 +79,7 @@ python3 ../resource/tools/web_update.py
     --sd-req ${softdevice_id} \
     chameleon-unleashed-app.zip
 
-  # One-time migration: bootloader first, then recovery + app; never stage the
+  # Install bootloader first, then recovery + app; never stage the
   # much larger SoftDevice with an old bootloader that only reserves 12 KiB.
   nrfutil nrf5sdk-tools pkg generate \
     --hw-version $hw_version --key-file ../../resource/dfu_key/chameleon.pem \

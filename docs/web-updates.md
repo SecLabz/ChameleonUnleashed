@@ -5,6 +5,8 @@
 Download the archive for your computer from [Releases](https://github.com/SecLabz/ChameleonUnleashed/releases)
 and follow its `INSTALL.txt`. The same procedure works for installation,
 reinstallation and updates. [Step-by-step instructions](../README.md#quick-installation).
+The CLI keeps an already matching Unleashed bootloader. Use
+`chameleon flash firmware.zip --full` to reinstall every component in the ZIP.
 
 ## Update through a browser
 

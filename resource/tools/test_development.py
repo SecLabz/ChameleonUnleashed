@@ -8,12 +8,13 @@ import unittest
 from zipfile import ZipFile
 
 from development import prepare, previous_resources, latest_development, manifest
+from bootloader_version import read_version as bootloader_version
 from mirror_firmware import SOURCES
 from package_release import PLATFORMS
 from prepare_pages import prepare as prepare_pages
 from sync_release_assets import superseded
 from test_prepare_pages import resources, zipped
-from test_web_update import archive, fixtures
+from test_web_update import archive, fixtures, signed_packet
 
 
 class DevelopmentTests(unittest.TestCase):
@@ -29,15 +30,27 @@ class DevelopmentTests(unittest.TestCase):
                 zipped({executable: ('cli-' + platform).encode()}))
         data = fixtures()
         self.application = archive(*data['normal'])
-        self.installer = archive(*data['normal'], *data['system'])
+        self.app_payload, self.app_packet = data['normal']
+        self.boot_payload = data['system'][0][516:]
+        self.set_bootloader(self.boot_payload, bootloader_version())
         for name, contents in {
             'app': self.application, 'install': self.installer,
-            'bootloader': zipped({'bootloader.bin': b'signed bootloader placeholder'}),
             'full': self.installer, 'binaries': zipped({'application.hex': b'hex'})
         }.items():
             (self.artifacts / f'chameleon-unleashed-{name}.zip').write_bytes(contents)
         self.releases = {repo: [] for _, _, repo in SOURCES}
         self.downloads = {}
+
+    def set_bootloader(self, payload, version):
+        packet = signed_packet(payload, version=version, kind=2, bl_size=len(payload))
+        image = {'bin_file': 'bootloader.bin', 'dat_file': 'bootloader.dat'}
+        files = {'bootloader.bin': payload, 'bootloader.dat': packet}
+        (self.artifacts / 'chameleon-unleashed-bootloader.zip').write_bytes(zipped({
+            **files, 'manifest.json': json.dumps({'manifest': {'bootloader': image}}).encode()}))
+        self.installer = zipped({**files, 'application.bin': self.app_payload,
+            'application.dat': self.app_packet, 'manifest.json': json.dumps({'manifest': {
+                'bootloader': image, 'application': {'bin_file': 'application.bin', 'dat_file': 'application.dat'}}}).encode()})
+        (self.artifacts / 'chameleon-unleashed-install.zip').write_bytes(self.installer)
 
     def build(self, revision, previous=None):
         current = resources(revision, app_timestamp=int(revision[0], 16) * 100, revision=revision)
@@ -135,9 +148,12 @@ class DevelopmentTests(unittest.TestCase):
         broken = dict(previous_resources(previous))
         key = next(key for key in broken if key.endswith('.wasm'))
         broken[key] = b'corrupt old module'
+        with ZipFile(io.BytesIO(previous)) as archive_file:
+            previous_files = {name: archive_file.read(name) for name in archive_file.namelist()}
+        previous_files.update({'history/' + key: value for key, value in broken.items()})
         with self.assertRaises(ValueError):
             prepare(self.artifacts, output, 'a' * 40,
-                    zipped({'history/' + key: value for key, value in broken.items()}))
+                    zipped(previous_files))
         data = fixtures()
         (self.artifacts / 'chameleon-unleashed-install.zip').write_bytes(archive(*data['old'], *data['system']))
         with self.assertRaisesRegex(ValueError, 'Installer differs'):
@@ -155,6 +171,14 @@ class DevelopmentTests(unittest.TestCase):
         for incomplete in ([old, *assets[:-1]], [old, {**assets[0], 'digest': 'sha256:bad'}, *assets[1:]]):
             with self.assertRaises(ValueError):
                 superseded(incomplete, archives)
+
+    def test_changed_bootloader_cannot_reuse_its_published_revision(self):
+        _, previous, _ = self.build('a' * 40)
+        changed = self.boot_payload[:32] + bytes([self.boot_payload[32] ^ 1]) + self.boot_payload[33:]
+        self.set_bootloader(changed, bootloader_version())
+        with self.assertRaisesRegex(ValueError, 'increment firmware/bootloader/version.json'):
+            self.build('b' * 40, previous)
+        self.assertFalse((self.root / 'b').exists())
 
 
 if __name__ == '__main__':

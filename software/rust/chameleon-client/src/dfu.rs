@@ -273,6 +273,27 @@ impl Device {
         Ok(self.bootloader_port()?.port_name)
     }
 
+    /// Read the standard Nordic bootloader version; older DFU implementations
+    /// may explicitly report that this optional request is unsupported.
+    pub fn bootloader_version(&self) -> Result<Option<u32>> {
+        let path = self.enter()?;
+        let mut port = serialport::new(path, 115200)
+            .timeout(Duration::from_millis(200))
+            .open()?;
+        port.write_data_terminal_ready(true)?;
+        port.clear(serialport::ClearBuffer::Input)?;
+        protocol::Session::open(&mut port, &self.cancelled)?.bootloader_version()
+    }
+
+    /// Leave an unchanged bootloader without creating or transferring an image.
+    pub fn leave(&self) -> Result<()> {
+        let path = self.bootloader_port()?.port_name;
+        with_usb_port(&path, Duration::from_millis(200), |port| {
+            port.write_data_terminal_ready(true)?;
+            protocol::Session::open(port, &self.cancelled)?.leave()
+        })
+    }
+
     /// Transfer each image once. A new invocation starts over, including after cancellation.
     /// Progress counts only firmware bytes accepted by OBJECT_EXECUTE.
     pub fn flash(
