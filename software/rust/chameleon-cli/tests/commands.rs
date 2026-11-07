@@ -657,17 +657,7 @@ fn firmware_packages_are_validated_and_previewed_without_usb_or_external_tools()
     let output = String::from_utf8_lossy(&preview.stdout);
     assert!(output.contains("application") && output.contains("14 bytes"));
     assert!(output.contains("Preview") && output.contains("Nothing written"));
-    let full_preview = run(&[
-        "--port",
-        "/missing-chameleon",
-        "flash",
-        path.to_str().unwrap(),
-        "--full",
-        "--dry-run",
-    ]);
-    assert!(full_preview.status.success());
-    let output = String::from_utf8_lossy(&full_preview.stdout);
-    assert!(output.contains("--full") && output.contains("Nothing written"));
+    assert!(!output.contains("Bootloader"));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     for arguments in [vec!["dfu", "--help"], vec!["flash", "--help"]] {
         assert!(run(&arguments).status.success());
@@ -704,6 +694,17 @@ fn firmware_packages_are_validated_and_previewed_without_usb_or_external_tools()
     assert!(system_preview.status.success());
     assert!(String::from_utf8_lossy(&system_preview.stderr).contains("overwrite slot storage"));
     assert!(!String::from_utf8_lossy(&preview.stderr).contains("overwrite slot storage"));
+    let full_preview = run(&[
+        "--port",
+        "/missing-chameleon",
+        "flash",
+        path.to_str().unwrap(),
+        "--full",
+        "--dry-run",
+    ]);
+    assert!(full_preview.status.success());
+    let output = String::from_utf8_lossy(&full_preview.stdout);
+    assert!(output.contains("--full") && output.contains("Nothing written"));
 
     std::fs::write(&path, b"not a ZIP file").unwrap();
     let invalid = run(&[

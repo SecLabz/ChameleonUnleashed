@@ -73,42 +73,48 @@ pub fn flash(
 ) -> Result<()> {
     let mut images = package::load(&options.package)?;
     ui::line("Firmware", &[options.package.display().to_string()]);
+    for image in &images {
+        ui::line(image.name, &[format!("{} bytes", image.firmware.len())]);
+    }
     if images.iter().any(|image| image.name != "application") {
         ui::warning(
             "System firmware updates can overwrite slot storage with the stock bootloader; save slot exports before flashing",
         );
     }
-    if options.dry_run {
-        for image in &images {
-            ui::line(image.name, &[format!("{} bytes", image.firmware.len())]);
-        }
+    let target_revision = images
+        .iter()
+        .find(|image| image.name == "bootloader")
+        .and_then(|image| image.version)
+        .and_then(bootloader_revision);
+    if images.iter().any(|image| image.name == "bootloader") {
         ui::line(
             "Bootloader",
             &[if options.full {
-                "All ZIP components will be flashed (--full)".into()
+                "Will be reinstalled (--full)".into()
+            } else if target_revision.is_some() {
+                "Will be kept if the installed Unleashed version matches".into()
             } else {
-                "A matching Unleashed bootloader will be kept; checked in DFU before flashing"
-                    .into()
+                "Legacy or unversioned package · will be installed".into()
             }],
         );
+    }
+    if options.dry_run {
         ui::no_write("Preview");
         return Ok(());
-    }
-    if !options.yes && !prompt_allowed {
-        return Err(
-            "Use --yes to apply noninteractive changes, or --dry-run to inspect them".into(),
-        );
     }
     let device = Device::discover(port, cancelled)?;
     ui::line(
         "Device",
         &[device.serial_number().into(), device.port_name().into()],
     );
-    let checked = !options.full
-        && images.iter().any(|image| {
-            image.name == "bootloader" && image.version.and_then(bootloader_revision).is_some()
-        });
-    let installed = if checked {
+    if !ui::confirm(
+        "Install this firmware on this Ultra?",
+        options.yes,
+        prompt_allowed,
+    )? {
+        return Ok(());
+    }
+    let installed = if !options.full && target_revision.is_some() {
         let progress = Progress::new("Checking bootloader", None, false);
         let version = device.bootloader_version()?;
         drop(progress);
@@ -116,57 +122,17 @@ pub fn flash(
     } else {
         None
     };
-    let kept = matching_bootloader(&images, installed, options.full).map(|index| {
-        let image = images.remove(index);
-        let version = image.version.unwrap();
+    if let Some(index) = matching_bootloader(&images, installed, options.full) {
+        images.remove(index);
         ui::line(
             "Bootloader",
-            &[format!(
-                "Unleashed {} already installed · keeping it",
-                bootloader_revision(version).unwrap()
-            )],
-        );
-        version
-    });
-    if kept.is_none()
-        && let Some(image) = images.iter().find(|image| image.name == "bootloader")
-    {
-        ui::line(
-            "Bootloader",
-            &[if options.full {
-                "Will be flashed (--full)".into()
-            } else if let Some(revision) = image.version.and_then(bootloader_revision) {
-                format!("Will install Unleashed {revision}; no matching version was confirmed")
-            } else {
-                "Legacy or unversioned package · will be installed".into()
-            }],
+            &["Matching Unleashed version already installed · keeping it".into()],
         );
     }
     if images.is_empty() {
         device.leave()?;
         ui::result(true, "Bootloader already up to date · no images flashed");
         return Ok(());
-    }
-    for image in &images {
-        ui::line(image.name, &[format!("{} bytes", image.firmware.len())]);
-    }
-    let confirmed = ui::confirm(
-        "Install this firmware on this Ultra?",
-        options.yes,
-        prompt_allowed,
-    );
-    if !matches!(confirmed, Ok(true)) {
-        if checked {
-            let _ = device.leave();
-        }
-        return confirmed.map(|_| ());
-    }
-    // The DFU inactivity timeout can return to the app during confirmation.
-    // Never rely on a stale skip decision after another client changed it.
-    if let Some(version) = kept
-        && device.bootloader_version()? != Some(version)
-    {
-        return Err("Bootloader changed since confirmation; run flash again".into());
     }
     let transfers = images
         .iter()
@@ -231,7 +197,6 @@ pub fn flash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     fn image(name: &'static str, version: Option<u32>) -> package::Image {
         package::Image {
@@ -271,19 +236,5 @@ mod tests {
                 None
             );
         }
-    }
-
-    #[test]
-    fn full_is_an_explicit_opt_in_and_combines_with_dry_run() {
-        #[derive(Parser)]
-        struct Command {
-            #[command(flatten)]
-            options: Options,
-        }
-        let args =
-            Command::try_parse_from(["flash", "firmware.zip", "--full", "--dry-run"]).unwrap();
-        assert!(args.options.full && args.options.dry_run);
-        let args = Command::try_parse_from(["flash", "firmware.zip"]).unwrap();
-        assert!(!args.options.full);
     }
 }
