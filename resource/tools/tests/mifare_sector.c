@@ -23,7 +23,7 @@ static uint16_t pcd_14a_reader_mf1_read(uint8_t block, uint8_t *out) {
 }
 typedef struct { uint8_t uid_len, uid[10]; } picc_14a_tag_t;
 static picc_14a_tag_t selected = {4, {1, 2, 3, 4}};
-static unsigned closes, halts, unauths, scans;
+static unsigned closes, halts, unauths, scans, rejected_cleanups;
 static uint16_t scan_status;
 static void nfca_session_close(void) { closes++; }
 static uint16_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag) {
@@ -37,7 +37,10 @@ static uint16_t pcd_14a_reader_mf1_auth(picc_14a_tag_t *tag, uint8_t type,
     return auth_key_use_522_hw(block, type, key);
 }
 static void pcd_14a_reader_fast_halt_tag(void) { halts++; }
-static void pcd_14a_reader_mf1_unauth(void) { assert(halts == unauths + 1); unauths++; }
+static void pcd_14a_reader_mf1_unauth(void) {
+    if (auth_status == STATUS_MF_ERR_AUTH) { rejected_cleanups++; return; }
+    assert(halts == unauths + 1); unauths++;
+}
 /* SECTOR FUNCTION */
 int main(void) {
     uint8_t request[] = {0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 4, 1, 2, 3, 4}, out[272];
@@ -92,12 +95,20 @@ int main(void) {
     assert(read_sector(19, keep, out, &size) == STATUS_HF_TAG_NO);
     assert(authentications == before && closes == 2);
     scan_status = 0; auth_status = STATUS_MF_ERR_AUTH;
+    unsigned previous_cleanups = rejected_cleanups;
     assert(read_sector(19, keep, out, &size) == STATUS_MF_ERR_AUTH);
-    assert(closes == 3);
+    assert(closes == 2 && rejected_cleanups == previous_cleanups + 1);
+    assert(size == 0);
+    auth_status = 0; failure = -1;
+    unsigned previous_scans_after_rejection = scans;
+    unsigned previous_auths_after_rejection = authentications;
+    assert(read_sector(19, keep, out, &size) == STATUS_HF_TAG_OK);
+    assert(scans == previous_scans_after_rejection + 1);
+    assert(authentications == previous_auths_after_rejection + 1 && out[1] == 15);
     auth_status = 0; failure = 2;
     unsigned previous_halts = halts;
     assert(read_sector(19, keep, out, &size) == STATUS_HF_TAG_OK);
-    assert(out[1] == 3 && closes == 4 && halts == previous_halts);
+    assert(out[1] == 3 && closes == 3 && halts == previous_halts);
     for (unsigned n = 0; n < 19; n++) {
         if (n == 8) continue;
         assert(read_sector(n, keep, out, &size) == STATUS_PAR_ERR);
@@ -175,7 +186,14 @@ int main(void) {
     selected.uid[0] ^= 1;
     assert(read_sector(14, diagnostic, out, &size) == STATUS_HF_TAG_NO && size == 0);
     assert(authentications == 0 && reads == 0);
-    selected.uid[0] ^= 1; auth_status = STATUS_MF_ERR_AUTH;
+    selected.uid[0] ^= 1;
+    scan_status = STATUS_MF_ERR_AUTH;
+    unsigned closes_before_scan_error = closes;
+    unsigned cleanups_before_scan_error = rejected_cleanups;
+    assert(read_sector(14, diagnostic, out, &size) == STATUS_MF_ERR_AUTH && size == 0);
+    assert(authentications == 0 && reads == 0);
+    assert(closes == closes_before_scan_error + 1 && rejected_cleanups == cleanups_before_scan_error);
+    scan_status = 0; auth_status = STATUS_MF_ERR_AUTH;
     assert(read_sector(14, diagnostic, out, &size) == STATUS_MF_ERR_AUTH && size == 0);
     assert(authentications == 1 && reads == 0);
 }

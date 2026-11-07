@@ -397,6 +397,170 @@ test('AutoPwn continues a scan-owned Classic reservation without reacquiring the
   }
 });
 
+for (const [sak, sectors, blocks, missing, rejectedRead = false] of [
+  [8, 16, 64, -1],
+  [0x18, 40, 256, -1],
+  [8, 16, 64, 6],
+  [0x18, 40, 256, -1, true]
+]) {
+  test(`Key A reuse selects bounded read batches only after successful checks (sak=${sak}, missing=${missing}, rejectedRead=${rejectedRead})`, async () => {
+    globalThis.fetch = async () => new Response(wasm);
+    const device = new Card(missing);
+    device.card.sak = sak;
+    const geometry = {
+      sectors: Array.from({ length: sectors }, (_, sector) => ({
+        first: sector < 32 ? sector * 4 : 128 + (sector - 32) * 16,
+        count: sector < 32 ? 4 : 16
+      }))
+    };
+    const findKey = device.findKey.bind(device);
+    let initialSearches = 0;
+    device.findKey = async (sector, isKeyB, keys, ...args) => {
+      assert.equal(sector, 0, 'Only the initial dictionary search needs separate key checks');
+      assert.equal(isKeyB, false);
+      initialSearches++;
+      return findKey(sector, isKeyB, keys, ...args);
+    };
+    const readSector = device.readSector.bind(device);
+    let singleReads = 0;
+    device.readSector = async (...args) => {
+      singleReads++;
+      return readSector(...args);
+    };
+    device.classicBatchesSupported = true;
+    let batches = 0;
+    let rejection = false;
+    const checked = new Set([0]);
+    device.classicBatch = async (kind, entries) => {
+      assert([0, 1].includes(kind));
+      assert(entries.length <= 8);
+      assert(
+        3 + entries.reduce((n, entry) => n + (kind ? 6 + geometry.sectors[entry[0]].count * 16 : 11), 0) <=
+          512
+      );
+      batches++;
+      return Promise.all(
+        entries.map(async ([sector, type, ...key]) => {
+          assert.equal(type, 0x60);
+          if (kind === 0) {
+            const index = geometry.sectors.findIndex((s) => s.first === sector);
+            assert(index >= 0);
+            checked.add(index);
+            assert(key.every((b) => b === 255));
+            return { status: 0, data: Uint8Array.from([1, ...key]) };
+          }
+          if (rejectedRead) {
+            assert(
+              checked.has(sector),
+              'After a rejected prefetch, future reads must follow successful checks'
+            );
+            if (!rejection && sector === 1) {
+              rejection = true;
+              return { status: 6, data: new Uint8Array() };
+            }
+          }
+          const observed = await readSector(sector, key, false, geometry);
+          const mask = observed.reduce((mask, block, i) => mask | (block ? 1 << i : 0), 0);
+          return {
+            status: 0,
+            data: Uint8Array.from([
+              mask >> 8,
+              mask & 255,
+              ...observed.flatMap((block) => block || Array(16).fill(0))
+            ])
+          };
+        })
+      );
+    };
+    try {
+      const result = await runAutoPwn({ device, workerFactory });
+      assert.equal(result.summary.resolved_keys, sectors * 2);
+      assert.equal(result.complete, missing === -1);
+      assert.equal(result.memory.length, blocks);
+      assert.equal(device.sectorReads, sectors);
+      assert.equal(
+        singleReads,
+        rejectedRead ? 2 : 1,
+        'Only the anchor and a rejected prefetch need individual reads'
+      );
+      assert.equal(rejection, rejectedRead);
+      assert.equal(initialSearches, 1);
+      if (sectors === 16) {
+        assert.equal(batches, 4);
+      }
+      if (missing !== -1) {
+        assert.equal(result.memory[missing], null);
+        assert(result.memory[4] && result.memory[5] && result.memory[7]);
+        assert.equal(result.dump, null);
+      }
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('rejected reuse keeps lightweight checks and does not prefetch sector reads', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  const controller = new AbortController();
+  const device = new Card();
+  device.classicBatchesSupported = true;
+  let checks = 0;
+  device.classicBatch = async (kind, entries) => {
+    assert.equal(kind, 0);
+    checks += entries.length;
+    return entries.map(() => ({ status: 6, data: new Uint8Array(7) }));
+  };
+  device.collectNonces = async () => {
+    controller.abort();
+    throw new Error('Operation cancelled');
+  };
+  try {
+    const result = await runAutoPwn({ device, workerFactory, signal: controller.signal });
+    assert(checks > 0);
+    assert.equal(device.sectorReads, 1, 'Only the anchor was authenticated successfully');
+    assert.equal(result.complete, false);
+    assert.equal(result.memory.filter(Boolean).length, 4);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Stop after a checked read batch retains its data without dispatching the next batch', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  const controller = new AbortController();
+  const device = new Card();
+  const geometry = { sectors: Array.from({ length: 16 }, (_, i) => ({ first: i * 4, count: 4 })) };
+  device.classicBatchesSupported = true;
+  let readBatches = 0;
+  device.classicBatch = async (kind, entries) => {
+    assert.equal(controller.signal.aborted, false);
+    if (!kind) {
+      return entries.map(([, , ...key]) => ({ status: 0, data: Uint8Array.from([1, ...key]) }));
+    }
+    readBatches++;
+    const replies = await Promise.all(
+      entries.map(async ([sector, , ...key]) => {
+        const blocks = await device.readSector(sector, key, false, geometry);
+        return { status: 0, data: Uint8Array.from([0, 15, ...blocks.flat()]) };
+      })
+    );
+    controller.abort();
+    return replies;
+  };
+  try {
+    const result = await runAutoPwn({ device, workerFactory, signal: controller.signal });
+    assert.equal(readBatches, 1);
+    assert.equal(result.memory.filter(Boolean).length, 32);
+    assert.equal(result.complete, false);
+    assert.equal(result.dump, null);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Classic retry rejects a changed UID before key or memory operations', async () => {
   globalThis.fetch = async () => new Response(wasm);
 

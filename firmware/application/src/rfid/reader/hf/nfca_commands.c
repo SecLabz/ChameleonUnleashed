@@ -97,11 +97,21 @@ static uint16_t read_sector(uint16_t length, uint8_t *data, uint8_t *output,
         if (status == STATUS_HF_TAG_OK &&
             (tag.uid_len != data[8] || memcmp(tag.uid, data + 9, data[8])))
             status = STATUS_HF_TAG_NO;
-        if (status == STATUS_HF_TAG_OK)
-            status = pcd_14a_reader_mf1_auth(&tag, data[0], first, data + 2);
+        if (status != STATUS_HF_TAG_OK) {
+            nfca_session_close();
+            return status;
+        }
+        status = pcd_14a_reader_mf1_auth(&tag, data[0], first, data + 2);
     }
     if (status != STATUS_HF_TAG_OK) {
-        nfca_session_close();
+        if (length != 8 && status == STATUS_MF_ERR_AUTH) {
+            /* The checked read selected this UID before authenticating. Keep
+             * the bounded field lease after a rejected key; the next command
+             * must select and check UID again, without reusing cipher state. */
+            pcd_14a_reader_mf1_unauth();
+        } else {
+            nfca_session_close();
+        }
         return status;
     }
     memset(output, 0, 2 + count * 16);

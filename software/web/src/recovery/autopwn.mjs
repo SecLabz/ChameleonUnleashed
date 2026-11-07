@@ -40,23 +40,21 @@ export async function runAutoPwn({
   // Keep these observations only for this read operation, never across devices
   // or writes. Each credential/sector is captured once; missing blocks retain
   // the existing individual-read fallback and remain unknown on failure.
-  const sectorReads = new Map();
-  async function readSector(sector, key, isKeyB) {
-    const id = `${sector}:${isKeyB}:${hex(key)}`;
-    if (!sectorReads.has(id)) {
-      const blocks = await device.readSector(sector, key, isKeyB, geometry);
-      sectorReads.set(
-        id,
-        blocks.map((block) => block && [...block])
-      );
-    }
-    const blocks = sectorReads.get(id);
+  const sectorReads = new Set();
+  function rememberSector(sector, key, isKeyB, blocks) {
+    sectorReads.add(`${sector}:${isKeyB}:${hex(key)}`);
     blocks.forEach((block, offset) => {
       if (block) {
         memory[geometry.sectors[sector].first + offset] = [...block];
       }
     });
-    return blocks;
+  }
+  async function readSector(sector, key, isKeyB) {
+    const id = `${sector}:${isKeyB}:${hex(key)}`;
+    if (!sectorReads.has(id)) {
+      const blocks = await device.readSector(sector, key, isKeyB, geometry);
+      rememberSector(sector, key, isKeyB, blocks);
+    }
   }
 
   const update = (extra) => {
@@ -93,11 +91,61 @@ export async function runAutoPwn({
   // A response can contain several fresh physical authentication results.
   // Retain them only until the sequential recovery engine acknowledges them.
   const sweepReplies = new Map();
+  // Unproven keys start with checks. A failed read pins the key to checks.
+  const readReuse = new Map();
   const targetId = (target) => `${target.sector}:${target.is_key_b}`;
   const untestedKeys = (target, keys) =>
     keys.filter((key) => !testedKeysByTarget.get(targetId(target))?.has(hex(key)));
 
+  function readBatchTargets(targets) {
+    const batch = [];
+    let responseBytes = 3;
+    for (const target of targets.slice(0, 8)) {
+      const bytes = 6 + geometry.sectors[target.sector].count * 16;
+      if (responseBytes + bytes > 512) {
+        break;
+      }
+      batch.push(target);
+      responseBytes += bytes;
+    }
+    return batch;
+  }
+
+  function rememberReplies(targets, key, replies) {
+    replies.forEach((reply, i) => {
+      if (reply.status === 6) {
+        readReuse.set(hex(key), false);
+        return;
+      }
+      if (reply.status !== 0) {
+        const message = reply.status === 1 ? 'Card not found or changed' : `Device status ${reply.status}`;
+        throw Object.assign(new Error(message), { status: reply.status });
+      }
+      const sector = targets[i].sector;
+      const mask = reply.data[0] * 256 + reply.data[1];
+      const blocks = Array.from({ length: geometry.sectors[sector].count }, (_, n) =>
+        mask & (1 << n) ? Array.from(reply.data.slice(2 + n * 16, 18 + n * 16)) : null
+      );
+      rememberSector(sector, key, false, blocks);
+    });
+  }
+
+  async function readHits(targets, key) {
+    while (targets.length) {
+      check();
+      const batch = readBatchTargets(targets);
+      const replies = await device.classicBatch(
+        1,
+        batch.map((target) => [target.sector, 0x60, ...key])
+      );
+      rememberReplies(batch, key, replies);
+      targets = targets.slice(batch.length);
+    }
+  }
+
   async function sweep(args) {
+    const keyId = hex(args.key);
+    const reading = !args.is_key_b && readReuse.get(keyId) === true;
     const replyId = (target) => `${targetId(target)}:${hex(args.key)}`;
     if (
       device.classicBatchesSupported &&
@@ -116,14 +164,17 @@ export async function runAutoPwn({
           targets.push(target);
         }
       });
-      const batch = targets.slice(0, 8);
+      const batch = reading ? readBatchTargets(targets) : targets.slice(0, 8);
       const entries = batch.map((target) => [
-        geometry.sectors[target.sector].first,
+        reading ? target.sector : geometry.sectors[target.sector].first,
         target.is_key_b ? 0x61 : 0x60,
         ...args.key
       ]);
       try {
-        const replies = await device.classicBatch(0, entries);
+        const replies = await device.classicBatch(Number(reading), entries);
+        if (reading) {
+          rememberReplies(batch, args.key, replies);
+        }
         replies.forEach((reply, i) => {
           sweepReplies.set(replyId(batch[i]), reply);
           if ([0, 6].includes(reply.status)) {
@@ -133,6 +184,13 @@ export async function runAutoPwn({
             testedKeysByTarget.set(id, tested);
           }
         });
+        if (!reading && !args.is_key_b) {
+          const hits = batch.filter((_, i) => replies[i]?.status === 0);
+          await readHits(hits, args.key);
+          if (hits.length && replies.every((reply) => reply.status === 0) && readReuse.get(keyId) !== false) {
+            readReuse.set(keyId, true);
+          }
+        }
       } catch (error) {
         if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
           throw error;
@@ -152,7 +210,14 @@ export async function runAutoPwn({
       }
       return { Sweep: { hit: reply.status === 0, physically_tested: true } };
     }
-    return { Sweep: { hit: !!(await verify(args, [args.key], () => {}, false)), physically_tested: true } };
+    const hit = !!(await verify(args, [args.key], () => {}, reading));
+    if (!args.is_key_b && hit && readReuse.get(keyId) !== false) {
+      readReuse.set(keyId, true);
+    }
+    if (reading && !hit) {
+      readReuse.set(keyId, false);
+    }
+    return { Sweep: { hit, physically_tested: true } };
   }
 
   async function verify(target, candidates, onTested = () => {}, capture = true) {
@@ -374,9 +439,8 @@ export async function runAutoPwn({
       case 'VerifyCandidates':
         return { CandidateKey: await verify(args, args.candidates) };
       case 'SweepKey':
-        // Reuse sweeps often reject the same key on many sectors. Keep the
-        // firmware's short-lived authentication session for those failures;
-        // a checked sector read would reselect for each rejected candidate.
+        // Key A reuse captures sectors in the same bounded RF batch. Key B
+        // attempts retain the lightweight authentication path.
         return sweep(args);
       case 'ExtractTrailer': {
         try {
@@ -504,12 +568,7 @@ export async function runAutoPwn({
         }
 
         try {
-          const blocks = await readSector(sector, key, isKeyB);
-          blocks.forEach((bytes, index) => {
-            if (bytes) {
-              memory[sectorGeometry.first + index] = bytes;
-            }
-          });
+          await readSector(sector, key, isKeyB);
 
           update({ phase: `Reading memory · sector ${sector + 1}/${geometry.sectors.length}` });
 

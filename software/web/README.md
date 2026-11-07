@@ -56,3 +56,23 @@ In the hosted Bluetooth app, **Ready offline** also checks the HTML, stylesheet,
 icons, app bundle and worker. Close and reopen that same URL once before leaving
 Internet access. Browser storage can be evicted; export important documents.
 A local firmware ZIP can also be installed offline.
+
+## Classic read-session hardware checks
+
+Use a dedicated Classic 1K with a private JSON fixture containing `uid`,
+`keys_a` (16 six-byte keys), and `raw_memory` (64 sixteen-byte blocks observed
+through authenticated reads, including masked Key A bytes). Keep the fixture
+in an ignored directory. The checks authenticate and read; they do not write
+the physical card, settings or slots.
+
+```sh
+CHAMELEON_BLE_TEST_CLASSIC_READ_SESSION=1 \
+CHAMELEON_CLASSIC_READ_SESSION_FIXTURE=/absolute/path/to/private-fixture.json \
+npm run test:hardware:ble -- classic-read-session
+```
+
+The read-session comparison repeats each correct-key, incorrect-key and
+incorrect-then-correct sequence three times over USB and BLE. Use Playwright's
+`--repeat-each=N` for additional runs. The same test checks UID mismatch, nonce
+collection after a rejected key and subsequent reads. It also checks Stop when
+the firmware supports native Classic jobs.
