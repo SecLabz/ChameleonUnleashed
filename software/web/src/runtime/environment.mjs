@@ -4,5 +4,9 @@ export const HOSTED = !!globalThis.document?.querySelector('meta[name="chameleon
 export const SHELL_VERSION = globalThis.document
   ?.querySelector('meta[name="chameleon-shell"]')
   ?.getAttribute('content');
+// The development site packager adds the source commit of the build.
+export const DEVELOPMENT = globalThis.document
+  ?.querySelector('meta[name="chameleon-development"]')
+  ?.getAttribute('content');
 /** @param {string} path */
 export const appUrl = (path) => (globalThis.document ? new URL(path, document.baseURI).href : '/' + path);

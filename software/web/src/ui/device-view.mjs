@@ -143,7 +143,6 @@ export function deviceViews({
     const current = phase();
     const connected = current === 'connected';
     const [title, help] = copy(current);
-    const paused = pausedEmulation();
 
     for (const pill of document.querySelectorAll('[data-connection]')) {
       paintPill(pill, current);
@@ -159,10 +158,6 @@ export function deviceViews({
     $('device-settings').hidden = !connected;
     $('emulation-state').hidden = !connected;
     $('nav-slot').hidden = !connected;
-    $('connection-emulation').hidden = !paused;
-    $('connection-emulation').textContent = paused
-      ? `${PAUSED_FAMILY[paused]} emulation of slot ${info.active_slot + 1} starts once Bluetooth disconnects.`
-      : '';
 
     const connectButton = $('connect-bluetooth');
     connectButton.hidden = !bluetoothAvailable || (connected && ble());

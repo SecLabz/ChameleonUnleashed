@@ -1,4 +1,4 @@
-import { appUrl } from './runtime/environment.mjs';
+import { DEVELOPMENT, appUrl } from './runtime/environment.mjs';
 import { withRuntime } from './runtime/runtime.mjs';
 import { request, withDevice } from './device/transport.mjs';
 import { readDesfire } from './device/desfire-reader.mjs';
@@ -1659,6 +1659,16 @@ $('refresh-slots').onclick = () =>
 document.querySelectorAll('[data-view-target]').forEach((button) => {
   button.onclick = () => view(button.dataset.viewTarget);
 });
+
+// The development packager supplies the source commit in the shell metadata.
+if (DEVELOPMENT) {
+  document.documentElement.dataset.channel = 'development';
+  for (const channel of document.querySelectorAll('.brand-channel')) {
+    channel.querySelector('.brand-revision').textContent = DEVELOPMENT.slice(0, 7);
+    channel.closest('.brand').title = `Development build ${DEVELOPMENT}`;
+    channel.hidden = false;
+  }
+}
 
 window.addEventListener('hashchange', () => view(location.hash.slice(1)));
 render();

@@ -100,7 +100,8 @@ class DevelopmentTests(unittest.TestCase):
             _, document = manifest(current)
             self.assertEqual(document['channel'], 'development')
             html = current[document['webApp']['path'] + 'index.html'].decode()
-            self.assertIn('Development · bbbbbbb', html)
+            self.assertIn('<meta name="chameleon-development" content="' + 'b' * 40 + '">', html)
+            self.assertIn(' · Development</title>', html)
             self.assertIn('name="chameleon-resources" content="../../"', html)
 
     def test_pages_publishes_one_dev_and_keeps_the_stable_site_and_catalogue(self):
@@ -118,7 +119,7 @@ class DevelopmentTests(unittest.TestCase):
         self.assertTrue(all(not entry['prerelease'] for entry in catalogue['sources'][0]['releases']))
         expected = next(value for key, value in stable.items() if key.startswith('web/') and key.endswith('/app.mjs'))
         self.assertEqual((site / 'app/app.mjs').read_bytes(), expected)
-        self.assertIn('Development · bbbbbbb', (site / 'dev/app/index.html').read_text())
+        self.assertIn('content="' + 'b' * 40 + '"', (site / 'dev/app/index.html').read_text())
         self.assertFalse((site / 'dev/firmware.zip').exists())
         self.assertIn('content="0;url=app/"', (site / 'dev/index.html').read_text())
         self.assertNotIn('<a ', (site / 'dev/index.html').read_text())

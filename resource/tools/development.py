@@ -38,13 +38,10 @@ def development_resources(files, revision):
     raw = {key: selected[1][key] for key in FILES if key in selected[1]}
     raw['index.html'] = raw['index.html'].replace(
         markers(descriptor['version'], descriptor.get('resourceBase', '../')), b'', 1)
-    label = ('Development · ' + revision[:7]).encode()
     raw['index.html'] = raw['index.html'].replace(b'</title>', ' · Development</title>'.encode())
+    # The app marks its brand from this commit; see DEVELOPMENT in environment.mjs.
     raw['index.html'] = raw['index.html'].replace(b'</head>',
         b'<meta name="chameleon-development" content="' + revision.encode() + b'">\n</head>')
-    raw['index.html'] = raw['index.html'].replace(b'<div class="shell">',
-        b'<div class="shell"><div class="development-build" role="note">' + label + b'</div>', 1)
-    raw['style.css'] += b'\n.development-build{padding:.5rem;text-align:center;font-size:.75rem;color:#e6bd70}\n'
     version, web = bundle(raw, resource_base='../../')
     current = {key: data for key, data in files.items()
                if key != name and not key.startswith(descriptor['path'])}

@@ -23,7 +23,8 @@
   --danger: #ff7070;
   --danger-soft: rgba(255, 112, 112, 0.1);
   --radius: 16px;
-  --nav-width: 232px;
+  /* Fits the brand on one line and the slot status beside its pill. */
+  --nav-width: 248px;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
@@ -119,6 +120,47 @@ h2 {
 .mark svg {
   width: 22px;
   color: var(--accent);
+}
+
+.brand-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+/* Development builds show their source commit beneath the brand. */
+.brand-channel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+
+.channel-badge {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(240, 180, 90, 0.14);
+  color: var(--warn);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.brand-revision {
+  font: 500 11px var(--mono);
+}
+
+:root[data-channel="development"] .mark {
+  border-color: var(--warn-line);
+  background: rgba(240, 180, 90, 0.12);
+}
+
+:root[data-channel="development"] .mark svg {
+  color: var(--warn);
 }
 
 main {
@@ -2616,17 +2658,6 @@ body:has(#scan-dialog[open]) {
   color: var(--muted);
 }
 
-.connection-note {
-  margin: 14px 0 0;
-  padding: 10px 12px;
-  border: 1px solid var(--warn-line);
-  border-radius: 10px;
-  background: rgba(240, 180, 90, 0.07);
-  color: #f4d4a3;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .connection-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2906,13 +2937,24 @@ body:has(#scan-dialog[open]) {
     flex: 0 1 auto;
     min-width: 0;
     gap: 9px;
-    font-size: 16px;
+    font-size: clamp(15px, 4.3vw, 16px);
   }
 
   .mark {
     flex: none;
     width: 32px;
     height: 32px;
+  }
+
+  /* The sidebar's compact pill keeps the brand on one line on 360px phones. */
+  .app-header .cu-status {
+    gap: 5px;
+    padding: 0 9px;
+  }
+
+  .app-header .cu-batt {
+    width: 21px;
+    margin-right: 2px;
   }
 
   .cu-grid {
@@ -3109,8 +3151,8 @@ body:has(#scan-dialog[open]) {
     height: 18px;
   }
 
-  /* Slot status and pill share one row of a ~204px footer: the pill is
-     compact so the slot detail keeps room instead of running under it. */
+  /* Slot status and pill share one row: the pill is compact so the slot
+     detail keeps room instead of running under it. */
   .nav-foot {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

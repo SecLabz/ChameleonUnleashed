@@ -94,3 +94,42 @@ test('settings stay locked through a concurrent refresh and duplicate change eve
   expect(writes).toBe(1);
   expect((await (await request.get('/api/device')).json()).settings.long_ms).toBe(1001);
 });
+
+test('development branding identifies its commit and fits narrow layouts', async ({ page, request }) => {
+  await request.post('/test/reset');
+  const revision = 'ebae77fd5f664c401ba0a0073f2f1a8662ec1839';
+  const shell = (url) => url.pathname === '/';
+  await page.route(shell, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(
+      '</head>',
+      `<meta name="chameleon-development" content="${revision}">\n</head>`
+    );
+    await route.fulfill({ response, body });
+  });
+  for (const [width, brand] of [
+    [320, page.locator('.app-header .brand')],
+    [360, page.locator('.app-header .brand')],
+    [390, page.locator('.app-header .brand')],
+    [1280, page.locator('nav > .brand')]
+  ]) {
+    await page.setViewportSize({ width, height: 820 });
+    await page.goto('/');
+    await expect(page.locator('html')).toHaveAttribute('data-channel', 'development');
+    await expect(brand.locator('.brand-channel')).toBeVisible();
+    await expect(brand.locator('.channel-badge')).toHaveText('Dev');
+    await expect(brand.locator('.brand-revision')).toHaveText('ebae77f');
+    await expect(brand).toHaveAttribute('title', `Development build ${revision}`);
+    if (width < 1000) {
+      await expect(page.locator('#connection')).toContainText('87%');
+      const brandBox = await brand.boundingBox();
+      const connectionBox = await page.locator('#connection').boundingBox();
+      expect(brandBox.x + brandBox.width).toBeLessThanOrEqual(connectionBox.x);
+      expect(connectionBox.x + connectionBox.width).toBeLessThanOrEqual(width);
+    }
+  }
+  await page.unroute(shell);
+  await page.goto('/');
+  await expect(page.locator('html')).not.toHaveAttribute('data-channel', /./);
+  await expect(page.locator('nav > .brand .brand-channel')).toBeHidden();
+});

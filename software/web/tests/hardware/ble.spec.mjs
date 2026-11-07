@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test';
 import { physicalChooser } from './chooser.mjs';
-import { decodeSlot } from '../../src/device/slots.mjs';
 
 test('the physical Ultra serves device information and slot images over Web Bluetooth', async ({
   page,
@@ -8,9 +7,6 @@ test('the physical Ultra serves device information and slot images over Web Blue
 }, testInfo) => {
   const before = await (await request.get('http://192.168.16.1/api/device')).json();
   expect(before.busy).toBe(false);
-  const active = decodeSlot(
-    new Uint8Array(await (await request.get(`http://192.168.16.1/api/slot/${before.active_slot}`)).body())
-  );
   const checkChooser = await physicalChooser(page);
   const leakedHttp = [];
   let bluetoothPhase = false;
@@ -27,13 +23,6 @@ test('the physical Ultra serves device information and slot images over Web Blue
     await page.getByRole('button', { name: 'Connect Bluetooth', exact: true }).click();
     await expect(page.locator('#device-info')).toContainText('Bluetooth');
     await expect(page.locator('#device-info')).toContainText(before.chip);
-    if (!before.reader && active.hf.enabled && [1500, 1501, 2000].includes(active.hf.type)) {
-      await expect(page.locator('#connection-emulation')).toHaveText(
-        `${active.hf.type === 2000 ? 'NFC-B' : 'NFC-V'} emulation of slot ${before.active_slot + 1} starts once Bluetooth disconnects.`
-      );
-    } else {
-      await expect(page.locator('#connection-emulation')).toBeHidden();
-    }
     bluetoothPhase = true;
     await page.getByRole('button', { name: 'Slots', exact: true }).click();
     await expect(page.locator('#slots .slot-card')).toHaveCount(8);
@@ -48,7 +37,6 @@ test('the physical Ultra serves device information and slot images over Web Blue
       'Bluetooth disconnected. Reconnect to control the device.'
     );
     await expect(page.locator('#disconnect-bluetooth')).toBeHidden();
-    await expect(page.locator('#connection-emulation')).toBeHidden();
     await expect(page.locator('#toast')).not.toContainText('connection lost');
     await page.getByRole('button', { name: 'Studio', exact: true }).click();
     await expect(page.locator('#studio-document')).toBeVisible();
