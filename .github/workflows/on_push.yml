@@ -45,10 +45,11 @@ jobs:
       browser-tests: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run-tests == true) }}
   client_pipeline:
     name: Build and test clients
-    if: github.ref != 'refs/heads/develop'
     permissions:
       contents: read
     uses: ./.github/workflows/build_client.yml
+    with:
+      run-tests: ${{ github.ref != 'refs/heads/develop' || inputs.run-tests == true }}
   create_dev_release:
     permissions:
       contents: write
@@ -58,6 +59,7 @@ jobs:
     needs:
       - pages
       - firmware_pipeline
+      - client_pipeline
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
@@ -66,7 +68,8 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
-          name: release-artifacts-ultra
+          pattern: release-artifacts-*
+          merge-multiple: true
           path: release-artifacts
       - uses: actions/setup-python@v7
         with:
@@ -83,12 +86,13 @@ jobs:
           body: |
             Latest development build from `develop`. This version may be unstable.
 
-            [Development site](${{ needs.pages.outputs.url }}dev/) · [Bluetooth app](${{ needs.pages.outputs.url }}dev/app/)
+            Download the archive for your computer and follow `INSTALL.txt` to install or update.
+
+            [Bluetooth app](${{ needs.pages.outputs.url }}dev/)
 
             Choose Development in the USB firmware update page to install this build.
 
-            The archive includes `firmware/install.zip` for classic installation,
-            `firmware/application.zip` for web recovery, and matching web resources.
+            **Firmware & resources:** standalone firmware, HEX images and web resources.
           tag_name: dev
           name: Development release
           draft: false

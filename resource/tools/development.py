@@ -96,26 +96,16 @@ def stage(data, release, site):
         raise ValueError('Development firmware has no compatible recovery')
     identity = hashlib.sha256(package).hexdigest()
     save_atomic(site / 'updates/dev/files' / (identity + '.zip'), package)
-    with ZipFile(io.BytesIO(data)) as archive:
-        installer = archive.read('firmware/install.zip')
-    if inspect_zip(installer)['application']['payload'] != inspect_zip(package)['application']['payload']:
-        raise ValueError('Development installer differs from its application')
-    save_atomic(site / 'dev/firmware.zip', installer)
     catalogue['sources'] = [{
         'id': 'unleashed', 'label': 'Unleashed', 'repository': SOURCES[0][2],
         'releases': [{'version': 'v' + document['projectVersion'] + '-dev.' + revision[:7],
             'prerelease': True, 'published_at': release.get('published_at'), 'url': release['html_url'],
             'layout': selected[0], 'packages': {'application': {
                 'path': 'files/' + identity + '.zip', 'size': len(package), 'sha256': identity}}}]}]
-    (site / 'dev/index.html').write_text(
+    save_atomic(site / 'dev/index.html', (
         '<!doctype html><html lang="en"><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<title>Development · Chameleon Unleashed</title><link rel="stylesheet" href="app/style.css">'
-        '<main class="shell"><h1>Development build</h1><p>' + revision[:7] + '</p>'
-        '<p>This build may be unstable.</p><p><a class="btn" href="app/">Open Bluetooth app</a></p>'
-        '<p><a class="btn" href="firmware.zip" download>Download firmware</a></p>'
-        '<p>Install with <code>chameleon flash firmware.zip</code>, or choose Development '
-        'in the USB firmware update page.</p></main></html>')
+        '<meta http-equiv="refresh" content="0;url=app/">'
+        '<title>Chameleon Unleashed</title></html>').encode())
     return candidate, catalogue
 
 
@@ -144,9 +134,8 @@ def prepare(artifacts, output, revision, previous=None):
         if previous is not None:
             merge_resources(previous_resources(previous), history)
         packages = staging / 'packages'
-        names = package_release(artifacts, packages, document['projectVersion'],
-                                development=True, firmware_only=True)
-        name = names[0]
+        names = package_release(artifacts, packages, document['projectVersion'], development=True)
+        name = next(name for name in names if re.fullmatch(RESOURCE_PACKAGE, name))
         contents = {key: data for key, data in read_zip(packages / name).items() if not key.startswith('cdn/')}
         contents.update({'cdn/' + key: data for key, data in current.items()})
         contents.update({'history/' + path.relative_to(history).as_posix(): path.read_bytes()

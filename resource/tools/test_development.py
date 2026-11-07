@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 from development import prepare, previous_resources, latest_development, manifest
 from mirror_firmware import SOURCES
+from package_release import PLATFORMS
 from prepare_pages import prepare as prepare_pages
 from sync_release_assets import superseded
 from test_prepare_pages import resources, zipped
@@ -22,6 +23,10 @@ class DevelopmentTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.artifacts = self.root / 'artifacts'
         self.artifacts.mkdir()
+        for platform in PLATFORMS:
+            executable = 'chameleon.exe' if platform == 'windows-x64' else 'chameleon'
+            (self.artifacts / f'chameleon-{platform}.zip').write_bytes(
+                zipped({executable: ('cli-' + platform).encode()}))
         data = fixtures()
         self.application = archive(*data['normal'])
         self.installer = archive(*data['normal'], *data['system'])
@@ -64,6 +69,14 @@ class DevelopmentTests(unittest.TestCase):
             for key, value in original.items():
                 self.assertEqual(retained[key], value)
         self.assertTrue(name.endswith('-dev.bbbbbbb-firmware-resources.zip'))
+        self.assertEqual(len(list((self.root / 'b').glob('*.zip'))), len(PLATFORMS) + 1)
+        for platform in PLATFORMS:
+            executable = 'chameleon.exe' if platform == 'windows-x64' else 'chameleon'
+            path = self.root / 'b' / f'ChameleonUnleashed-v1.1.0-dev.bbbbbbb-{platform}.zip'
+            with ZipFile(path) as package:
+                self.assertEqual(set(package.namelist()), {executable, 'firmware.zip', 'INSTALL.txt'})
+                self.assertEqual(package.read(executable), ('cli-' + platform).encode())
+                self.assertEqual(package.read('firmware.zip'), self.installer)
         with ZipFile(io.BytesIO(second)) as package:
             self.assertEqual(package.read('firmware/application.zip'), self.application)
             self.assertEqual(package.read('firmware/install.zip'), self.installer)
@@ -93,7 +106,9 @@ class DevelopmentTests(unittest.TestCase):
         expected = next(value for key, value in stable.items() if key.startswith('web/') and key.endswith('/app.mjs'))
         self.assertEqual((site / 'app/app.mjs').read_bytes(), expected)
         self.assertIn('Development · bbbbbbb', (site / 'dev/app/index.html').read_text())
-        self.assertEqual((site / 'dev/firmware.zip').read_bytes(), self.installer)
+        self.assertFalse((site / 'dev/firmware.zip').exists())
+        self.assertIn('content="0;url=app/"', (site / 'dev/index.html').read_text())
+        self.assertNotIn('<a ', (site / 'dev/index.html').read_text())
         self.assertEqual(len(list((site / 'updates/dev/files').glob('*.zip'))), 1)
         dev = json.loads((site / 'updates/dev/catalog.json').read_text())
         self.assertEqual(len(dev['sources']), 1)
@@ -130,14 +145,16 @@ class DevelopmentTests(unittest.TestCase):
         self.assertFalse(output.exists())
 
     def test_failed_upload_cannot_delete_the_previous_development_package(self):
-        name, data, _ = self.build('a' * 40)
+        self.build('a' * 40)
+        archives = {path.name: path.read_bytes() for path in (self.root / 'a').glob('*.zip')}
         old = {'id': 1, 'name': 'previous.zip'}
-        asset = {'id': 2, 'name': name, 'state': 'uploaded', 'size': len(data),
-                 'digest': 'sha256:' + hashlib.sha256(data).hexdigest()}
-        self.assertEqual(superseded([old, asset], {name: data}, development=True), [old])
-        for assets in ([old], [old, {**asset, 'digest': 'sha256:bad'}]):
+        assets = [{'id': index + 2, 'name': name, 'state': 'uploaded', 'size': len(data),
+                   'digest': 'sha256:' + hashlib.sha256(data).hexdigest()}
+                  for index, (name, data) in enumerate(archives.items())]
+        self.assertEqual(superseded([old, *assets], archives), [old])
+        for incomplete in ([old, *assets[:-1]], [old, {**assets[0], 'digest': 'sha256:bad'}, *assets[1:]]):
             with self.assertRaises(ValueError):
-                superseded(assets, {name: data}, development=True)
+                superseded(incomplete, archives)
 
 
 if __name__ == '__main__':

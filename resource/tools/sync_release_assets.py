@@ -11,13 +11,8 @@ import subprocess
 from package_release import PLATFORMS
 
 
-def superseded(assets, archives, development=False):
-    if development:
-        from development import RESOURCE_PACKAGE
-        import re
-        if len(archives) != 1 or not re.fullmatch(RESOURCE_PACKAGE, next(iter(archives))):
-            raise ValueError('Expected one development firmware/resources package')
-    elif len(archives) != len(PLATFORMS) + 1:
+def superseded(assets, archives):
+    if len(archives) != len(PLATFORMS) + 1:
         raise ValueError('Expected all five packaged release archives')
     uploaded = {asset['name']: asset for asset in assets}
     for name, data in archives.items():
@@ -44,7 +39,7 @@ def main():
         parser.error('Development cleanup is restricted to the dev pre-release')
     if args.development and (not release.get('prerelease') or release.get('draft')):
         raise ValueError('Expected a public development pre-release')
-    for asset in superseded(release['assets'], archives, args.development):
+    for asset in superseded(release['assets'], archives):
         subprocess.run(['gh', 'api', '--method', 'DELETE',
                         f"repos/{args.repo}/releases/assets/{asset['id']}"], check=True)
         print('Removed superseded download:', asset['name'])

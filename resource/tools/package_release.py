@@ -86,7 +86,7 @@ https://github.com/SecLabz/ChameleonUnleashed#quick-installation
     return text.replace('\n', '\r\n').encode() if windows else text.encode()
 
 
-def prepare(artifacts, output, version, tag=None, development=False, firmware_only=False):
+def prepare(artifacts, output, version, tag=None, development=False):
     check_tag(version, tag)
     if tag and development:
         raise ValueError('A tagged release cannot be a development snapshot')
@@ -116,7 +116,7 @@ def prepare(artifacts, output, version, tag=None, development=False, firmware_on
     application = sources['application'].read_bytes()
     installation_package = sources['installation'].read_bytes()
     downloads = {}
-    for platform in (() if firmware_only else PLATFORMS):
+    for platform in PLATFORMS:
         native = read_zip(artifacts / f'chameleon-{platform}.zip')
         executable = 'chameleon.exe' if platform == 'windows-x64' else 'chameleon'
         if set(native) != {executable}:
