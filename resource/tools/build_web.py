@@ -248,7 +248,7 @@ def main():
         path = (source_dir if name.endswith(('.mjs', '.json')) else site) / name.lstrip('/')
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    for entry, filename in [('app.mjs', 'app.mjs'), ('runtime/nfc-wasm/' + package_worker, 'worker.mjs')]:
+    for entry, filename in [('app.mjs', 'app.mjs'), ('runtime/nfc-wasm/' + package_worker, 'worker.mjs'), ('ui/ble-firmware.mjs', 'ble-update.mjs')]:
         # The application owns the served Worker URL and passes its factory to the client.
         run(bundler, source_dir / entry, '--bundle', '--format=esm', '--target=es2022',
             '--minify', '--legal-comments=inline', f'--outfile={site / filename}',
@@ -272,10 +272,12 @@ def main():
                 raise SystemExit(f'Zopfli verification failed: {name}')
             if len(optimized) < len(packed):
                 packed = optimized
+        sizes[name] = {'raw': len(data), 'gzip': len(packed), 'sha256': hashlib.sha256(data).hexdigest()}
+        if raw_path.name == 'ble-update.mjs':
+            continue  # Loaded on demand by the hosted BLE app, never stored in firmware.
         (out / (str(i) + '.gz')).write_bytes(packed)
         header.append(f'static const uint8_t web_bytes_{i}[] = {{' + ','.join(map(str, packed)) + '};')
         rows.append('{' + json.dumps(name) + ',' + json.dumps(types[Path(name).suffix]) + f',web_bytes_{i},sizeof(web_bytes_{i})' + '}')
-        sizes[name] = {'raw': len(data), 'gzip': len(packed), 'sha256': hashlib.sha256(data).hexdigest()}
     header += ['static const web_asset_t web_assets[] = {' + ','.join(rows) + '};',
                'static const web_asset_t *web_asset_find(const char *path) {',
                ' if (!strcmp(path,"/")) path="/index.html";',

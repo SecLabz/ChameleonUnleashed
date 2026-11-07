@@ -11,7 +11,9 @@ export async function physicalChooser(page) {
     if (selected.has(event.id)) {
       return;
     }
-    const devices = event.devices.filter((device) => !device.name || device.name.includes('ChameleonUltra'));
+    const devices = event.devices.filter(
+      (device) => !device.name || device.name.includes('ChameleonUltra') || device.name.startsWith('CU-')
+    );
     if (devices.length === 1 && event.devices.length === 1) {
       selected.add(event.id);
       void cdp

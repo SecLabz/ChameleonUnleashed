@@ -91,6 +91,7 @@
 #define DATA_CMD_MF1_MAINTENANCE                 (2039)
 #define DATA_CMD_MF1_UID_SPECIAL                (2041)
 #define DATA_CMD_MF1_INSPECT                     (2040)
+#define DATA_CMD_MF1_BATCH                       (2042)
 #define DATA_CMD_DESFIRE_GET_IMAGE              (4320)
 #define DATA_CMD_DESFIRE_SET_IMAGE              (4321)
 #define DATA_CMD_TYPE2_READ                     (2028)

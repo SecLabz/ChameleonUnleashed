@@ -1,11 +1,9 @@
 # Chameleon Unleashed documentation
 
 - [Quick installation and USB flashing](../README.md#quick-installation)
-- [USB browser updates and permanent recovery](web-updates.md)
+- [Browser updates and permanent recovery](web-updates.md)
 - [Native CLI](../software/rust/README.md)
-- [USB web interface](../software/web/README.md)
-- [Web Bluetooth feasibility and autonomous validation](web-bluetooth-feasibility.md) (French)
-- [Web Bluetooth build, offline package and hardware bench](web-bluetooth.md)
+- [Web interface](../software/web/README.md)
 - [Performance & measurements](performance.md)
 - [Release packages](releases.md)
 - [Upstream wiki](https://github.com/RfidResearchGroup/ChameleonUltra/wiki) for hardware and the original Python client
@@ -13,7 +11,7 @@
 ## Local development
 
 Run `./dev COMMAND --help` for options. On Windows, use `py dev COMMAND`;
-firmware builds need a Unix environment such as MSYS2 and remain unqualified.
+firmware builds need a Unix environment such as MSYS2.
 
 Requirements:
 

@@ -90,9 +90,70 @@ export async function runAutoPwn({
 
   let nonceKeys = [];
   const testedKeysByTarget = new Map();
+  // A response can contain several fresh physical authentication results.
+  // Retain them only until the sequential recovery engine acknowledges them.
+  const sweepReplies = new Map();
   const targetId = (target) => `${target.sector}:${target.is_key_b}`;
   const untestedKeys = (target, keys) =>
     keys.filter((key) => !testedKeysByTarget.get(targetId(target))?.has(hex(key)));
+
+  async function sweep(args) {
+    const replyId = (target) => `${targetId(target)}:${hex(args.key)}`;
+    if (
+      device.classicBatchesSupported &&
+      typeof device.classicBatch === 'function' &&
+      !sweepReplies.has(replyId(args))
+    ) {
+      const targets = [args];
+      snapshot.summary.mapping.forEach((keys, sector) => {
+        const target = { sector, is_key_b: args.is_key_b };
+        if (
+          sector !== args.sector &&
+          !(args.is_key_b ? keys.key_b : keys.key_a) &&
+          untestedKeys(target, [args.key]).length &&
+          !sweepReplies.has(replyId(target))
+        ) {
+          targets.push(target);
+        }
+      });
+      const batch = targets.slice(0, 8);
+      const entries = batch.map((target) => [
+        geometry.sectors[target.sector].first,
+        target.is_key_b ? 0x61 : 0x60,
+        ...args.key
+      ]);
+      try {
+        const replies = await device.classicBatch(0, entries);
+        replies.forEach((reply, i) => {
+          sweepReplies.set(replyId(batch[i]), reply);
+          if ([0, 6].includes(reply.status)) {
+            const id = targetId(batch[i]);
+            const tested = testedKeysByTarget.get(id) ?? new Set();
+            tested.add(hex(args.key));
+            testedKeysByTarget.set(id, tested);
+          }
+        });
+      } catch (error) {
+        if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
+          throw error;
+        }
+        device.classicBatchesSupported = false;
+      }
+    }
+    const reply = sweepReplies.get(replyId(args));
+    if (reply) {
+      sweepReplies.delete(replyId(args));
+      if (![0, 6].includes(reply.status)) {
+        const error = new Error(
+          reply.status === 1 ? 'Card not found or changed' : `Device status ${reply.status}`
+        );
+        error.status = reply.status;
+        throw error;
+      }
+      return { Sweep: { hit: reply.status === 0, physically_tested: true } };
+    }
+    return { Sweep: { hit: !!(await verify(args, [args.key], () => {}, false)), physically_tested: true } };
+  }
 
   async function verify(target, candidates, onTested = () => {}, capture = true) {
     check();
@@ -316,9 +377,7 @@ export async function runAutoPwn({
         // Reuse sweeps often reject the same key on many sectors. Keep the
         // firmware's short-lived authentication session for those failures;
         // a checked sector read would reselect for each rejected candidate.
-        return {
-          Sweep: { hit: !!(await verify(args, [args.key], () => {}, false)), physically_tested: true }
-        };
+        return sweep(args);
       case 'ExtractTrailer': {
         try {
           await readSector(args.sector, args.key_a, false);

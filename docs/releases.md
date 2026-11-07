@@ -15,7 +15,7 @@ Choose the archive for your computer. It contains the CLI, `firmware.zip` and
 Extract the archive, keep `firmware.zip` intact and follow `INSTALL.txt`.
 [Step-by-step instructions](../README.md#quick-installation).
 
-You can also update from **Device → Firmware update** in the USB web interface.
+You can also update from **Device → Firmware update** in the USB or Bluetooth web interface.
 [Browser updates and recovery](web-updates.md).
 
 For standalone firmware, HEX images or web resources, use

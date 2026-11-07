@@ -8,6 +8,9 @@ import {
   decodeReply
 } from './ble-protocol.mjs';
 import { HttpError } from './transport.mjs';
+import { decodeClassicJob, jobIdBytes } from './classic-job.mjs';
+import { COMMAND } from './commands.mjs';
+import { claimBluetoothDevice } from './bluetooth-lock.mjs';
 
 export const NORDIC_UART = {
   service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
@@ -34,6 +37,13 @@ export class BluetoothTransport {
     this.received = (event) => {
       try {
         for (const frame of this.decoder.push(event.target.value)) {
+          if (frame.command === BLE_API.JOB_EVENT) {
+            if (!this.job || frame.status !== 0x68) {
+              throw new Error('Unexpected Classic job event');
+            }
+            this.job.receive(frame.data);
+            continue;
+          }
           if (!this.pending || this.pending.responded) {
             throw new Error('Unexpected Bluetooth response. Reconnect before retrying.');
           }
@@ -54,7 +64,9 @@ export class BluetoothTransport {
       await this.tx.startNotifications();
       const hello = await this.run((correlation) => encodeOperation(OPERATION.HELLO, correlation));
       if (hello.status !== 200 || hello.json || hello.data.length !== 6) {
-        throw new Error('Unsupported Web Bluetooth firmware contract. Update the firmware over USB.');
+        throw new Error(
+          'Unsupported Web Bluetooth firmware contract. Update the firmware through Firmware update or USB DFU.'
+        );
       }
       const limits = new DataView(hello.data.buffer, hello.data.byteOffset, hello.data.byteLength);
       if (
@@ -62,9 +74,11 @@ export class BluetoothTransport {
         limits.getUint16(1) < BLE_API.MAX_BODY ||
         limits.getUint16(3) < BLE_API.MAX_RESPONSE
       ) {
-        throw new Error('Incompatible Web Bluetooth firmware limits. Update the firmware over USB.');
+        throw new Error(
+          'Incompatible Web Bluetooth firmware limits. Update the firmware through Firmware update or USB DFU.'
+        );
       }
-      this.capabilities = { tearoff: !!(hello.data[5] & 1) };
+      this.capabilities = { tearoff: !!(hello.data[5] & 1), classicJobs: !!(hello.data[5] & 4) };
       if (hello.data[5] & 2) {
         const info = await this.run((correlation) => encodeOperation(OPERATION.TRANSPORT_INFO, correlation));
         const limit = info.data.length === 3 ? info.data[1] * 256 + info.data[2] : 0;
@@ -72,6 +86,17 @@ export class BluetoothTransport {
           throw new Error('Invalid negotiated Bluetooth payload limit. Reconnect before retrying.');
         }
         this.fragmentBytes = limit;
+      }
+      if (hello.data[5] & 8) {
+        // The central chooses the effective interval. A declined profile must
+        // retain the working connection and must never replay a reader command.
+        const profile = await this.run((correlation) =>
+          encodeOperation(OPERATION.LINK_PROFILE, correlation, 0, 0, Uint8Array.of(2, 0))
+        );
+        if (profile.status !== 200 || profile.data.length !== 24 || profile.data[0] !== 1) {
+          throw new Error('Invalid Bluetooth link profile response');
+        }
+        this.linkProfile = profile.data;
       }
       return this;
     } catch (error) {
@@ -147,11 +172,117 @@ export class BluetoothTransport {
     return reply.json ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(reply.data)) : reply.data;
   }
 
+  async classicJob(lease, body, { signal, onEvent = () => {} } = {}) {
+    if (this.job || !this.capabilities?.classicJobs || signal?.aborted) {
+      throw new Error('Classic job is unavailable');
+    }
+    let resolve;
+    let reject;
+    let timer;
+    const finished = new Promise((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    // Attach immediately: disconnect can reject while the start exchange is pending.
+    finished.catch(() => {});
+    const early = [];
+    let sequence = 0;
+    let previous = 0;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => this.disconnect(new Error('Classic job stopped responding')), this.timeoutMs);
+    };
+    const job = (this.job = {
+      id: null,
+      reject,
+      receive: (bytes) => {
+        if (job.id === null) {
+          if (early.length >= 4) {
+            throw new Error('Classic job start event overflow');
+          }
+          early.push(bytes);
+          return;
+        }
+        const event = decodeClassicJob(bytes, job.id, sequence++, body[1], previous);
+        previous = event.completed;
+        arm();
+        onEvent(event);
+        if (event.done) {
+          resolve(event);
+        }
+      }
+    });
+    let cancellation;
+    const cancel = () => {
+      if (job.id !== null && !cancellation) {
+        cancellation = this.request(`/api/classic/job/cancel?id=${lease}`, jobIdBytes(job.id));
+        cancellation.catch((error) => this.disconnect(error));
+      }
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    arm();
+    try {
+      const reply = await this.request(`/api/classic/job/start?id=${lease}`, Uint8Array.from(body));
+      if (reply.length !== 4) {
+        throw new Error('Invalid Classic job start reply');
+      }
+      job.id = new DataView(reply.buffer, reply.byteOffset, reply.byteLength).getUint32(0);
+      if (!job.id) {
+        throw new Error('Invalid Classic job identifier');
+      }
+      early.splice(0).forEach(job.receive);
+      if (signal?.aborted) {
+        cancel();
+      }
+      const result = await finished;
+      await cancellation;
+      return result;
+    } catch (error) {
+      this.disconnect(error);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      if (this.job === job) {
+        this.job = null;
+      }
+    }
+  }
+
+  async enterDfu(signal) {
+    await this.queue;
+    signal?.throwIfAborted();
+    if (this.closed || !this.device.gatt.connected) {
+      throw new Error('Reconnect the Ultra before entering DFU.');
+    }
+    let timer;
+    let disconnected;
+    let abort;
+    const reset = new Promise((resolve, reject) => {
+      disconnected = resolve;
+      abort = () => reject(signal.reason);
+      this.device.addEventListener('gattserverdisconnected', disconnected, { once: true });
+      signal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => reject(new Error('The Ultra did not restart in DFU.')), this.timeoutMs);
+    });
+    // This legacy command resets immediately, without an application reply.
+    // A GATT write can reject during that reset; the observed disconnect is required.
+    void this.rx.writeValueWithResponse(encodeFrame(COMMAND.ENTER_BOOTLOADER)).catch(() => {});
+    try {
+      await reset;
+    } finally {
+      clearTimeout(timer);
+      this.device.removeEventListener('gattserverdisconnected', disconnected);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
   disconnect(reason = new Error('Bluetooth disconnected')) {
     if (this.closed) {
       return;
     }
     this.closed = true;
+    this.job?.reject(reason);
     this.device.removeEventListener('gattserverdisconnected', this.disconnected);
     this.tx.removeEventListener('characteristicvaluechanged', this.received);
     if (this.pending) {
@@ -180,25 +311,7 @@ export async function connectBluetooth({
   const device = await bluetooth.requestDevice({
     filters: [{ namePrefix: 'ChameleonUltra', services: [NORDIC_UART.service] }]
   });
-  let releaseLock;
-  if (locks) {
-    const released = new Promise((resolve) => {
-      releaseLock = resolve;
-    });
-    const acquired = new Promise((resolve, reject) => {
-      locks
-        .request(`chameleon-bluetooth:${device.id}`, { ifAvailable: true }, async (lock) => {
-          resolve(!!lock);
-          if (lock) {
-            await released;
-          }
-        })
-        .catch(reject);
-    });
-    if (!(await acquired)) {
-      throw new Error('This Ultra is already open in another tab. Close its Bluetooth connection first.');
-    }
-  }
+  const releaseLock = await claimBluetoothDevice(device, locks);
   let transport;
   let cancelled = false;
   let timer;

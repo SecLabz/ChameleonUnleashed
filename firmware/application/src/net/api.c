@@ -20,6 +20,8 @@
 #include <string.h>
 #include <stdatomic.h>
 #include "ble_main.h"
+#include "classic_batch.h"
+#include "classic_job.h"
 
 #define ST25TB_TEAROFF_ROUTE "/api/st25tb/tearoff/"
 
@@ -38,6 +40,7 @@ void web_session_end(void) {
         end_after_tearoff = true;
         return;
     }
+    classic_job_reset();
     nfca_session_close();
     mf1_darkside_reset();
     if (reader_session && previous_mode != DEVICE_MODE_READER) tag_mode_enter();
@@ -144,6 +147,28 @@ api_response_t api_dispatch_from(api_source_t source, const char *method, const 
         renewed = app_timer_cnt_get();
         return result(200, 0);
     }
+    if (!strncmp(uri, "/api/classic/job/", 17)) {
+        const char *operation = uri + 17, *query = strstr(operation, "?id=");
+        if (!query) return result(404, 0);
+        p = query + 4;
+        if (!number(&p, &id) || *p) return result(404, 0);
+        if (!id || id != session || !reader_session || web_tearoff_active()) return result(409, 0);
+        renewed = app_timer_cnt_get();
+        if (query - operation == 5 && !strncmp(operation, "start", 5)) {
+            uint32_t job;
+            if (capacity < 4) return result(500, 0);
+            if (!classic_job_start(body, size, source == API_SOURCE_BLE, &job)) return result(409, 0);
+            for (unsigned i = 0; i < 4; i++) output[i] = job >> (24 - 8 * i);
+            return result(200, 4);
+        }
+        if (size != 4) return result(400, 0);
+        uint32_t job = (uint32_t)body[0] << 24 | (uint32_t)body[1] << 16 | (uint32_t)body[2] << 8 | body[3];
+        if (query - operation == 6 && !strncmp(operation, "cancel", 6))
+            return result(classic_job_cancel(job) ? 200 : 409, 0);
+        if (query - operation == 4 && !strncmp(operation, "read", 4))
+            return result(200, classic_job_read(job, output, capacity));
+        return result(404, 0);
+    }
     if (!strncmp(uri, ST25TB_TEAROFF_ROUTE, sizeof(ST25TB_TEAROFF_ROUTE) - 1)) {
         const char *operation = uri + sizeof(ST25TB_TEAROFF_ROUTE) - 1;
         const char *query = strstr(operation, "?id=");
@@ -153,7 +178,7 @@ api_response_t api_dispatch_from(api_source_t source, const char *method, const 
         if (!id || id != session || !reader_session) return result(409, 0);
         renewed = app_timer_cnt_get();
         if (query - operation == 5 && !strncmp(operation, "start", 5)) {
-            if (m_is_field_on || nfca_session_active() || web_tearoff_active())
+            if (m_is_field_on || nfca_session_active() || web_tearoff_active() || classic_job_active())
                 return result(409, 0);
             return result(web_tearoff_start(body, size) ? 200 : 400, 0);
         }
@@ -190,7 +215,7 @@ api_response_t api_dispatch_from(api_source_t source, const char *method, const 
     p += 4;
     if (!number(&p, &id) || *p) return result(404, 0);
     if (id == 0 || id != session || !reader_session) return result(409, 0);
-    if (web_tearoff_active()) return result(409, 0);
+    if (web_tearoff_active() || classic_job_active()) return result(409, 0);
     if (size > 1024 || capacity < NFCA_COMMAND_OUTPUT_BYTES + 2) return result(413, 0);
     switch (command) {
     case DATA_CMD_DESFIRE_READER:
@@ -210,6 +235,7 @@ api_response_t api_dispatch_from(api_source_t source, const char *method, const 
     case DATA_CMD_HF14A_SCAN:
     case DATA_CMD_MF1_DETECT_PRNG:
     case DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK:
+    case DATA_CMD_MF1_BATCH:
     case DATA_CMD_MF1_READ_ONE_BLOCK:
     case DATA_CMD_NFCA_WRITE_USER_UNIT:
     case DATA_CMD_TYPE2_AUTH_READ:
@@ -235,7 +261,9 @@ api_response_t api_dispatch_from(api_source_t source, const char *method, const 
         command != DATA_CMD_MF1_CAPTURE_SESSION) mf1_darkside_reset();
     renewed = app_timer_cnt_get();
     uint16_t status, length = 0;
-    if (command == DATA_CMD_DESFIRE_READER) {
+    if (command == DATA_CMD_MF1_BATCH) {
+        status = classic_batch_request(body, size, output + 2, capacity - 2, &length);
+    } else if (command == DATA_CMD_DESFIRE_READER) {
         status = desfire_reader_command(size, body, output + 2, &length);
     } else if (hf_reader_supports(command)) {
         status = hf_reader_command(command, size, body, output + 2, capacity - 2, &length);

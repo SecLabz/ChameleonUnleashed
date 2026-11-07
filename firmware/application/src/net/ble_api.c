@@ -32,8 +32,10 @@ uint16_t ble_api_request(const uint8_t *request, size_t size,
         if (body_size || lease || argument) goto done;
         /* Protocol version, body limit BE16, reply body limit BE16, flags:
          * bit 0 supports start/state/cancel during a long-running RF job;
-         * bit 1 supports querying this connection's negotiated NUS payload. */
-        const uint8_t hello[] = {BLE_API_VERSION, 4, 0, 2, 0, 3};
+         * bit 1 supports querying this connection's negotiated NUS payload;
+         * bit 2 supports bounded Classic jobs with unsolicited events;
+         * bit 3 supports requesting and inspecting a fast connection profile. */
+        const uint8_t hello[] = {BLE_API_VERSION, 4, 0, 2, 0, 15};
         memcpy(payload, hello, sizeof(hello));
         response = (api_response_t){200, "application/octet-stream", sizeof(hello)};
         goto done;
@@ -45,6 +47,12 @@ uint16_t ble_api_request(const uint8_t *request, size_t size,
         payload[1] = limit >> 8;
         payload[2] = limit;
         response = (api_response_t){200, "application/octet-stream", 3};
+        goto done;
+    }
+    if (operation == BLE_API_LINK_PROFILE) {
+        if (lease || argument || body_size != 2 || body[0] > 4 || body[1] > 2) goto done;
+        ble_link_profile(body[0], body[1], payload);
+        response = (api_response_t){200, "application/octet-stream", BLE_LINK_INFO_BYTES};
         goto done;
     }
     if (operation != BLE_API_COMMAND && operation != BLE_API_SLOT && argument) goto done;
@@ -66,7 +74,12 @@ uint16_t ble_api_request(const uint8_t *request, size_t size,
         snprintf(uri, sizeof(uri), "/api/command/%u?id=%lu", argument, (unsigned long)lease);
         break;
     default:
-        if (operation >= BLE_API_SLOT_OPEN && operation <= BLE_API_SLOT_CLEAR) {
+        if (operation >= BLE_API_CLASSIC_JOB_START && operation <= BLE_API_CLASSIC_JOB_READ) {
+            if (!lease) goto done;
+            static const char *const names[] = {"start", "cancel", "read"};
+            snprintf(uri, sizeof(uri), "/api/classic/job/%s?id=%lu",
+                names[operation - BLE_API_CLASSIC_JOB_START], (unsigned long)lease);
+        } else if (operation >= BLE_API_SLOT_OPEN && operation <= BLE_API_SLOT_CLEAR) {
             static const char *const names[] = {"open", "read", "begin", "write", "commit",
                 "activate", "nick", "enable", "clear"};
             snprintf(uri, sizeof(uri), "/api/slots/%s?id=%lu",

@@ -31,6 +31,7 @@ NRF_LOG_MODULE_REGISTER();
 #include "app_buttons.h"
 #include "app_status.h"
 #include "ble_main.h"
+#include "net/classic_job.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
 #include "bsp_wdt.h"
@@ -1136,6 +1137,7 @@ int main(void) {
         web_tearoff_poll();
         // Data pack process
         data_frame_process();
+        classic_job_poll();
         // Log print process
         while (NRF_LOG_PROCESS());
         // WDT refresh
@@ -1152,6 +1154,10 @@ int main(void) {
         // If system idle sometime, we can enter deep sleep state.
         // Some task process done, we can enter cpu sleep state.
 #if defined(PROJECT_CHAMELEON_ULTRA)
+        /* A queued job event needs another main-loop turn even when no
+         * application interrupt is scheduled. SoftDevice radio events alone
+         * do not guarantee a wake after an RF step. */
+        if (classic_job_active()) continue;
         if (hf_sniff_active()) {
             hf_sniff_poll();
         } else if (!st25tb_field_active) {

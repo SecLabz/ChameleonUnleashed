@@ -1,5 +1,5 @@
-import { unzipSync } from './update-unzip.mjs';
-import { sha256 } from './update-sha256.mjs';
+import { unzipSync } from '../vendor/unzip.mjs';
+import { sha256 } from '../runtime/sha256.mjs';
 
 export const MAXIMUM_SIZE = 4 * 1024 * 1024;
 export const MINIMUM_ZIP_SIZE = 22; // Empty ZIP end-of-directory record.

@@ -12,6 +12,8 @@ def assets(base):
     files = {name: (ROOT / 'software/web/public' / name).read_bytes()
              for name in ('update.html', 'update.css')}
     files['nordic-package.mjs'] = (ROOT / 'software/web/src/ui/nordic-package.mjs').read_bytes()
+    files['nordic-package.mjs'] = files['nordic-package.mjs'].replace(b'../vendor/unzip.mjs', b'./update-unzip.mjs').replace(b'../runtime/sha256.mjs', b'./update-sha256.mjs')
+    files['firmware-catalogue.mjs'] = (ROOT / 'software/web/src/ui/firmware-catalogue.mjs').read_bytes().replace(b'../runtime/sha256.mjs', b'./update-sha256.mjs')
     files['update-unzip.mjs'] = (ROOT / 'software/web/src/vendor/unzip.mjs').read_bytes()
     files['fflate.LICENSE.txt'] = (ROOT / 'software/web/src/vendor/fflate.LICENSE.txt').read_bytes()
     files['update.mjs'] = (ROOT / 'software/web/src/ui/firmware-update.mjs').read_bytes()

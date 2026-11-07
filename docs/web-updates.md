@@ -10,9 +10,9 @@ The CLI keeps an already matching Unleashed bootloader. Use
 
 ## Update through a browser
 
-1. Connect the Ultra over USB to a compatible device and open [192.168.16.1](http://192.168.16.1).
+1. Open [192.168.16.1](http://192.168.16.1) over USB, or connect through the HTTPS Bluetooth app.
 2. Choose **Device → Firmware update**.
-3. Select the firmware and version, then install. Keep USB connected until completion.
+3. Select the firmware and version, then install. Over Bluetooth, select the Ultra in DFU when prompted.
 
 You can also choose a Nordic DFU ZIP with **Update from a file**.
 A local ZIP works without Internet; downloading a release requires Internet access.
@@ -27,7 +27,7 @@ The package remains usable for later installations and updates.
 
 **Export your saved tags before this migration:** the old bootloader may overwrite
 stored data. Also export before switching between Unleashed and Official, since
-stored data may be incompatible. The update page lets you erase tags and settings.
+stored data may be incompatible. The USB update page lets you erase tags and settings.
 
 Installing Official removes Unleashed web recovery. To return, flash Unleashed's
 `firmware.zip` through the CLI.
@@ -41,9 +41,9 @@ Installing Official removes Unleashed web recovery. To return, flash Unleashed's
 - **Use classic DFU:** power off, hold **B**, connect USB and release **B**.
   Flash again through the CLI. The two central LEDs alternate.
 
-An interrupted application update can be retried in web recovery. Replacing
-recovery itself or restoring Official may require classic DFU if interrupted.
-There is no automatic rollback. Keep the cable connected throughout the update.
+USB web application updates can be retried in recovery. Bluetooth DFU rewrites recovery;
+an interrupted Bluetooth update, recovery replacement or Official restore may require classic DFU.
+There is no automatic rollback.
 
 Recovery stays available while USB is powered. Without USB power it sleeps after
 five seconds; return to the normal application for tag emulation.

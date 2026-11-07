@@ -58,6 +58,8 @@ def bundle(name, web, cache, shared, bundler):
                 target.write_bytes(data)
 
         entry = 'app.mjs'
+        if name == '/ble-update.mjs':
+            entry = 'ui/ble-firmware.mjs'
         if name == '/worker.mjs':
             entry = 'runtime/nfc-wasm/' + worker
 
@@ -115,7 +117,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             return BytesIO(body)
-        if self.bundle is None or name not in {'/app.mjs', '/worker.mjs'}:
+        if self.bundle is None or name not in {'/app.mjs', '/worker.mjs', '/ble-update.mjs'}:
             return super().send_head()
 
         try:

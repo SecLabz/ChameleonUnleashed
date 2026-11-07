@@ -47,11 +47,19 @@ export async function traceGatt(page) {
     const raw = await page.evaluate(() => globalThis.pm3GattTrace());
     const decoders = { request: new FrameDecoder(), reply: new FrameDecoder() };
     const requests = [];
+    const streamEvents = [];
     const pending = new Map();
     const errors = [];
     for (const chunk of raw.chunks) {
       try {
         for (const frame of decoders[chunk.direction].push(Uint8Array.from(chunk.bytes))) {
+          if (frame.command === BLE_API.JOB_EVENT) {
+            if (frame.status !== 0x68 || frame.data.length < 13) {
+              throw new Error('Invalid job notification');
+            }
+            streamEvents.push({ ms: chunk.ms, bytes: [...frame.data] });
+            continue;
+          }
           if (frame.command !== BLE_API.COMMAND || frame.data.length < 5) {
             throw new Error('Unexpected NUS frame');
           }
@@ -90,7 +98,7 @@ export async function traceGatt(page) {
         errors.push({ ms: chunk.ms, direction: chunk.direction, message: error.message });
       }
     }
-    const trace = { ...raw, requests, errors, pending: [...pending.keys()] };
+    const trace = { ...raw, requests, streamEvents, errors, pending: [...pending.keys()] };
     await writeFile(filename, JSON.stringify(trace, null, 2));
     return trace;
   };

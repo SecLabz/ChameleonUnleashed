@@ -35,7 +35,13 @@ const ICONS = {
 };
 const SPINNER = '<span class="cu-spin" aria-hidden="true"></span>';
 
-export function deviceViews({ notify, onConnection, canConnect = () => true, open = () => {} }) {
+export function deviceViews({
+  notify,
+  onConnection,
+  canConnect = () => true,
+  open = () => {},
+  onFirmwareUpdate = () => {}
+}) {
   let info;
   let refreshPromise;
   let generation = 0;
@@ -171,9 +177,9 @@ export function deviceViews({ notify, onConnection, canConnect = () => true, ope
     $('connection-actions').hidden =
       connectButton.hidden && $('use-usb').hidden && $('disconnect-bluetooth').hidden;
 
-    const usbOnly = HOSTED || ble();
-    $('firmware-update-link').setAttribute('aria-disabled', String(usbOnly));
-    $('firmware-update-note').hidden = !usbOnly;
+    const unavailable = (HOSTED || ble()) && !bluetoothAvailable;
+    $('firmware-update-link').setAttribute('aria-disabled', String(unavailable));
+    $('firmware-update-note').hidden = !unavailable;
 
     // Scan cannot work without a device: lead with the way to get one.
     const prompt = !connected && !['checking', 'error'].includes(current);
@@ -260,9 +266,26 @@ export function deviceViews({ notify, onConnection, canConnect = () => true, ope
   }
 
   $('firmware-update-link').onclick = (event) => {
+    if (!canConnect()) {
+      event.preventDefault();
+      notify('Finish the current operation before updating firmware.', true);
+      return;
+    }
     if (HOSTED || ble()) {
       event.preventDefault();
-      notify('Firmware updates require USB. Connect the Ultra by cable and open http://192.168.16.1.', true);
+      if (!bluetoothAvailable) {
+        notify('Finish the current operation and use a Web Bluetooth browser or connect over USB.', true);
+        return;
+      }
+      Promise.resolve(
+        onFirmwareUpdate(bluetoothTransport, () => {
+          closing = true;
+        })
+      )
+        .catch((error) => notify(error.message, true))
+        .finally(() => {
+          closing = false;
+        });
     }
   };
 

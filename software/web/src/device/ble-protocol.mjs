@@ -3,6 +3,7 @@
 export const BLE_API = {
   VERSION: 1,
   COMMAND: 1090,
+  JOB_EVENT: 1091,
   MAX_BODY: 1024,
   MAX_RESPONSE: 512
 };
@@ -31,7 +32,11 @@ export const OPERATION = {
   TEAROFF_STATE: 20,
   TEAROFF_CANCEL: 21,
   UPDATE_INFO: 22,
-  TRANSPORT_INFO: 23
+  TRANSPORT_INFO: 23,
+  LINK_PROFILE: 24,
+  CLASSIC_JOB_START: 25,
+  CLASSIC_JOB_CANCEL: 26,
+  CLASSIC_JOB_READ: 27
 };
 
 const checksum = (bytes) => -bytes.reduce((sum, byte) => sum + byte, 0) & 255;
@@ -142,6 +147,11 @@ export function encodeRequest(path, data, correlation) {
     }
   } else {
     operation = postRoutes[path];
+    const job = /^\/api\/classic\/job\/(start|cancel|read)\?id=([1-9]\d*)$/.exec(path);
+    if (job) {
+      operation = OPERATION[`CLASSIC_JOB_${job[1].toUpperCase()}`];
+      lease = Number(job[2]);
+    }
     const query =
       /^\/api\/(keepalive|end|command\/(\d+)|slots\/(open|read|begin|write|commit|activate|nick|enable|clear)|st25tb\/tearoff\/(start|state|cancel))\?id=([1-9]\d*)$/.exec(
         path
@@ -163,7 +173,7 @@ export function encodeRequest(path, data, correlation) {
   if (operation === undefined) {
     throw new Error(
       path.startsWith('/api/update')
-        ? 'Firmware updates require a USB connection.'
+        ? 'Use Firmware update to connect to Nordic DFU, or use USB recovery.'
         : `Unsupported Bluetooth operation: ${path}`
     );
   }
@@ -172,7 +182,9 @@ export function encodeRequest(path, data, correlation) {
 
 export function decodeReply(frame, correlation) {
   if (frame.command !== BLE_API.COMMAND || frame.status !== 0x68) {
-    throw new Error('This firmware does not support the Web Bluetooth service. Update it over USB.');
+    throw new Error(
+      'This firmware does not support the Web Bluetooth service. Update the firmware through Firmware update or USB DFU.'
+    );
   }
   const bytes = frame.data;
   if (bytes.length < 8 || bytes.length > BLE_API.MAX_RESPONSE + 8 || bytes[0] !== BLE_API.VERSION) {

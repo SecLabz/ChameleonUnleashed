@@ -206,8 +206,8 @@ SRC_FILES += $(SRC_COMMON)/web_update.c $(SRC_COMMON)/nordic_update.c $(wildcard
   $(wildcard $(LWIP)/src/core/*.c) $(filter-out $(LWIP)/src/core/ipv4/dhcp.c,$(wildcard $(LWIP)/src/core/ipv4/*.c)) \
   $(LWIP)/src/netif/ethernet.c
 INC_FOLDERS += $(SDK_ROOT)/modules/nrfx/drivers/src $(PROJ_DIR)/net $(TINYUSB)/src $(TINYUSB)/lib/networking $(LWIP)/src/include $(WEB_BUILD)
-# Keep web dispatch and serialization small; retain default optimization for RF kernels.
-$(addprefix $(OUTPUT_DIRECTORY)/application/,http.c.o api.c.o hf_reader.c.o st25tb_reader.c.o st25tb_tearoff_command.c.o web_tearoff.c.o): CFLAGS += -Os
+# Keep web transport, dispatch and serialization small; retain default optimization for RF kernels.
+$(addprefix $(OUTPUT_DIRECTORY)/application/,http.c.o tcp.c.o tcp_in.c.o tcp_out.c.o api.c.o device_api.c.o slot_api.c.o ble_api.c.o classic_batch.c.o classic_job.c.o hf_reader.c.o st25tb_reader.c.o st25tb_tearoff_command.c.o web_tearoff.c.o): CFLAGS += -Os
 
 # Include folders common to all targets
 INC_FOLDERS += \

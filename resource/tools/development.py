@@ -35,7 +35,7 @@ def development_resources(files, revision):
     if selected is None:
         raise ValueError('Development firmware requires a matching web app')
     descriptor = document['webApp']
-    raw = {key: selected[1][key] for key in FILES}
+    raw = {key: selected[1][key] for key in FILES if key in selected[1]}
     raw['index.html'] = raw['index.html'].replace(
         markers(descriptor['version'], descriptor.get('resourceBase', '../')), b'', 1)
     label = ('Development · ' + revision[:7]).encode()

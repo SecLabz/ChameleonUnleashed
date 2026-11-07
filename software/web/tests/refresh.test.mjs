@@ -22,7 +22,8 @@ function dom(t) {
       this.children = children;
     },
 
-    insertAdjacentHTML() {}
+    insertAdjacentHTML() {},
+    querySelectorAll: () => []
   });
   const get = (id) => {
     if (!elements.has(id)) {

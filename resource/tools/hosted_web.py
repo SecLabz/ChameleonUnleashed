@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = ('index.html', 'app.mjs', 'worker.mjs', 'style.css', 'favicon.svg', 'chevron-down.svg')
+FILES = ('index.html', 'app.mjs', 'worker.mjs', 'style.css', 'favicon.svg', 'chevron-down.svg', 'ble-update.mjs')
 BUNDLE_FILES = (*FILES, 'sw.mjs')
 
 
@@ -21,12 +21,14 @@ def shell(site):
 
 
 def bundle(source, resource_base='../'):
-    files = dict(source)
+    files = {name: source[name] for name in FILES if name in source}
+    if set(source) not in (set(FILES), set(FILES) - {'ble-update.mjs'}):
+        raise ValueError('Incomplete web app source')
     if b'chameleon-hosted' in files['index.html']:
         raise ValueError('Expected the original USB-served interface as input')
     template = (ROOT / 'software/web/hosted/sw.mjs').read_bytes()
     suffix = resource_base.encode() if resource_base != '../' else b''
-    version = hashlib.sha256(b''.join(files[name] for name in FILES) + template + suffix).hexdigest()
+    version = hashlib.sha256(b''.join(files.values()) + template + suffix).hexdigest()
     if files['index.html'].count(b'</head>') != 1:
         raise ValueError('The interface needs exactly one HTML head')
     files['index.html'] = files['index.html'].replace(b'</head>', markers(version, resource_base) + b'</head>')
@@ -56,12 +58,16 @@ def archived_shell(manifest, files):
     timestamp = manifest.get('source', {}).get('committedAt')
     if type(timestamp) is not int or timestamp <= 0:
         raise ValueError('Web app needs a source commit timestamp')
-    expected = {prefix + name for name in BUNDLE_FILES}
+    # Immutable releases published before BLE updates keep their original shell.
+    names = tuple(name for name in FILES if prefix + name in files)
+    if set(names) not in (set(FILES), set(FILES) - {'ble-update.mjs'}):
+        raise ValueError('Incomplete web app bundle')
+    expected = {prefix + name for name in (*names, 'sw.mjs')}
     if {name for name in files if name.startswith(prefix)} != expected:
         raise ValueError('Incomplete or unlisted web app bundle')
     listed = {entry['path']: entry for entry in manifest['resources']}
     result = {}
-    for name in BUNDLE_FILES:
+    for name in (*names, 'sw.mjs'):
         path = prefix + name
         data = files[path]
         entry = listed.get(path, {})
@@ -78,15 +84,15 @@ def archived_shell(manifest, files):
         if not line.startswith(start) or not line.endswith(';'):
             raise ValueError('Invalid web app worker configuration')
         config = json.loads(line[len(start):-1])
-        if config['version'] != version or {entry['path'] for entry in config['files']} != set(FILES):
+        if config['version'] != version or {entry['path'] for entry in config['files']} != set(names):
             raise ValueError('Web app worker differs from its shell identity')
-        if len(config['files']) != len(FILES):
+        if len(config['files']) != len(names):
             raise ValueError('Duplicate web app worker resources')
         for entry in config['files']:
             data = result[entry['path']]
             if len(data) != entry['size'] or hashlib.sha256(data).hexdigest() != entry['sha256']:
                 raise ValueError('Web app worker contains a mismatched resource')
-        source = [result[name] if name != 'index.html' else result[name].replace(marker, b'', 1) for name in FILES]
+        source = [result[name] if name != 'index.html' else result[name].replace(marker, b'', 1) for name in names]
         suffix = resource_base.encode() if resource_base != '../' else b''
         if hashlib.sha256(b''.join(source) + template + suffix).hexdigest() != version:
             raise ValueError('Web app content differs from its immutable identity')

@@ -22,6 +22,16 @@ static bool update_entering;
 static unsigned update_requests;
 static uint16_t nus_payload_limit = 244;
 uint16_t ble_nus_payload_limit(void) { return nus_payload_limit; }
+void ble_link_profile(uint8_t profile, uint8_t phy, uint8_t *output) {
+    memset(output, 0, 24); output[0] = 1; output[1] = profile; output[2] = phy;
+}
+uint16_t classic_batch_request(const uint8_t *body, size_t size, uint8_t *output,
+    size_t capacity, uint16_t *length) { *length = 0; return STATUS_PAR_ERR; }
+bool classic_job_active(void) { return false; }
+void classic_job_reset(void) {}
+bool classic_job_start(const uint8_t *p, size_t n, bool ble, uint32_t *id) { return false; }
+bool classic_job_cancel(uint32_t id) { return false; }
+size_t classic_job_read(uint32_t id, uint8_t *p, size_t n) { return 0; }
 bool web_update_entering(void) { return update_entering; }
 api_response_t web_update_application_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *out, size_t capacity) {

@@ -1902,7 +1902,8 @@
 // <i> Increase this value if API calls frequently return the error @ref NRF_ERROR_NO_MEM.
 
 #ifndef NRF_FSTORAGE_SD_QUEUE_SIZE
-#define NRF_FSTORAGE_SD_QUEUE_SIZE 16
+// A 4 KiB DFU object occupies 17 maximum-size BLE packets.
+#define NRF_FSTORAGE_SD_QUEUE_SIZE 17
 #endif
 
 // <o> NRF_FSTORAGE_SD_MAX_RETRIES - Maximum number of attempts at executing an operation when the SoftDevice is busy
@@ -1920,7 +1921,7 @@
 // <i> That is 1024 bytes for nRF51 ICs and 4096 bytes for nRF52 ICs.
 
 #ifndef NRF_FSTORAGE_SD_MAX_WRITE_SIZE
-#define NRF_FSTORAGE_SD_MAX_WRITE_SIZE 20
+#define NRF_FSTORAGE_SD_MAX_WRITE_SIZE 256
 #endif
 
 // </h>

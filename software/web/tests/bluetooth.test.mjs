@@ -173,7 +173,11 @@ function fakeGatt(t, respond, timeoutMs = 1000, withoutResponse = false, payload
   }
   const backend = new BluetoothTransport(device, rx, tx, { timeoutMs });
   t.after(() => backend.disconnect());
-  return { backend, device, frames, fragments, maxWrites: () => simultaneous };
+  const notify = (bytes) => {
+    tx.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    tx.dispatchEvent(new Event('characteristicvaluechanged'));
+  };
+  return { backend, device, frames, fragments, notify, maxWrites: () => simultaneous };
 }
 
 test('BLE requests serialize writes and reconstruct JSON and binary responses', async (t) => {
@@ -183,7 +187,7 @@ test('BLE requests serialize writes and reconstruct JSON and binary responses', 
       : { status: 200, data: new Uint8Array(512).fill(42) }
   );
   await fake.backend.initialize();
-  assert.deepEqual(fake.backend.capabilities, { tearoff: true });
+  assert.deepEqual(fake.backend.capabilities, { tearoff: true, classicJobs: false });
   const [info, bytes] = await Promise.all([
     fake.backend.request('/api/device'),
     fake.backend.request('/api/command/2027?id=1', new Uint8Array(42))
@@ -208,6 +212,111 @@ test('BLE service errors retain the connection and HTTP-compatible status', asyn
   );
   assert.equal(fake.device.gatt.connected, true);
 });
+
+function jobEvent(sequence, flags = 0, completed = 16) {
+  return encodeFrame(
+    BLE_API.JOB_EVENT,
+    Uint8Array.from([
+      1,
+      0,
+      0,
+      0,
+      7,
+      sequence >> 8,
+      sequence & 255,
+      flags,
+      2,
+      0,
+      0,
+      completed >> 8,
+      completed & 255,
+      ...(flags & 2 ? [] : Array(192).fill(0))
+    ]),
+    0x68
+  );
+}
+
+test('Classic streaming accepts events before the start write callback and serializes keepalive', async (t) => {
+  let fake;
+  fake = fakeGatt(t, (frame) => {
+    if (frame.data[5] === OPERATION.CLASSIC_JOB_START) {
+      queueMicrotask(() => {
+        fake.notify(jobEvent(0));
+        fake.notify(jobEvent(1, 1, 32));
+      });
+      return { status: 200, data: Uint8Array.of(0, 0, 0, 7) };
+    }
+    return { status: 200, data: new Uint8Array() };
+  });
+  await fake.backend.initialize();
+  fake.backend.capabilities.classicJobs = true;
+  const events = [];
+  const [result] = await Promise.all([
+    fake.backend.classicJob(42, [1, 2], { onEvent: (event) => events.push(event) }),
+    fake.backend.request('/api/keepalive?id=42', new Uint8Array())
+  ]);
+  assert.equal(result.completed, 32);
+  assert.equal(events.length, 2);
+  assert.equal(fake.maxWrites(), 1);
+  assert.equal(fake.backend.job, null);
+  assert.equal(fake.backend.pending, null);
+});
+
+test('Classic streaming cancellation waits for its correlated response and terminal observations', async (t) => {
+  const controller = new AbortController();
+  let fake;
+  fake = fakeGatt(t, (frame) => {
+    if (frame.data[5] === OPERATION.CLASSIC_JOB_START) {
+      queueMicrotask(() => fake.notify(jobEvent(0)));
+      return { status: 200, data: Uint8Array.of(0, 0, 0, 7) };
+    }
+    assert.equal(frame.data[5], OPERATION.CLASSIC_JOB_CANCEL);
+    queueMicrotask(() => fake.notify(jobEvent(1, 3)));
+    return { status: 200, data: new Uint8Array() };
+  });
+  await fake.backend.initialize();
+  fake.backend.capabilities.classicJobs = true;
+  const events = [];
+  const result = await fake.backend.classicJob(42, [1, 2], {
+    signal: controller.signal,
+    onEvent: (event) => {
+      events.push(event);
+      if (!event.done) {
+        controller.abort();
+      }
+    }
+  });
+  assert.equal(result.cancelled, true);
+  assert.equal(events[0].completed, 16);
+  assert.equal(fake.frames.filter((f) => f.data[5] === OPERATION.CLASSIC_JOB_CANCEL).length, 1);
+  assert.equal(fake.device.gatt.connected, true);
+});
+
+for (const scenario of ['sequence', 'disconnect', 'timeout']) {
+  test(`a Classic stream ${scenario} fails without replay`, async (t) => {
+    let fake;
+    fake = fakeGatt(
+      t,
+      () => {
+        queueMicrotask(() => {
+          if (scenario === 'sequence') {
+            fake.notify(jobEvent(1, 1));
+          }
+          if (scenario === 'disconnect') {
+            fake.device.gatt.disconnect();
+          }
+        });
+        return { status: 200, data: Uint8Array.of(0, 0, 0, 7) };
+      },
+      30
+    );
+    await fake.backend.initialize();
+    fake.backend.capabilities.classicJobs = true;
+    await assert.rejects(fake.backend.classicJob(42, [1, 2]));
+    assert.equal(fake.frames.filter((f) => f.data[5] === OPERATION.CLASSIC_JOB_START).length, 1);
+    assert.equal(fake.device.gatt.connected, false);
+  });
+}
 
 for (const mode of [true, 'advertised-only']) {
   test(`fragment transmission preserves complete replies and serialization (without response: ${mode})`, async (t) => {
@@ -415,4 +524,31 @@ test('a timed-out GATT connection releases the tab lock and disconnects a late s
   await nextTick();
   assert.equal(device.gatt.connected, false);
   assert.equal(disconnects, 1);
+});
+
+test('entering DFU sends the legacy reboot once and requires the actual disconnect', async (t) => {
+  const device = new EventTarget();
+  device.gatt = {
+    connected: true,
+    disconnect() {
+      this.connected = false;
+      device.dispatchEvent(new Event('gattserverdisconnected'));
+    }
+  };
+  const frames = [];
+  const rx = {
+    async writeValueWithResponse(bytes) {
+      frames.push(new FrameDecoder().push(bytes)[0]);
+      queueMicrotask(() => device.gatt.disconnect());
+      throw new Error('GATT reset before write callback');
+    }
+  };
+  const tx = new EventTarget();
+  const backend = new BluetoothTransport(device, rx, tx, { timeoutMs: 20 });
+  t.after(() => backend.disconnect());
+  await backend.enterDfu();
+  assert.deepEqual(
+    frames.map((frame) => [frame.command, frame.data.length]),
+    [[1010, 0]]
+  );
 });

@@ -25,8 +25,44 @@ export async function recoverHardnested({
   const pendingObservations = [];
   let captureSessionOpen = false;
   let reselectedAfterCount = null;
+  let stream = null;
+  let streamingMode;
+
+  function progress() {
+    update({ phase: `Hardnested acquisition · ${capturedCount + (stream?.buffered ?? 0)}/${budget}` });
+  }
+
+  function retain(records) {
+    capturedCount += records.length;
+    pendingObservations.push(...records);
+    if (records.length) {
+      progress();
+    }
+  }
 
   async function setCaptureSession(enabled) {
+    if (!enabled && stream) {
+      const current = stream;
+      try {
+        await current.stop();
+      } finally {
+        stream = null;
+        retain(current.drain());
+        captureSessionOpen = false;
+      }
+      return;
+    }
+    if (enabled && streamingMode !== false && typeof device.startNonceStream === 'function') {
+      stream = device.startNonceStream(source, target, budget - capturedCount, geometry, progress);
+      if (streamingMode === true && !stream) {
+        throw new Error('Nonce stream disconnected');
+      }
+      streamingMode = !!stream;
+      if (stream) {
+        captureSessionOpen = true;
+        return;
+      }
+    }
     await device.command(COMMAND.CAPTURE_SESSION, [Number(enabled)]);
     captureSessionOpen = enabled;
   }
@@ -35,10 +71,14 @@ export async function recoverHardnested({
     check();
 
     const count = Math.min(16, budget - capturedCount);
-    const records = await device.collectNonces(source, target, count, geometry);
-    capturedCount += records.length;
-    pendingObservations.push(...records);
-    update({ phase: `Hardnested acquisition · ${capturedCount}/${budget}` });
+    const records = stream
+      ? await stream.read()
+      : await device.collectNonces(source, target, count, geometry);
+    retain(records);
+    check();
+    if (!records.length) {
+      throw new Error('Nonce acquisition ended before its budget');
+    }
   }
 
   async function processWithAcquisition(request, acquiring = true) {
@@ -58,7 +98,9 @@ export async function recoverHardnested({
     );
 
     try {
-      while (acquiring && !workerSettled && capturedCount < budget) {
+      // Native notifications keep RF acquisition running independently. Do not
+      // wait for another radio batch when the Worker can process buffered data.
+      while (!stream && acquiring && !workerSettled && capturedCount < budget) {
         await acquire();
       }
     } catch (error) {
@@ -66,6 +108,10 @@ export async function recoverHardnested({
     }
 
     const result = await workerResult;
+
+    if (stream?.error && !acquisitionError) {
+      acquisitionError = stream.error;
+    }
 
     if (acquisitionError) {
       throw acquisitionError;
@@ -104,8 +150,11 @@ export async function recoverHardnested({
           return 'NoDiversity';
         }
 
-        reselectedAfterCount = capturedCount;
         await setCaptureSession(false);
+        reselectedAfterCount = capturedCount;
+        if (capturedCount === budget) {
+          return 'NoDiversity';
+        }
         await setCaptureSession(true);
       }
 

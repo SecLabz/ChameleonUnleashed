@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from prepare_hosted_web import prepare, FILES
+from hosted_web import bundle, archived_shell
 from test_prepare_pages import resources, zipped
 
 
@@ -51,6 +52,22 @@ class HostedTests(unittest.TestCase):
                 with self.assertRaises(Exception):
                     prepare(self.site, self.cdn, self.output)
                 self.assertFalse(self.output.exists())
+
+    def test_old_shells_remain_valid_and_new_updater_is_integrity_bound(self):
+        for legacy in (True, False):
+            raw = {name: (self.site / name).read_bytes() for name in FILES
+                   if not legacy or name != 'ble-update.mjs'}
+            version, files = bundle(raw)
+            prefix = 'web/' + version + '/'
+            resources = {prefix + name: data for name, data in files.items()}
+            manifest = {'source': {'committedAt': 1}, 'webApp': {'version': version, 'path': prefix},
+                'resources': [{'path': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                              for name, data in resources.items()]}
+            self.assertEqual(archived_shell(manifest, resources)[1], files)
+            if not legacy:
+                resources[prefix + 'ble-update.mjs'] += b'corrupt'
+                with self.assertRaises(ValueError):
+                    archived_shell(manifest, resources)
 
     def test_existing_package_cannot_be_overwritten(self):
         self.output.mkdir()

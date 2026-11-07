@@ -1,3 +1,4 @@
+import { appUrl } from './runtime/environment.mjs';
 import { withRuntime } from './runtime/runtime.mjs';
 import { request, withDevice } from './device/transport.mjs';
 import { readDesfire } from './device/desfire-reader.mjs';
@@ -115,6 +116,19 @@ function hideToast() {
 const views = deviceViews({
   notify,
   canConnect: () => !state.controller,
+  async onFirmwareUpdate(transport, beforeDfu) {
+    let reconnect = false;
+    await physicalTask(async (signal) => {
+      const { bleFirmwareUpdate } = await import(appUrl('ble-update.mjs'));
+      reconnect = await bleFirmwareUpdate({ transport, signal, beforeDfu });
+    });
+    if (reconnect) {
+      notify('Update transferred. Reconnect Bluetooth to verify the firmware.', false, {
+        label: 'Reconnect',
+        run: views.connect
+      });
+    }
+  },
   open: () => view('device'),
   onConnection(value, info, detail) {
     state.connected = value;

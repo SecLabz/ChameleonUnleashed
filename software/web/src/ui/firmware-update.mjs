@@ -1,10 +1,14 @@
 import { RESOURCE_BASE } from './update-config.mjs';
-import { sha256 } from './update-sha256.mjs';
+import {
+  loadCatalogue as readCatalogue,
+  downloadFirmware as download,
+  versionLabel
+} from './firmware-catalogue.mjs';
+export { versionLabel };
 import {
   inspectFirmware,
   beginRequest,
   MAXIMUM_SIZE,
-  MINIMUM_ZIP_SIZE,
   UPDATE_CHUNK_BYTES,
   RECOVERY_LAYOUT
 } from './nordic-package.mjs';
@@ -15,12 +19,6 @@ const RECONNECT_REQUEST_TIMEOUT_MS = 1000;
 const RECONNECT_POLL_MS = 500;
 const RETRY_DELAY_MS = 500;
 const MAX_RETRIES = 2;
-const CATALOGUE_FORMAT = 1;
-const RELEASES_PER_SOURCE = 5;
-const SOURCE_IDS = ['unleashed', 'official'];
-export function versionLabel(value) {
-  return typeof value === 'string' ? value : `${value >>> 24}.${(value >>> 16) & 255}.${value & 65535}`;
-}
 
 async function request(path, body, signal, timeout = REQUEST_TIMEOUT_MS) {
   signal?.throwIfAborted();
@@ -183,88 +181,10 @@ export async function installFirmware(
   return running;
 }
 
-const updateBase = (development = false) =>
-  new URL(development ? 'updates/dev/' : 'updates/', new URL(RESOURCE_BASE, globalThis.location?.href));
-function validAsset(asset) {
-  return (
-    asset &&
-    Number.isInteger(asset.size) &&
-    asset.size >= MINIMUM_ZIP_SIZE &&
-    asset.size <= MAXIMUM_SIZE &&
-    /^[a-f0-9]{64}$/.test(asset.sha256) &&
-    new RegExp(`^(?:files/)?${asset.sha256}\\.zip$`).test(asset.path)
-  );
-}
-
-export async function loadCatalogue(signal, development = false) {
-  const response = await fetch(new URL('catalog.json', updateBase(development)), {
-    signal,
-    cache: 'no-store'
-  });
-  if (!response.ok) {
-    throw new Error('Release list unavailable. You can still choose a local Nordic ZIP.');
-  }
-  const catalogue = await response.json();
-  if (
-    !catalogue ||
-    catalogue.format !== CATALOGUE_FORMAT ||
-    !Array.isArray(catalogue.sources) ||
-    catalogue.sources.length > SOURCE_IDS.length ||
-    new Set(catalogue.sources.map((source) => source?.id)).size !== catalogue.sources.length ||
-    catalogue.sources.some(
-      (source) =>
-        !source ||
-        !SOURCE_IDS.includes(source.id) ||
-        typeof source.label !== 'string' ||
-        !Array.isArray(source.releases) ||
-        source.releases.length > RELEASES_PER_SOURCE ||
-        new Set(source.releases.map((release) => release?.version)).size !== source.releases.length ||
-        source.releases.some(
-          (release) =>
-            !release ||
-            typeof release.version !== 'string' ||
-            !release.version.length ||
-            ![0, RECOVERY_LAYOUT].includes(release.layout) ||
-            !validAsset(release.packages?.[release.layout === RECOVERY_LAYOUT ? 'application' : 'full'])
-        )
-    )
-  ) {
-    throw new Error('Invalid release catalogue.');
-  }
-  return catalogue;
-}
-export async function downloadFirmware(asset, signal, onProgress = () => {}, development = false) {
-  if (!validAsset(asset)) {
-    throw new Error('Invalid firmware download metadata.');
-  }
-  const file = await fetch(new URL(asset.path, updateBase(development)), { signal, cache: 'no-store' });
-  if (!file.ok || !file.body) {
-    throw new Error('Firmware download failed. Choose a local Nordic ZIP to continue.');
-  }
-  const bytes = new Uint8Array(asset.size);
-  const reader = file.body.getReader();
-  let offset = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value.length > bytes.length - offset) {
-        throw new Error('The firmware download is larger than expected.');
-      }
-      bytes.set(value, offset);
-      offset += value.length;
-      onProgress(offset / bytes.length, 'Downloading firmware…');
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  if (offset !== bytes.length || (await sha256(bytes, signal)) !== asset.sha256) {
-    throw new Error('Firmware download verification failed. Try again.');
-  }
-  return bytes;
-}
+export const loadCatalogue = (signal, development = false) =>
+  readCatalogue(signal, development, RESOURCE_BASE);
+export const downloadFirmware = (asset, signal, onProgress, development = false) =>
+  download(asset, signal, onProgress, development, RESOURCE_BASE);
 
 if (typeof document !== 'undefined') {
   const $ = (id) => document.getElementById(id);

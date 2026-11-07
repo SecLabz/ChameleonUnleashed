@@ -27,8 +27,11 @@ test('Stop during real Classic hardnested acquisition releases BLE and retains p
   const chooser = await physicalChooser(page);
   const saveTrace = await traceGatt(page);
   const leakedHttp = [];
+  let connected = false;
   await page.route('**/api/**', (route) => {
-    leakedHttp.push(route.request().url());
+    if (connected) {
+      leakedHttp.push(route.request().url());
+    }
     return route.abort();
   });
   let stoppedMs;
@@ -37,12 +40,15 @@ test('Stop during real Classic hardnested acquisition releases BLE and retains p
     await page.goto('./#device');
     await page.getByRole('button', { name: 'Connect Bluetooth', exact: true }).click();
     await expect(page.locator('#device-info')).toContainText(before.chip);
+    connected = true;
     await page.locator('[data-view-target="scan"]').click();
     await page.locator('#scan').click();
     await expect(page.locator('#studio-document')).toBeVisible();
     await expect(page.locator('#stop')).toBeHidden();
     await page.locator('#read').click();
     await expect(page.locator('#status')).toContainText('Hardnested acquisition', { timeout: 60000 });
+    // Wait for actual autonomous RF results, not just the acquisition heading.
+    await expect(page.locator('#status')).toContainText(/Hardnested acquisition · [1-9]\d*\//);
     const started = performance.now();
     await page.locator('#stop').click();
     await expect(page.locator('#stop')).toBeHidden();
@@ -56,7 +62,9 @@ test('Stop during real Classic hardnested acquisition releases BLE and retains p
     const gatt = await saveTrace(testInfo.outputPath('gatt-trace.json'));
     expect(gatt.errors).toEqual([]);
     expect(gatt.truncated).toBe(false);
-    expect(gatt.requests.some((x) => x.operation === 8 && x.argument === 2023)).toBe(true);
+    expect(gatt.requests.some((x) => x.operation === 25)).toBe(true);
+    expect(gatt.requests.some((x) => x.operation === 26)).toBe(true);
+    expect(gatt.streamEvents.length).toBeGreaterThan(0);
     const writes = [2030, 2033, 2034, 2038, 2039];
     expect(gatt.requests.filter((x) => x.operation === 8 && writes.includes(x.argument))).toEqual([]);
     expect(leakedHttp).toEqual([]);
