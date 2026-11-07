@@ -331,9 +331,10 @@ export function deviceViews({
         if (sense === 'lf') {
           return 'RFID';
         }
-        return paused ? 'NFC paused' : 'NFC';
+        // Non-breaking spaces: the narrow sidebar may wrap only before "+".
+        return paused ? 'NFC paused' : 'NFC';
       })
-      .join(' + ');
+      .join(' + ');
     let slotLabel = `Slot ${info.active_slot + 1}`;
     let emulationDetail = 'Enabled NFC and RFID places are available for emulation';
     let emulationState = info.reader ? '' : ' active';
