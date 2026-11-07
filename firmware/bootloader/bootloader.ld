@@ -5,7 +5,8 @@ GROUP(-lgcc -lc -lnosys)
 
 MEMORY
 {
-  FLASH (rx) : ORIGIN = 0xF3000, LENGTH = 0xB000
+  FLASH (rx) : ORIGIN = 0xF3000, LENGTH = 0xAFF0
+  recovery_abi (r) : ORIGIN = 0xFDFF0, LENGTH = 0x10
   RAM (rwx) :  ORIGIN = 0x20005978, LENGTH = 0x32688
   uicr_bootloader_start_address (r) : ORIGIN = 0x10001014, LENGTH = 0x4
   bootloader_settings_page (r) : ORIGIN = 0x000FF000, LENGTH = 0x1000
@@ -15,6 +16,7 @@ MEMORY
 
 SECTIONS
 {
+  .web_recovery_abi : { KEEP(*(.web_recovery_abi)) } > recovery_abi
   . = ALIGN(4);
   .uicr_bootloader_start_address :
   {

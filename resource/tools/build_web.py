@@ -249,6 +249,10 @@ def main():
         run(bundler, source_dir / entry, '--bundle', '--format=esm', '--target=es2022',
             '--minify', '--legal-comments=inline', f'--outfile={site / filename}',
             f'--metafile={out / (filename + ".json")}')
+    from build_recovery import assets as recovery_assets, prepare as prepare_recovery
+    for name, data in recovery_assets(config['baseUrl']).items():
+        (site / name).write_bytes(data)
+    prepare_recovery(config['baseUrl'], ROOT / '.cache/web/recovery')
     types = {'.html': 'text/html; charset=utf-8', '.css': 'text/css', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8'}
     header = ['#pragma once', '#include <stdint.h>', '#include <string.h>',
               '#define WEB_RESOURCE_CONNECT ' + json.dumps("'self'" + (' ' + origin if origin else '')),

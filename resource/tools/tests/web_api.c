@@ -5,6 +5,7 @@
 #include <string.h>
 #include "api.h"
 #include "http.h"
+#include "update_api.h"
 #include "app_status.h"
 #include "data_cmd.h"
 api_response_t web_device_request(const char *method,const char *uri,const uint8_t *body,
@@ -16,6 +17,16 @@ static int mode=2, closes, operations;
 static int slot_resets, slot_operations;
 static bool tearoff_active, tearoff_cancelled, serial_tearoff;
 static bool rf_only_boot;
+static bool update_entering;
+static unsigned update_requests;
+bool web_update_entering(void) { return update_entering; }
+api_response_t web_update_application_request(const char *method, const char *uri,
+    const uint8_t *body, size_t size, uint8_t *out, size_t capacity) {
+    update_requests++;
+    bool found = (!strcmp(method, "GET") && !strcmp(uri, "/api/update")) ||
+        (!strcmp(method, "POST") && !strcmp(uri, "/api/update/enter"));
+    return (api_response_t){found ? 200 : 404, "application/octet-stream", 0};
+}
 static bool serial_sniff;
 static bool release_ok = true;
 bool hf_radio_release(void) { return release_ok; }
@@ -146,6 +157,12 @@ static http_response_t http(const char *text){
 }
 
 int main(void){
+    update_entering = true;
+    assert(web_session_active());
+    assert(api("/api/session").status == 409);
+    assert(api_dispatch_request("GET", "/api/status", NULL, 0, output, sizeof(output)).status == 200);
+    update_entering = false;
+    assert(!web_session_active());
     rf_only_boot=true;
     assert(api_dispatch_request("GET","/api/status",NULL,0,output,sizeof(output)).status==200);
     const char *restricted[]={"/api/session","/api/slots/session","/api/settings",
@@ -158,6 +175,13 @@ int main(void){
 
     http_response_t response = http("GET / HTTP/1.1\r\nHost: 192.168.16.1\r\n\r\n");
     assert(response.status == 200);
+    assert(http("GET /update HTTP/1.1\r\nHost: 192.168.16.1\r\n\r\n").status == 200);
+    assert(http("GET /update.html HTTP/1.1\r\nHost: 192.168.16.1\r\n\r\n").status == 200);
+    assert(http("GET /api/update HTTP/1.1\r\nHost: 192.168.16.1\r\n\r\n").status == 200);
+    assert(http("POST /api/update/enter HTTP/1.1\r\nHost: 192.168.16.1\r\nOrigin: http://192.168.16.1\r\n\r\n").status == 200);
+    assert(update_requests == 2);
+    assert(http("POST /api/update/enter HTTP/1.1\r\nHost: 192.168.16.1\r\nOrigin: https://evil.example\r\n\r\n").status == 403);
+    assert(update_requests == 2);
     assert(strstr(response.header, "connect-src 'self' " EXPECTED_RESOURCE_ORIGIN ";") != NULL);
     assert(response.header_size < sizeof(response.header));
     assert(response.header_size == strlen(response.header));

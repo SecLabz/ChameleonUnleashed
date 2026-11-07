@@ -1,4 +1,5 @@
 #include "api.h"
+#include "update_api.h"
 #include "device_api.h"
 #include "slot_api.h"
 #include "desfire_reader.h"
@@ -51,6 +52,7 @@ void web_session_poll(void) {
 
 bool web_session_active(void) {
     web_session_poll();
+    if (web_update_entering()) return true;
     return session != 0;
 }
 
@@ -74,6 +76,7 @@ static bool number(const char **text, uint32_t *value) {
 
 api_response_t api_dispatch_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *output, size_t capacity) {
+    if (web_update_entering() && strcmp(method, "GET")) return result(409, 0);
     /* Existing GET routes inspect metadata only; session and setting changes
      * are POST and remain unavailable until the explicit full restart. */
     if (ble_slave_rf_only() && strcmp(method, "GET"))

@@ -1,6 +1,7 @@
 # Chameleon Unleashed documentation
 
 - [Quick installation and USB flashing](../README.md#quick-installation)
+- [USB browser updates and permanent recovery](web-updates.md)
 - [Native CLI](../software/rust/README.md)
 - [USB web interface](../software/web/README.md)
 - [Performance & measurements](performance.md)
@@ -24,6 +25,7 @@ Requirements:
 ./dev build cli      # Native CLI in software/target/release/chameleon
 ./dev flash          # Build and flash the application over USB
 ./dev flash --full   # Include bootloader and SoftDevice
+./dev flash --install-recovery # Bootloader v5 + Nordic ZIP web recovery installation
 ./dev serve          # Local web interface at http://127.0.0.1:8080
 ./dev cdn            # CDN ZIP in .cache/web/chameleon-unleashed-cdn.zip
 ```
@@ -62,8 +64,9 @@ chameleon flash firmware/objects/chameleon-unleashed-app.zip --yes
 
 The native CLI flashes existing packages without Python or `nrfutil`. `./dev flash`
 builds the firmware and runs that same native command; generating and signing ZIPs
-still needs the firmware build tools. See [USB firmware updates](../software/rust/REFERENCE.md#usb-firmware-updates)
-for device selection, recovery and validation limits.
+still needs the firmware build tools and Python `cryptography`. Default application
+packages require an already migrated device. See [USB firmware updates](../software/rust/REFERENCE.md#usb-firmware-updates)
+for device selection and recovery.
 
 ## Local checks
 

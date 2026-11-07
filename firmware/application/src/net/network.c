@@ -1,7 +1,11 @@
 #include "network.h"
 #include "http.h"
 #include "dhcp.h"
+#ifdef WEB_RECOVERY
+#include "recovery.h"
+#else
 #include "app_timer.h"
+#endif
 #include "tusb.h"
 #include "lwip/init.h"
 #include "lwip/netif.h"
@@ -33,12 +37,16 @@ static bool dispatching;
 _Static_assert(HTTP_RESPONSE_MAX_BYTES <= HTTP_REQUEST_MAX_BYTES,
                "Response must fit the released request buffer");
 u32_t sys_now(void) {
+#ifdef WEB_RECOVERY
+    return recovery_millis();
+#else
     static uint32_t previous;
     static uint64_t ticks;
     uint32_t now = app_timer_cnt_get();
     ticks += app_timer_cnt_diff_compute(now, previous);
     previous = now;
     return (uint32_t)(ticks * 1000u * (APP_TIMER_CONFIG_RTC_FREQUENCY + 1u) / APP_TIMER_CLOCK_FREQ);
+#endif
 }
 
 static void release(connection_t *c) {

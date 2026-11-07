@@ -56,6 +56,9 @@ The first use needs Internet access to download matching CDN resources, which
 are saved in your browser. Before going offline, check
 **Device → Offline use → Ready offline**. [Web guide →](software/web/README.md)
 
+To update, choose **Device → Update firmware**, or use the CLI with a release archive.
+[Updates and recovery →](docs/web-updates.md)
+
 ## Native CLI
 
 Connect one device and run:
@@ -90,16 +93,20 @@ If you want a polished, stable experience, go with the
 
 ## Quick installation
 
-Flash a prebuilt application package over USB using the native CLI. This needs
+Flash a prebuilt firmware package over USB using the native CLI. This needs
 no Rust, Python or `nrfutil`.
+
+Use the same procedure for installation, reinstallation and future updates.
+It also enables browser updates on older devices.
+**Export your saved tags before the first installation:** migration may overwrite them.
 
 1. From [GitHub Releases](https://github.com/SecLabz/ChameleonUnleashed/releases),
    download the **archive matching your OS and architecture**, for example
-   `ChameleonUnleashed-v1.0.0-macos-arm64.zip` for an Apple Silicon Mac.
+   `ChameleonUnleashed-v<version>-macos-arm64.zip` for an Apple Silicon Mac.
    See [archive names](docs/releases.md) for other platforms.
 2. Extract that outer archive. Inside are `chameleon` (`chameleon.exe` on Windows),
    `firmware.zip` and `INSTALL.txt`. **Keep `firmware.zip` intact, next to the CLI:**
-   it is the application firmware passed to the commands below.
+   it is the firmware package passed to the commands below.
 3. Connect one Chameleon Ultra with a USB data cable. Close any other client
    using the device.
 4. Open a terminal in that folder, run the command for your OS below, and

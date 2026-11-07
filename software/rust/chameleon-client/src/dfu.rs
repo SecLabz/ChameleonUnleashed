@@ -296,6 +296,9 @@ impl Device {
         for (index, image) in images.iter().enumerate() {
             if index > 0 {
                 pause(ACTIVATION_DELAY, &self.cancelled)?;
+                // A bootloader-only update can restart a still-valid previous
+                // application. Re-enter DFU on that same device for the next image.
+                self.enter()?;
             }
             progress(index, 0);
             let path = self.bootloader_port()?.port_name;

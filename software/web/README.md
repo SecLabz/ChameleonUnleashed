@@ -4,6 +4,10 @@ Connect an Ultra with matching firmware over USB and open
 [192.168.16.1](http://192.168.16.1). Use one active browser client.
 Internet access is needed to download the matching app resources.
 
+To update, choose **Device → Update firmware** and select a release or local ZIP.
+You can also use the CLI with a release archive.
+[First installation and recovery →](../../docs/web-updates.md)
+
 Select **NFC** or **RFID**, place a tag on the antenna and choose **Tap to Scan**.
 Studio opens when the tag is identified. You can also **Import…** a file or
 start with **New…**.
@@ -33,5 +37,5 @@ Export documents you want to keep; browser storage is not a permanent backup.
 
 Resources are saved automatically in the browser when Internet is available.
 Before going offline, check **Device → Offline use → Ready offline** in the
-browser you will use. Use **Retry preparation** if preparation is incomplete.
+browser you will use. Use **Retry** if preparation is incomplete.
 **Session only** does not survive a reload.

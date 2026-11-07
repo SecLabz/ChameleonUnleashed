@@ -164,7 +164,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install hardware test dependency
-        run: python3 -m pip install pyserial==3.5
+        run: python3 -m pip install pyserial==3.5 cryptography==43.0.3
       - name: Check web interface and host fixtures
         run: |
           npm ci --prefix software/web
@@ -210,6 +210,8 @@ jobs:
           name: release-artifacts-${{ matrix.device_type }}
           path: |
             firmware/objects/chameleon-unleashed-app.zip
+            firmware/objects/chameleon-unleashed-install.zip
+            firmware/objects/chameleon-unleashed-bootloader.zip
             firmware/objects/chameleon-unleashed-full.zip
             firmware/objects/chameleon-unleashed-binaries.zip
             firmware/objects/chameleon-unleashed-cdn.zip

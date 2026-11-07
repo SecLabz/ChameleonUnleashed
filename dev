@@ -88,6 +88,8 @@ CLI prerequisites: Python, Git, Rust and a native linker.'''
         if name == 'flash':
             command.add_argument('--full', action='store_true',
                                  help='Also flash the bootloader and SoftDevice')
+            command.add_argument('--install-recovery', action='store_true',
+                                 help='Install Nordic ZIP web recovery (bootloader v5)')
         if name == 'serve':
             command.add_argument('--port', type=int, default=8080)
             command.add_argument('--device', default='http://192.168.16.1')
@@ -96,6 +98,8 @@ CLI prerequisites: Python, Git, Rust and a native linker.'''
     if args.command is None:
         parser.print_help()
         return
+    if args.command == 'flash' and args.full and args.install_recovery:
+        parser.error('--full and --install-recovery are mutually exclusive')
 
     cli_only = args.command == 'build' and args.target == 'cli'
     if cli_only and args.shared_source is not None:
@@ -155,6 +159,8 @@ CLI prerequisites: Python, Git, Rust and a native linker.'''
             package = 'chameleon-unleashed-app.zip'
             if args.full:
                 package = 'chameleon-unleashed-full.zip'
+            elif args.install_recovery:
+                package = 'chameleon-unleashed-install.zip'
 
             run('cargo', 'run', '--manifest-path', ROOT / 'software/Cargo.toml',
                 '--locked', '--release', '-p', 'chameleon-cli', '--',

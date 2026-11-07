@@ -9,6 +9,8 @@ $(OUTPUT_DIRECTORY)/bootloader.out: \
 SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/dfu_public_key.c \
+  $(PROJ_DIR)/web_recovery_boot.c \
+  $(SRC_COMMON)/web_update.c \
   $(SRC_COMMON)/hw_connect.c \
   $(SRC_COMMON)/libc_nano_stubs.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_clock.c \

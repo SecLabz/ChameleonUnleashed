@@ -199,7 +199,7 @@ WEB_INPUTS := $(TINYUSB)/src/tusb.c $(LWIP)/src/core/init.c $(WEB_BUILD)/web_ass
 ifneq ($(words $(wildcard $(WEB_INPUTS))),$(words $(WEB_INPUTS)))
 $(error Prepare USB dependencies and web assets first; see software/web/README.md)
 endif
-SRC_FILES += $(wildcard $(PROJ_DIR)/net/*.c) \
+SRC_FILES += $(SRC_COMMON)/web_update.c $(SRC_COMMON)/nordic_update.c $(wildcard $(PROJ_DIR)/net/*.c) \
   $(TINYUSB)/src/tusb.c $(TINYUSB)/src/common/tusb_fifo.c \
   $(TINYUSB)/src/device/usbd.c $(TINYUSB)/src/device/usbd_control.c \
   $(TINYUSB)/src/class/cdc/cdc_device.c $(TINYUSB)/src/class/net/ecm_rndis_device.c \

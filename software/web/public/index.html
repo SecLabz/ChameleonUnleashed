@@ -383,7 +383,25 @@
                 <span id="emulation-detail">Reading device state</span>
               </div>
             </div>
-            <div id="device-info" class="card"><p class="memory-hint">Connecting…</p></div>
+            <div class="card device-card">
+              <div id="device-info"><p class="memory-hint">Connecting…</p></div>
+              <a class="device-link" href="/update">
+                <span class="device-link-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect x="7" y="7" width="10" height="10" rx="2" />
+                    <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
+                  </svg>
+                </span>
+                Firmware update
+              </a>
+            </div>
             <div id="device-settings"></div>
             <section class="card" id="offline-resources" aria-labelledby="offline-title">
               <div class="cu-hero-top">
@@ -395,11 +413,24 @@
                 <span id="offline-bytes"></span>
                 <progress id="offline-progress-bar" aria-label="Offline preparation progress"></progress>
               </div>
-              <p class="memory-hint" id="offline-message" role="status"></p>
-              <button class="primary-action" id="offline-prepare" type="button" hidden>
-                Retry preparation
-              </button>
-              <button class="secondary" id="offline-stop" type="button" hidden>Stop download</button>
+              <div class="offline-foot">
+                <p class="memory-hint" id="offline-message" role="status"></p>
+                <button class="btn" id="offline-prepare" type="button" hidden>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+                  </svg>
+                  Retry
+                </button>
+                <button class="btn stop" id="offline-stop" type="button" hidden>Stop</button>
+              </div>
             </section>
           </div>
         </section>

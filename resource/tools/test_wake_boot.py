@@ -46,16 +46,21 @@ int main(void) {
 }
 ''')
 
-    def test_stock_skip_only_bypasses_crc_for_both_images(self):
+    def test_crc_skip_preserves_legacy_and_recovery_validation(self):
         source = (ROOT / 'firmware/nrf52_sdk/components/libraries/bootloader/nrf_bootloader.c').read_text()
         function = source[source.index('static bool boot_validate('):].split('\n}\n', 1)[0] + '\n}\n'
         run_c(r'''
 #include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
+#define WEB_RECOVERY_START 0x27000u
 #define VALIDATE_CRC 1
 typedef struct {unsigned type;} boot_validation_t;
 static unsigned validated;
+static bool recovery_present, recovery_valid;
+static unsigned recovery_checks;
+bool web_recovery_present(void) { return recovery_present; }
+bool web_recovery_boot_valid(void) { recovery_checks++; return recovery_valid; }
 bool nrf_dfu_validation_boot_validate(const boot_validation_t *v,uint32_t addr,uint32_t length) {
  (void)v;assert(addr && length);validated++;return true;
 }
@@ -65,7 +70,16 @@ int main(void) {
   boot_validation_t v={type};validated=0;
   assert(boot_validate(&v,0x1000,0x26000,false));
   assert(validated==(type==1?0u:1u)); /* SD CRC can skip; SHA/signatures cannot. */
-  validated=0;assert(boot_validate(&v,0x27000,460000,true));assert(validated==1);
+  validated=0;assert(boot_validate(&v,0x30000,460000,true));assert(validated==1);
+  for(unsigned present=0;present<2;present++) {
+   for(unsigned valid=0;valid<2;valid++) {
+    for(unsigned crc=0;crc<2;crc++) {
+     recovery_present=present;recovery_valid=valid;recovery_checks=validated=0;
+     assert(boot_validate(&v,WEB_RECOVERY_START,460000,crc)==(present&&(!crc||valid)));
+     assert(!validated && recovery_checks==(present&&crc));
+    }
+   }
+  }
  }
 }
 ''')

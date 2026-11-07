@@ -5,7 +5,11 @@
 #include <string.h>
 #include <stdatomic.h>
 extern char g_extern_product_str[];
-#ifndef PLATFORM_HOST
+#ifdef WEB_RECOVERY
+#include "nrf.h"
+#include "net/network.h"
+#endif
+#if !defined(PLATFORM_HOST) && !defined(WEB_RECOVERY)
 #include "nrf.h"
 #include "hw_connect.h"
 #include "usb_main.h"
@@ -116,8 +120,10 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t event, bool in_isr) {
     (void)rhport; (void)in_isr;
     if (event != DCD_EVENT_BUS_RESET && event != DCD_EVENT_UNPLUGGED) return;
     usb_profile = USB_PROFILE_ECM;
-#ifndef PLATFORM_HOST
+#if !defined(PLATFORM_HOST) && !defined(WEB_RECOVERY)
     connection_end();
+#elif defined(WEB_RECOVERY)
+    network_disconnect();
 #endif
 }
 
@@ -157,7 +163,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t i, uint16_t lang) {
 }
 
 
-#ifndef PLATFORM_HOST
+#if !defined(PLATFORM_HOST) && !defined(WEB_RECOVERY)
 volatile bool g_usb_connected, g_usb_port_opened;
 volatile bool g_usb_led_marquee_enable = true;
 static uint8_t tx[sizeof(netdata_frame_raw_t)];

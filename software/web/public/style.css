@@ -2496,8 +2496,71 @@ body:has(#scan-dialog[open]) {
 .device-list {
   display: grid;
   gap: 2px;
-  margin-top: 24px;
-  padding: 6px 18px;
+  margin-top: 16px;
+}
+
+#device-info > .memory-hint {
+  margin: 0;
+}
+
+/* Firmware update is a page, so it reads as a navigation row, not an action. */
+.device-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  margin: 8px -18px -18px;
+  padding: 0 18px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.device-link::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin: 0 4px 0 auto;
+  border-top: 1.5px solid var(--muted);
+  border-right: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.device-link:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.device-link:hover::after {
+  border-color: var(--accent);
+  transform: translateX(3px) rotate(45deg);
+}
+
+.device-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.device-link-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.device-link-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .device-row {
@@ -2536,7 +2599,8 @@ body:has(#scan-dialog[open]) {
 
 .cu-grid select {
   width: 100%;
-  font: 600 14px inherit;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .cu-grid input[aria-invalid="true"] {
@@ -2563,6 +2627,34 @@ body:has(#scan-dialog[open]) {
 #offline-progress {
   max-width: none;
   margin: 18px 0 0;
+}
+
+#offline-progress progress {
+  height: 6px;
+  background: var(--line);
+}
+
+#offline-progress progress::-webkit-progress-bar {
+  background: var(--line);
+}
+
+#offline-progress progress::-webkit-progress-value {
+  border-radius: 9px;
+}
+
+.offline-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 16px;
+}
+
+.offline-foot .memory-hint {
+  flex: 1 1 160px;
+}
+
+.offline-foot .btn {
+  margin: 14px 0 0 auto;
 }
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
@@ -3080,6 +3172,7 @@ a {
 
 .emulation-state.active .emulation-dot {
   background: var(--success);
+  box-shadow: 0 0 0 3px rgba(67, 214, 155, 0.16);
 }
 
 .emulation-copy {

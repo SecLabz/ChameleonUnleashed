@@ -236,7 +236,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
             origin = resource_origin('https://' + 'a' * (RESOURCE_ORIGIN_MAX_BYTES - 20) + '.cdn.example/')
             (directory/'web_assets.h').write_text(
                 '#include <string.h>\n#define WEB_RESOURCE_CONNECT "\'self\' ' + origin + '"\n'
-                'static const unsigned char page[]={1,2};\ntypedef struct { const char *type; const unsigned char *bytes; size_t size; } web_asset_t;\nstatic const web_asset_t *web_asset_find(const char *uri){static const web_asset_t page_asset={"text/html; charset=utf-8",page,2};return !strcmp(uri,"/")?&page_asset:NULL;}\n')
+                'static const unsigned char page[]={1,2};\ntypedef struct { const char *type; const unsigned char *bytes; size_t size; } web_asset_t;\nstatic const web_asset_t *web_asset_find(const char *uri){static const web_asset_t page_asset={"text/html; charset=utf-8",page,2};return (!strcmp(uri,"/") || !strcmp(uri,"/update.html"))?&page_asset:NULL;}\n')
             binary=directory/'api'
             subprocess.run(['cc','-std=c11','-Wall','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined',
                 '-DEXPECTED_RESOURCE_ORIGIN="' + origin + '"',

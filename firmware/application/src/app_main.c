@@ -5,6 +5,7 @@
 
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_sdm.h"
 
 #include "app_timer.h"
 #include "app_util_platform.h"
@@ -46,6 +47,8 @@ NRF_LOG_MODULE_REGISTER();
 #include "usb_main.h"
 #include "net/api.h"
 #include "net/web_tearoff.h"
+#include "net/update_api.h"
+#include "web_update.h"
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
@@ -1065,6 +1068,7 @@ static void usb_start_when_ready(void) {
 /**@brief Application main function.
  */
 int main(void) {
+    APP_ERROR_CHECK(sd_softdevice_vector_table_base_set(WEB_UPDATE_START));
     NRF_NVMC->ICACHECNF = NVMC_ICACHECNF_CACHEEN_Msk;
     hw_connect_init();        // Remember to initialize the pins first
 
@@ -1126,6 +1130,7 @@ int main(void) {
 
         // USB event process
         if (m_usb_started) usb_poll();
+        web_update_poll();
         web_tearoff_poll();
         // Data pack process
         data_frame_process();

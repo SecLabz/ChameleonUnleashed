@@ -64,7 +64,8 @@ class DevelopmentTests(unittest.TestCase):
                 self.assertEqual(self.app.read_bytes(), b'previous firmware')
 
     def test_flash_selects_application_or_full_after_a_successful_build(self):
-        for options, package in [([], self.app), (['--full'], self.full)]:
+        install = self.app.with_name('chameleon-unleashed-install.zip')
+        for options, package in [([], self.app), (['--full'], self.full), (['--install-recovery'], install)]:
             with self.subTest(options=options):
                 self.run.reset_mock()
                 dev.main(['flash', '--shared-source', str(self.root), *options])

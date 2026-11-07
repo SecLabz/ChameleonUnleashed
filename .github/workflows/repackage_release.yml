@@ -6,7 +6,6 @@ on:
       tag:
         description: Existing stable tag (left unchanged)
         required: true
-        default: v1.0.0
         type: string
       source-run:
         description: Successful build run for the tagged commit
@@ -49,13 +48,14 @@ jobs:
           from pathlib import Path
           import sys
           sys.path.insert(0, 'resource/tools')
-          from project_version import check_tag, read_version
+          from project_version import check_tag, parse_version
           tag = os.environ['RELEASE_TAG']
           run_id = os.environ['SOURCE_RUN']
           if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag) or not re.fullmatch(r'[0-9]+', run_id):
               raise ValueError('Expected a stable version tag and numeric run ID')
-          check_tag(read_version(), tag)
           commit = subprocess.check_output(['git', 'rev-parse', 'refs/tags/' + tag + '^{commit}'], text=True).strip()
+          version = parse_version(subprocess.check_output(['git', 'show', commit + ':software/Cargo.toml'], text=True))
+          check_tag(version, tag)
           repo = os.environ['GITHUB_REPOSITORY']
           def api(path):
               return json.loads(subprocess.check_output(['gh', 'api', 'repos/' + repo + path]))
@@ -71,6 +71,7 @@ jobs:
               raise ValueError('Expected all five original, unexpired build artifacts')
           with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
               output.write('commit=' + commit + '\n')
+              output.write('version=' + version + '\n')
           print('Verified source build', run_id, 'for', tag, commit)
           PYCODE
       - name: Download original CI artifacts
@@ -82,7 +83,9 @@ jobs:
           merge-multiple: true
           path: release-artifacts
       - name: Package versioned downloads
-        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --tag "$RELEASE_TAG"
+        env:
+          SOURCE_VERSION: ${{ steps.source.outputs.version }}
+        run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --tag "$RELEASE_TAG" --version "$SOURCE_VERSION"
       - name: Upload to tagged release
         uses: softprops/action-gh-release@v3
         with:
@@ -95,3 +98,11 @@ jobs:
           files: release-packages/*
       - name: Verify uploads and remove superseded downloads
         run: python3 resource/tools/sync_release_assets.py --tag "$RELEASE_TAG" --archives release-packages
+  deploy_pages:
+    name: Refresh resources and catalogue after repackaging
+    needs: publish
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/mirror_firmware.yml

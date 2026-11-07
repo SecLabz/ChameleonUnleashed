@@ -39,6 +39,7 @@
  */
 #include "sdk_config.h"
 #include "nrf_bootloader_app_start.h"
+#include "web_update.h"
 #include <stdint.h>
 #include "nrf.h"
 #include "nrf_peripherals.h"
@@ -174,8 +175,11 @@ void nrf_bootloader_app_start_final(uint32_t vector_table_addr)
     }
     APP_ERROR_CHECK(ret_val);
 
-    ret_val = nrf_bootloader_flash_protect(0,
-                    nrf_dfu_bank0_start_addr() + ALIGN_TO_PAGE(s_dfu_settings.bank_0.image_size));
+    uint32_t application_protected_end =
+                    nrf_dfu_bank0_start_addr() + ALIGN_TO_PAGE(s_dfu_settings.bank_0.image_size);
+    extern bool web_recovery_present(void);
+    if (web_recovery_present()) application_protected_end = WEB_RECOVERY_START;
+    ret_val = nrf_bootloader_flash_protect(0, application_protected_end);
 
     if (ret_val != NRF_SUCCESS)
     {

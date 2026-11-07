@@ -146,6 +146,21 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/')[2], b'edited page')
         self.assertEqual(self.request('GET', '/style.css')[2], b'body { color: red; }')
 
+    def test_updater_serves_every_embedded_module_license_and_local_resource_url(self):
+        from build_recovery import assets
+        for name, expected in assets('/').items():
+            with self.subTest(name=name):
+                status, headers, body = self.request('GET', '/' + name + '?v=edited')
+                self.assertEqual((status, body), (200, expected))
+                if name.endswith('.mjs'):
+                    self.assertTrue(headers['content-type'].startswith('text/javascript'))
+        self.assertEqual(self.request('GET', '/update')[2], assets('/')['update.html'])
+        self.assertIn(b'RESOURCE_BASE = "/"', self.request('GET', '/update-config.mjs')[2])
+        catalogue = self.resources / 'updates/catalog.json'
+        catalogue.parent.mkdir()
+        catalogue.write_bytes(b'{"format":1,"sources":[]}')
+        self.assertEqual(self.request('GET', '/updates/catalog.json')[2], catalogue.read_bytes())
+
     def test_bundles_use_current_sources_and_generated_definitions(self):
         self.enable_bundles()
         output = self.app_output()

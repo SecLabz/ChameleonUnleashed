@@ -6,7 +6,7 @@ ARG NRF_CLT_URL=https://nsscprodmedia.blob.core.windows.net/prod/software-and-ot
 RUN set -xe; \
   DEBIAN_FRONTEND=noninteractive; \
   apt update -q; \
-  apt install -qy --no-install-recommends ca-certificates curl xz-utils make git zip; \
+  apt install -qy --no-install-recommends ca-certificates curl xz-utils make git zip python3 python3-cryptography; \
   git config --global --add safe.directory /workdir; \
   curl -fsSLo /usr/bin/nrfutil https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil; \
   curl -fsSLo /tmp/nrf-clt.deb $NRF_CLT_URL; \

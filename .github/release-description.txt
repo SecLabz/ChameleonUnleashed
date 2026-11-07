@@ -1,3 +1,5 @@
-Download the archive matching your OS and architecture. It includes the native CLI, application firmware and installation instructions.
+Download the archive for your computer and follow `INSTALL.txt` to install or update.
 
-**Firmware & resources:** standalone firmware packages, HEX images and matching CDN resources for manual updates or self-hosting.
+You can also update through a browser on a compatible USB-connected device: open http://192.168.16.1 and choose **Device → Update firmware**.
+
+**Firmware & resources:** standalone firmware, HEX images and web resources.

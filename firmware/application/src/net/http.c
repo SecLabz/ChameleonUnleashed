@@ -1,5 +1,8 @@
 #include "http.h"
 #include "web_assets.h"
+#ifndef WEB_RECOVERY
+#include "update_api.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -124,7 +127,7 @@ http_response_t http_dispatch_request(const http_request_t *request, uint8_t *ou
         goto done;
     }
     if (!strcmp(method, "GET")) {
-        const web_asset_t *asset = web_asset_find(uri);
+        const web_asset_t *asset = web_asset_find(!strcmp(uri, "/update") ? "/update.html" : uri);
         if (asset) {
             r.status = 200; r.body = asset->bytes; r.size = asset->size;
             r.header_size = snprintf(r.header, sizeof(r.header),
@@ -158,8 +161,13 @@ http_response_t http_dispatch_request(const http_request_t *request, uint8_t *ou
             goto done;
         }
     }
-    api_response_t api =
-        api_dispatch_request(method, uri, p + end, n - end, out, HTTP_RESPONSE_MAX_BYTES);
+    api_response_t api;
+#ifndef WEB_RECOVERY
+    if (!strncmp(uri, "/api/update", 11))
+        api = web_update_application_request(method, uri, p + end, n - end, out, HTTP_RESPONSE_MAX_BYTES);
+    else
+#endif
+        api = api_dispatch_request(method, uri, p + end, n - end, out, HTTP_RESPONSE_MAX_BYTES);
     r.status = api.status;
     r.size = api.size;
     r.header_size = snprintf(r.header, sizeof(r.header),

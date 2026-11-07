@@ -84,7 +84,7 @@ class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         name = unquote(urlsplit(path).path).lstrip('/')
         directory = Path(self.directory)
-        if name.startswith(('core/', 'hardnested/', 'tables/', 'releases/')):
+        if name.startswith(('core/', 'hardnested/', 'tables/', 'releases/', 'updates/')):
             directory = self.resources
 
         target = (directory / name).resolve()
@@ -104,6 +104,17 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         name = urlsplit(self.path).path
+        from build_recovery import assets
+        files = assets('/')
+        asset = 'update.html' if name == '/update' else name.removeprefix('/')
+        if asset in files:
+            body = files[asset]
+            self.send_response(200)
+            content = 'text/javascript' if asset.endswith('.mjs') else self.guess_type(asset)
+            self.send_header('Content-Type', content)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            return BytesIO(body)
         if self.bundle is None or name not in {'/app.mjs', '/worker.mjs'}:
             return super().send_head()
 
