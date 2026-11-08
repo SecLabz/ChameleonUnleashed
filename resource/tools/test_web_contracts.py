@@ -9,6 +9,7 @@ from build_web import RESOURCE_ORIGIN_MAX_BYTES, resource_origin, source_version
 
 ROOT=Path(__file__).resolve().parents[2]
 NET=ROOT/'firmware/application/src/net'
+SERVICES=ROOT/'firmware/application/src/services'
 
 class WebContracts(unittest.TestCase):
     def test_st25tb_http_wire_contract(self):
@@ -100,10 +101,10 @@ uint32_t fds_hash_bytes(uint32_t,const uint8_t *,size_t);
             binary = directory / 'slots'
             subprocess.run(['cc','-std=c11','-Wall','-Werror','-Wno-unused-parameter',
                 '-fshort-enums','-fsanitize=address,undefined',
-                '-I',str(directory),'-I',str(NET),'-I',str(tags),'-I',str(tags/'hf'),'-I',str(tags/'lf'),
+                '-I',str(directory),'-I',str(NET),'-I',str(SERVICES),'-I',str(tags),'-I',str(tags/'hf'),'-I',str(tags/'lf'),
                 '-I',str(ROOT/'firmware/common'),'-I',str(ROOT/'firmware/application/src'),
-                '-I',str(ROOT/'firmware/application/src/utils'),str(path),str(NET/'slot_api.c'),
-                str(NET/'slot_image.c'),str(ROOT/'firmware/application/src/rfid/nfctag/hf/desfire_model.c'),str(ROOT/'firmware/application/src/rfid/st25tb/model.c'),
+                '-I',str(ROOT/'firmware/application/src/utils'),str(path),str(SERVICES/'slot_api.c'),
+                str(SERVICES/'slot_image.c'),str(ROOT/'firmware/application/src/rfid/nfctag/hf/desfire_model.c'),str(ROOT/'firmware/application/src/rfid/st25tb/model.c'),
                 *(str(ROOT/'firmware/application/src/rfid/iso15693'/f'{name}.c') for name in ('frame','memory','standard','slix','session')),
                 '-I',str(ROOT/'firmware/application/src/rfid'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
@@ -143,9 +144,9 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
             binary=directory/'device'
             subprocess.run(['cc','-std=c11','-Wall','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined',
                 '-DAPP_FW_VER_MAJOR=1','-DAPP_FW_VER_MINOR=0','-DAPP_FW_SEMVER="1.0.0"','-DGIT_VERSION="host-test"',
-                '-I',str(directory),'-I',str(NET),'-I',str(ROOT/'firmware/application/src'),
+                '-I',str(directory),'-I',str(NET),'-I',str(SERVICES),'-I',str(ROOT/'firmware/application/src'),
                 '-I',str(ROOT/'firmware/application/src/rfid/nfctag'),
-                str(ROOT/'resource/tools/tests/web_device.c'),str(NET/'device_api.c'),'-o',str(binary)],check=True)
+                str(ROOT/'resource/tools/tests/web_device.c'),str(SERVICES/'device_api.c'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 
     def test_usb_reset_close_and_ble_backpressure(self):
@@ -232,18 +233,23 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
             directory=Path(tmp)
             (directory/'app_timer.h').write_text('#include <stdint.h>\n#define APP_TIMER_TICKS(ms) ((ms)*16384u/1000u)\nuint32_t app_timer_cnt_get(void);\nuint32_t app_timer_cnt_diff_compute(uint32_t,uint32_t);\n')
             (directory/'rfid_main.h').write_text('extern bool g_is_tag_emulating;\ntypedef int device_mode_t;\n#define DEVICE_MODE_READER 1\nint get_device_mode(void);\nvoid reader_mode_enter(void);\nvoid tag_mode_enter(void);\n')
-            (directory/'ble_main.h').write_text('#include <stdbool.h>\n#include <stdint.h>\nbool ble_slave_rf_only(void);\nuint16_t ble_nus_payload_limit(void);\n#define BLE_LINK_INFO_BYTES 24u\nvoid ble_link_profile(uint8_t,uint8_t,uint8_t *);\n')
+            (directory/'ble_main.h').write_text('#include <stdbool.h>\n#include <stdint.h>\nbool ble_slave_rf_only(void);\nuint16_t ble_nus_payload_limit(void);\nbool ble_stream_response(uint8_t *,uint16_t);\n#define BLE_LINK_INFO_BYTES 24u\nvoid ble_link_profile(uint8_t,uint8_t,uint8_t *);\n')
             origin = resource_origin('https://' + 'a' * (RESOURCE_ORIGIN_MAX_BYTES - 20) + '.cdn.example/')
             (directory/'web_assets.h').write_text(
                 '#include <string.h>\n#define WEB_RESOURCE_CONNECT "\'self\' ' + origin + '"\n'
                 'static const unsigned char page[]={1,2};\ntypedef struct { const char *type; const unsigned char *bytes; size_t size; } web_asset_t;\nstatic const web_asset_t *web_asset_find(const char *uri){static const web_asset_t page_asset={"text/html; charset=utf-8",page,2};return (!strcmp(uri,"/") || !strcmp(uri,"/update.html"))?&page_asset:NULL;}\n')
+            (directory/'nrf_log.h').write_text('#define NRF_LOG_MODULE_REGISTER()\n#define NRF_LOG_ERROR(...) ((void)0)\n#define NRF_LOG_INFO(...) ((void)0)\n')
+            for name in ('nrf_log_ctrl.h', 'nrf_log_default_backends.h'):
+                (directory/name).write_text('')
             binary=directory/'api'
             subprocess.run(['cc','-std=c11','-Wall','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined',
                 '-DEXPECTED_RESOURCE_ORIGIN="' + origin + '"',
-                '-DGIT_VERSION="host-test"','-I',str(directory),'-I',str(NET),
+                '-DGIT_VERSION="host-test"','-I',str(directory),'-I',str(NET),'-I',str(SERVICES),
                 '-I',str(ROOT/'firmware/application/src'),'-I',str(ROOT/'firmware/application/src/rfid/reader/hf'),
-                '-I',str(ROOT/'firmware/application/src/rfid'),
-                str(ROOT/'resource/tools/tests/web_api.c'),str(NET/'api.c'),str(NET/'ble_api.c'),str(NET/'http.c'),'-o',str(binary)],check=True)
+                '-I',str(ROOT/'firmware/application/src/rfid'),'-I',str(ROOT/'firmware/application/src/utils'),'-I',str(ROOT/'firmware/common'),
+                str(ROOT/'resource/tools/tests/web_api.c'),str(NET/'api.c'),str(SERVICES/'control.c'),str(NET/'ble_api.c'),str(NET/'http.c'),
+                str(ROOT/'firmware/application/src/rfid/reader/hf/classic_job.c'),
+                str(ROOT/'firmware/application/src/utils/dataframe.c'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 
 

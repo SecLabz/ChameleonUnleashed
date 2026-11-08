@@ -9,7 +9,9 @@
 #include "app_status.h"
 #include "data_cmd.h"
 #include "ble_api.h"
-api_response_t web_device_request(const char *method,const char *uri,const uint8_t *body,
+#include "dataframe.h"
+#include "classic_job.h"
+api_response_t web_device_request(api_operation_t operation,uint16_t argument,const uint8_t *body,
     size_t size,uint8_t *output,size_t capacity){
     return (api_response_t){404,"application/octet-stream",0};
 }
@@ -27,12 +29,28 @@ void ble_link_profile(uint8_t profile, uint8_t phy, uint8_t *output) {
 }
 uint16_t classic_batch_request(const uint8_t *body, size_t size, uint8_t *output,
     size_t capacity, uint16_t *length) { *length = 0; return STATUS_PAR_ERR; }
-bool classic_job_active(void) { return false; }
-void classic_job_reset(void) {}
-bool classic_job_start(const uint8_t *p, size_t n, bool ble, uint32_t *id) { return false; }
-bool classic_job_cancel(uint32_t id) { return false; }
-size_t classic_job_read(uint32_t id, uint8_t *p, size_t n) { return 0; }
+static bool stream_ok = true, job_rf;
+static unsigned streamed;
+static uint8_t last_event[CLASSIC_JOB_EVENT_MAX];
+static uint16_t last_event_size;
+bool usb_cdc_tx_ready(void) { return true; }
+bool ble_stream_response(uint8_t *p, uint16_t n) {
+    assert(n >= DATA_FRAME_OVERHEAD_BYTES + 13 && p[0] == 0x11 && p[1] == 0xef);
+    assert(((unsigned)p[2] << 8 | p[3]) == DATA_CMD_WEB_EVENT && p[5] == STATUS_SUCCESS);
+    unsigned size = (unsigned)p[6] << 8 | p[7], sum = 0;
+    assert(n == size + DATA_FRAME_OVERHEAD_BYTES && size <= sizeof(last_event));
+    for (unsigned i = 0; i < 9; i++) sum += p[i];
+    assert(!(sum & 255)); sum = 0;
+    for (unsigned i = 9; i < n; i++) sum += p[i];
+    assert(!(sum & 255));
+    memcpy(last_event, p + 9, size); last_event_size = size; streamed++;
+    return stream_ok;
+}
 bool web_update_entering(void) { return update_entering; }
+api_response_t web_update_info(uint8_t *out, size_t capacity) {
+    update_requests++;
+    return (api_response_t){200, "application/octet-stream", 0};
+}
 api_response_t web_update_application_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *out, size_t capacity) {
     update_requests++;
@@ -65,9 +83,9 @@ size_t web_tearoff_state(uint8_t output[20]) {
 
 void web_slots_reset(void){slot_resets++;}
 
-api_response_t web_slots_request(const char *operation,const uint8_t *body,size_t size,uint8_t *output,size_t capacity){
+api_response_t web_slots_request(api_operation_t operation,const uint8_t *body,size_t size,uint8_t *output,size_t capacity){
     slot_operations++;
-    if(!strcmp(operation,"activate"))mode=2;
+    if(operation == API_SLOT_ACTIVATE)mode=2;
     return (api_response_t){200,"application/octet-stream",0};
 }
 
@@ -93,6 +111,11 @@ bool nfca_session_active(void){return false;}
 uint16_t nfca_prepare(uint16_t cmd,uint16_t size,const uint8_t *data){return STATUS_SUCCESS;}
 void nfca_finish(uint16_t cmd){}
 uint16_t nfca_command(uint16_t cmd,uint16_t size,uint8_t *data,uint8_t *out,uint16_t *length){
+    if (job_rf) {
+        if (cmd == DATA_CMD_HF14A_SCAN) { *length=5; memcpy(out,(uint8_t[]){4,1,2,3,4},5); }
+        else { *length=7; memset(out,0,7); out[0]=1; }
+        return STATUS_HF_TAG_OK;
+    }
     operations++;*length=1;out[0]=42;return STATUS_HF_TAG_OK;
 }
 static uint8_t output[512];
@@ -197,6 +220,48 @@ static uint32_t ble_open(unsigned operation) {
     return lease;
 }
 
+static uint32_t ble_start_job(uint32_t lease) {
+    uint8_t body[24] = {1,0,4,1,2,3,4,2,0,0x60,255,255,255,255,255,255,4,0x60,255,255,255,255,255,255};
+    /* Set the envelope without dispatching a body-less start. */
+    assert(ble(BLE_API_KEEPALIVE, lease, 0) == 200);
+    ble_request[5] = BLE_API_CLASSIC_JOB_START;
+    memcpy(ble_request + BLE_API_REQUEST_HEADER, body, sizeof(body));
+    assert(ble_api_request(ble_request, BLE_API_REQUEST_HEADER + sizeof(body), ble_reply,
+        sizeof(ble_reply), &ble_length) == STATUS_SUCCESS);
+    assert(ble_reply[5] == 0 && ble_reply[6] == 200 && ble_length == 12);
+    return (uint32_t)ble_reply[8] << 24 | (uint32_t)ble_reply[9] << 16 |
+        (uint32_t)ble_reply[10] << 8 | ble_reply[11];
+}
+
+static void ble_job_delivery(void) {
+    uint32_t lease = ble_open(BLE_API_READER_SESSION);
+    job_rf = true;
+    ble_start_job(lease);
+    ble_api_poll(); assert(!streamed);
+    classic_job_poll(); classic_job_poll(); ble_api_poll();
+    assert(streamed == 1 && last_event_size == 20 && !last_event[7] && last_event[12] == 1);
+    classic_job_poll(); ble_api_poll();
+    assert(streamed == 2 && last_event[7] == 1 && last_event[12] == 2 && !classic_job_active());
+    ble_api_poll(); assert(streamed == 2);
+    ble_start_job(lease);
+    classic_job_poll(); classic_job_poll();
+    stream_ok = false; ble_api_poll();
+    assert(streamed == 3 && !classic_job_active());
+    stream_ok = true; ble_api_poll(); assert(streamed == 3);
+    ble_start_job(lease);
+    classic_job_poll(); classic_job_poll();
+    web_session_disconnect(API_SOURCE_BLE); web_session_poll(); ble_api_poll();
+    assert(streamed == 3 && !web_session_active());
+    /* A subsequent HTTP job remains available to polling, without BLE delivery. */
+    assert(api("/api/session").status == 200);
+    uint8_t body[16] = {1,0,4,1,2,3,4,1,0,0x60,255,255,255,255,255,255};
+    uint32_t id;
+    assert(classic_job_start(body, sizeof(body), &id));
+    classic_job_poll(); classic_job_poll(); ble_api_poll();
+    assert(streamed == 3 && classic_job_read(id, last_event, sizeof(last_event)) == 20);
+    web_session_end(); job_rf = false;
+}
+
 static void ble_lifecycle(void) {
     assert(ble(BLE_API_HELLO, 0, 0) == 200 && ble_length == 14 && ble_reply[7] == 0);
     assert(ble_reply[8] == BLE_API_VERSION && ble_reply[9] == 4 && ble_reply[11] == 2);
@@ -225,6 +290,8 @@ static void ble_lifecycle(void) {
     assert(ble(BLE_API_COMMAND, lease, 2000) == 200 && ble_length == 11);
     const uint8_t expected[] = {0, STATUS_HF_TAG_OK, 42};
     assert(!memcmp(ble_reply + BLE_API_RESPONSE_HEADER, expected, sizeof(expected)));
+    assert(api_dispatch_request("GET", "/api/slot/0x", NULL, 0, output, sizeof(output)).status == 404);
+    assert(api_dispatch_request("GET", "/api/slot/-1", NULL, 0, output, sizeof(output)).status == 404);
     /* USB network teardown must not release a BLE-owned RF lease. */
     int before = closes;
     web_session_disconnect(API_SOURCE_HTTP); web_session_poll();
@@ -311,6 +378,7 @@ int main(void){
     const char *partial="POST /api/session HTTP/1.1\r\nHost: 192.168.16.1\r\nContent-Length: 1\r\n\r\n";
     assert(http_parse_request((const uint8_t *)partial,strlen(partial),&request)==0);
     ble_lifecycle();
+    ble_job_delivery();
     return 0;
 }
 

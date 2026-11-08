@@ -14,8 +14,8 @@
 #include "settings.h"
 #include "delayed_reset.h"
 #include "netdata.h"
-#include "net/api.h"
-#include "net/slot_api.h"
+#include "services/control.h"
+#include "services/slot_api.h"
 #include "net/ble_api.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"

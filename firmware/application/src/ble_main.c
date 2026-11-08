@@ -26,7 +26,7 @@
 #include "hw_connect.h"
 #include "settings.h"
 #include "tag_emulation.h"
-#include "net/api.h"
+#include "services/control.h"
 
 #define NRF_LOG_MODULE_NAME ble_main
 #include "nrf_log.h"

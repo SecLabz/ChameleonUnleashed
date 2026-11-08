@@ -31,7 +31,8 @@ NRF_LOG_MODULE_REGISTER();
 #include "app_buttons.h"
 #include "app_status.h"
 #include "ble_main.h"
-#include "net/classic_job.h"
+#include "classic_job.h"
+#include "net/ble_api.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
 #include "bsp_wdt.h"
@@ -46,7 +47,7 @@ NRF_LOG_MODULE_REGISTER();
 #include "syssleep.h"
 #include "tag_emulation.h"
 #include "usb_main.h"
-#include "net/api.h"
+#include "services/control.h"
 #include "net/web_tearoff.h"
 #include "net/update_api.h"
 #include "web_update.h"
@@ -1137,6 +1138,7 @@ int main(void) {
         web_tearoff_poll();
         // Data pack process
         data_frame_process();
+        ble_api_poll();
         classic_job_poll();
         // Log print process
         while (NRF_LOG_PROCESS());

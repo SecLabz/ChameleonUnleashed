@@ -19,12 +19,50 @@ test('BLE operation IDs match the firmware contract and Chameleon framing', () =
     new URL('../../../firmware/application/src/net/ble_api.h', import.meta.url),
     'utf8'
   );
-  const names = header
-    .split('enum {')[1]
-    .split('};')[0]
-    .split(',')
-    .map((name) => name.trim().replace('BLE_API_', ''));
-  assert.deepEqual(names, Object.keys(OPERATION));
+  const operations = Object.fromEntries(
+    [...header.matchAll(/BLE_API_(\w+)\s*=\s*(\d+)/g)].map(([, name, value]) => [name, Number(value)])
+  );
+  assert.deepEqual(operations, OPERATION);
+  assert.deepEqual(OPERATION, {
+    HELLO: 0,
+    DEVICE: 1,
+    SLOT: 2,
+    STATUS: 3,
+    READER_SESSION: 4,
+    SLOT_SESSION: 5,
+    KEEPALIVE: 6,
+    END: 7,
+    COMMAND: 8,
+    SETTINGS: 9,
+    SLOT_OPEN: 10,
+    SLOT_READ: 11,
+    SLOT_BEGIN: 12,
+    SLOT_WRITE: 13,
+    SLOT_COMMIT: 14,
+    SLOT_ACTIVATE: 15,
+    SLOT_NICK: 16,
+    SLOT_ENABLE: 17,
+    SLOT_CLEAR: 18,
+    TEAROFF_START: 19,
+    TEAROFF_STATE: 20,
+    TEAROFF_CANCEL: 21,
+    UPDATE_INFO: 22,
+    TRANSPORT_INFO: 23,
+    LINK_PROFILE: 24,
+    CLASSIC_JOB_START: 25,
+    CLASSIC_JOB_CANCEL: 26,
+    CLASSIC_JOB_READ: 27
+  });
+  const commands = readFileSync(
+    new URL('../../../firmware/application/src/data_cmd.h', import.meta.url),
+    'utf8'
+  );
+  for (const [name, id] of [
+    ['WEB_API', BLE_API.COMMAND],
+    ['WEB_EVENT', BLE_API.JOB_EVENT]
+  ]) {
+    assert.match(commands, new RegExp(`DATA_CMD_${name}\\s+\\(${id}\\)`));
+  }
   assert.deepEqual([...encodeFrame(1000)], [0x11, 0xef, 3, 0xe8, 0, 0, 0, 0, 0x15, 0]);
   assert.deepEqual(
     [...encodeOperation(OPERATION.COMMAND, 0x12345678, 0x9abcdeff, 2015, Uint8Array.of(9))],

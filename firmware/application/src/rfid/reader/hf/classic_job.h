@@ -11,7 +11,7 @@
  * RF status BE16, completed count BE16, observation/sector/check bytes. */
 #define CLASSIC_JOB_EVENT_MAX 285u
 bool classic_job_active(void);
-bool classic_job_start(const uint8_t *, size_t, bool, uint32_t *);
+bool classic_job_start(const uint8_t *, size_t, uint32_t *);
 bool classic_job_cancel(uint32_t);
 void classic_job_reset(void);
 void classic_job_poll(void);

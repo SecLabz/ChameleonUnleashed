@@ -41,18 +41,20 @@ static bool pause_emulation(void) {
     return !busy;
 }
 
+api_response_t web_update_info(uint8_t *out, size_t capacity) {
+    int length = snprintf((char *)out, capacity,
+        "{\"mode\":\"application\",\"layout\":%u,\"version\":%lu,\"recovery_crc32\":%lu}",
+        bootloader_present() ? WEB_UPDATE_LAYOUT : 0,
+        (unsigned long)web_update_version(),
+        (unsigned long)web_update_u32((const uint8_t *)(WEB_RECOVERY_CRC)));
+    return (api_response_t){length > 0 && (size_t)length < capacity ? 200 : 500,
+        "application/json", length > 0 && (size_t)length < capacity ? (size_t)length : 0};
+}
+
 api_response_t web_update_application_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *out, size_t capacity) {
     (void)body;
-    if (!strcmp(method, "GET") && !strcmp(uri, "/api/update")) {
-        int length = snprintf((char *)out, capacity,
-            "{\"mode\":\"application\",\"layout\":%u,\"version\":%lu,\"recovery_crc32\":%lu}",
-            bootloader_present() ? WEB_UPDATE_LAYOUT : 0,
-            (unsigned long)web_update_version(),
-            (unsigned long)web_update_u32((const uint8_t *)(WEB_RECOVERY_CRC)));
-        return (api_response_t){length > 0 && (size_t)length < capacity ? 200 : 500,
-            "application/json", length > 0 && (size_t)length < capacity ? (size_t)length : 0};
-    }
+    if (!strcmp(method, "GET") && !strcmp(uri, "/api/update")) return web_update_info(out, capacity);
     if (!strcmp(method, "POST") && !strcmp(uri, "/api/update/enter")) {
         if (size) return (api_response_t){400, "application/octet-stream", 0};
         if (web_session_active() || !pause_emulation())

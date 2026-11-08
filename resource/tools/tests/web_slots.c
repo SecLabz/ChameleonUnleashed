@@ -131,7 +131,15 @@ void tag_emulation_load_data(void) {
 static uint8_t output[512], encoded[4500];
 static uint32_t image_words[1125], decoded_words[1125];
 static api_response_t raw_call(const char *op,const uint8_t *data,size_t size) {
-    return web_slots_request(op,data,size,output,sizeof(output));
+    static const struct { const char *name; api_operation_t operation; } routes[] = {
+        {"open", API_SLOT_OPEN}, {"read", API_SLOT_READ}, {"begin", API_SLOT_BEGIN},
+        {"write", API_SLOT_WRITE}, {"commit", API_SLOT_COMMIT}, {"activate", API_SLOT_ACTIVATE},
+        {"nick", API_SLOT_NICK}, {"enable", API_SLOT_ENABLE}, {"clear", API_SLOT_CLEAR}
+    };
+    api_operation_t operation = API_UNKNOWN_WRITE;
+    for (unsigned i = 0; i < sizeof(routes) / sizeof(routes[0]); i++)
+        if (!strcmp(op, routes[i].name)) operation = routes[i].operation;
+    return web_slots_request(operation,data,size,output,sizeof(output));
 }
 static void revision_bytes(uint8_t *bytes,uint8_t slot,tag_sense_type_t sense) {
     uint32_t revision=tag_emulation_place_revision(slot,sense);

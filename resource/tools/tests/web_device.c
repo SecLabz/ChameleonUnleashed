@@ -45,45 +45,43 @@ uint8_t settings_save_config(void) { saves++; return save_status; }
 
 int main(void) {
     uint8_t output[512] = {0};
-    api_response_t r = web_device_request("GET", "/api/device", NULL, 0, output, sizeof(output));
+    api_response_t r = web_device_request(API_DEVICE, 0, NULL, 0, output, sizeof(output));
     assert(r.status == 200 && !strcmp(r.type, "application/json"));
     assert(strstr((char *)output, "\"version\":\"1.0.0\""));
     assert(strstr((char *)output, "\"chip\":\"abcdef0112345678\""));
     assert(strstr((char *)output, "\"active_slot\":3"));
-    assert(web_device_request("GET", "/api/device", NULL, 0, output, 10).status == 500);
-    r = web_device_request("GET", "/api/slot/7", NULL, 0, output, sizeof(output));
+    assert(web_device_request(API_DEVICE, 0, NULL, 0, output, 10).status == 500);
+    r = web_device_request(API_SLOT, 7, NULL, 0, output, sizeof(output));
     assert(r.status == 200 && r.size == 23);
     assert(output[0] == 3 && output[1] == 233 && output[2] == 0 && output[3] == 100 && output[4] == 1);
     assert(output[5] == 4 && output[10] == 4);
     nick_size = 255;
-    r = web_device_request("GET", "/api/slot/0", NULL, 0, output, sizeof(output));
+    r = web_device_request(API_SLOT, 0, NULL, 0, output, sizeof(output));
     assert(r.status == 200 && r.size == 15 && output[5] == 0 && output[6] == 0);
-    assert(web_device_request("GET", "/api/slot/8", NULL, 0, output, sizeof(output)).status == 404);
-    assert(web_device_request("GET", "/api/slot/0x", NULL, 0, output, sizeof(output)).status == 404);
-    assert(web_device_request("GET", "/api/slot/-1", NULL, 0, output, sizeof(output)).status == 404);
+    assert(web_device_request(API_SLOT, 8, NULL, 0, output, sizeof(output)).status == 404);
     uint8_t data[8] = {0, 3};
     busy = true;
-    assert(web_device_request("POST", "/api/settings", data, 2, output, sizeof(output)).status == 409);
+    assert(web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output)).status == 409);
     busy = false; m_is_field_on = true;
-    assert(web_device_request("POST", "/api/settings", data, 2, output, sizeof(output)).status == 409);
+    assert(web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output)).status == 409);
     m_is_field_on = false;
     assert(mutations == 0 && saves == 0);
-    r = web_device_request("POST", "/api/settings", data, 2, output, sizeof(output));
+    r = web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output));
     assert(r.status == 200 && r.size == 2 && output[1] == STATUS_SUCCESS && animation == 3 && saves == 1);
     unsigned before = mutations;
     const uint8_t invalid[][3] = {{0, 4}, {1, 6}, {5, 4}, {5, 61}, {6, 0, 199}, {7, 2}, {9, 0}};
     for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
-        assert(web_device_request("POST", "/api/settings", invalid[i], invalid[i][0] == 6 ? 3 : 2, output, sizeof(output)).status == 400);
+        assert(web_device_request(API_SETTINGS, 0, invalid[i], invalid[i][0] == 6 ? 3 : 2, output, sizeof(output)).status == 400);
     }
-    assert(web_device_request("POST", "/api/settings", NULL, 0, output, sizeof(output)).status == 400);
+    assert(web_device_request(API_SETTINGS, 0, NULL, 0, output, sizeof(output)).status == 400);
     assert(mutations == before);
     data[0] = 6; data[1] = 0xff; data[2] = 0xff;
-    assert(web_device_request("POST", "/api/settings", data, 3, output, sizeof(output)).status == 200 && long_ms == 65535);
+    assert(web_device_request(API_SETTINGS, 0, data, 3, output, sizeof(output)).status == 200 && long_ms == 65535);
     data[0] = 8; memcpy(data + 1, "012345", 6);
-    assert(web_device_request("POST", "/api/settings", data, 7, output, sizeof(output)).status == 200 && !memcmp(pin, "012345", 6));
+    assert(web_device_request(API_SETTINGS, 0, data, 7, output, sizeof(output)).status == 200 && !memcmp(pin, "012345", 6));
     data[1] = 'a'; before = mutations;
-    assert(web_device_request("POST", "/api/settings", data, 7, output, sizeof(output)).status == 400 && mutations == before);
+    assert(web_device_request(API_SETTINGS, 0, data, 7, output, sizeof(output)).status == 400 && mutations == before);
     save_status = STATUS_FLASH_WRITE_FAIL; data[0] = 5; data[1] = 60;
-    assert(web_device_request("POST", "/api/settings", data, 2, output, sizeof(output)).status == 200 && output[1] == STATUS_FLASH_WRITE_FAIL);
+    assert(web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output)).status == 200 && output[1] == STATUS_FLASH_WRITE_FAIL);
     puts("Device metadata, setting validation, busy ownership and save outcomes passed");
 }

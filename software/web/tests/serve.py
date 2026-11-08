@@ -446,7 +446,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
         return 0, ((1 << count) - 1).to_bytes(2, 'big') + b''.join(blocks)
 
     def classic_batch(self, data):
-        """Follow firmware/application/src/net/classic_batch.c: kind 0 checks one
+        """Follow firmware/application/src/rfid/reader/hf/classic_batch.c: kind 0 checks one
         key per block, kind 1 reads sectors; records stop at a lost target."""
         cls = type(self)
         if len(data) < 8 or data[0] != 1 or data[1] > 1 or data[2] not in (4, 7, 10):

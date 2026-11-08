@@ -3,7 +3,6 @@
 #include "nfca_session.h"
 #include "app_status.h"
 #include "data_cmd.h"
-#include "ble_main.h"
 #include <string.h>
 
 #define QUEUE_DEPTH 4u
@@ -20,7 +19,7 @@ static struct {
     uint8_t events[QUEUE_DEPTH][CLASSIC_JOB_EVENT_MAX];
     uint16_t sizes[QUEUE_DEPTH];
     uint8_t first, queued;
-    bool running, cancel, ble, identified;
+    bool running, cancel, identified;
 } job
 #if defined(NRF52840_XXAA)
     __attribute__((section(".noinit.classic_job")))
@@ -34,7 +33,7 @@ static void initialize(void) {
 bool classic_job_active(void) { initialize(); return job.running || job.queued; }
 void classic_job_reset(void) { initialize(); memset(&job, 0, sizeof(job)); nfca_session_close(); }
 
-bool classic_job_start(const uint8_t *p, size_t size, bool ble, uint32_t *id) {
+bool classic_job_start(const uint8_t *p, size_t size, uint32_t *id) {
     initialize();
     if (job.running || job.queued || !p || size < 7 || size > REQUEST_MAX || p[0] != 1 || p[1] > 2 ||
         (p[2] != 4 && p[2] != 7 && p[2] != 10) || next_id == UINT32_MAX) return false;
@@ -59,7 +58,7 @@ bool classic_job_start(const uint8_t *p, size_t size, bool ble, uint32_t *id) {
     memcpy(job.request, p, size);
     job.id = ++next_id; *id = job.id;
     job.kind = p[1]; job.uid_length = p[2]; job.head = head; job.count = count;
-    job.total = total; job.running = true; job.ble = ble;
+    job.total = total; job.running = true;
     return true;
 }
 
@@ -91,27 +90,8 @@ static void emit(uint16_t status, const uint8_t *data, unsigned size, uint8_t fl
     if (flags & 1) { job.running = false; nfca_session_close(); }
 }
 
-static void transmit(void) {
-    if (!job.ble || !job.queued) return;
-    /* One complete frame is queued before another API response can be sent. */
-    uint8_t frame[CLASSIC_JOB_EVENT_MAX + 10];
-    unsigned size = job.sizes[job.first];
-    const uint8_t *data = job.events[job.first];
-    frame[0] = 0x11; frame[1] = 0xef; frame[2] = 1091 >> 8; frame[3] = 1091 & 255;
-    frame[4] = 0; frame[5] = STATUS_SUCCESS; frame[6] = size >> 8; frame[7] = size;
-    unsigned sum = 0;
-    for (unsigned i = 0; i < 8; i++) sum += frame[i];
-    frame[8] = -sum;
-    memcpy(frame + 9, data, size); sum = 0;
-    for (unsigned i = 0; i < size; i++) sum += data[i];
-    frame[9 + size] = -sum;
-    if (!ble_stream_response(frame, size + 10)) { classic_job_reset(); return; }
-    job.first = (job.first + 1) % QUEUE_DEPTH; job.queued--;
-}
-
 void classic_job_poll(void) {
     initialize();
-    transmit();
     if (!job.running || job.queued == QUEUE_DEPTH) return;
     if (job.cancel) { emit(STATUS_HF_TAG_OK, NULL, 0, 3); return; }
     uint8_t output[NFCA_COMMAND_OUTPUT_BYTES];

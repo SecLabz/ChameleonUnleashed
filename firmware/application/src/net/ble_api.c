@@ -1,9 +1,13 @@
 #include "ble_api.h"
-#include "api.h"
+#include "services/control.h"
+#include "classic_job.h"
+#include "dataframe.h"
+#include "data_cmd.h"
 #include "app_status.h"
 #include "ble_main.h"
-#include <stdio.h>
 #include <string.h>
+
+static uint32_t streamed_job;
 
 static uint32_t read32(const uint8_t *bytes) {
     return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 |
@@ -24,8 +28,7 @@ uint16_t ble_api_request(const uint8_t *request, size_t size,
     const uint8_t *body = request + BLE_API_REQUEST_HEADER;
     uint8_t *payload = output + BLE_API_RESPONSE_HEADER;
     size_t available = capacity - BLE_API_RESPONSE_HEADER;
-    const char *method = "POST", *path = NULL;
-    char uri[64];
+    api_operation_t action;
     api_response_t response = {400, "application/octet-stream", 0};
 
     if (operation == BLE_API_HELLO) {
@@ -57,49 +60,42 @@ uint16_t ble_api_request(const uint8_t *request, size_t size,
     }
     if (operation != BLE_API_COMMAND && operation != BLE_API_SLOT && argument) goto done;
     switch (operation) {
-    case BLE_API_DEVICE: path = "/api/device"; method = "GET"; break;
-    case BLE_API_SLOT:
-        if (argument > 7) goto done;
-        snprintf(uri, sizeof(uri), "/api/slot/%u", argument);
-        path = uri; method = "GET"; break;
-    case BLE_API_STATUS: path = "/api/status"; method = "GET"; break;
-    case BLE_API_UPDATE_INFO: path = "/api/update"; method = "GET"; break;
-    case BLE_API_READER_SESSION: path = "/api/session"; break;
-    case BLE_API_SLOT_SESSION: path = "/api/slots/session"; break;
-    case BLE_API_SETTINGS: path = "/api/settings"; break;
-    case BLE_API_KEEPALIVE: path = "/api/keepalive"; break;
-    case BLE_API_END: path = "/api/end"; break;
-    case BLE_API_COMMAND:
-        if (!lease) goto done;
-        snprintf(uri, sizeof(uri), "/api/command/%u?id=%lu", argument, (unsigned long)lease);
-        break;
-    default:
-        if (operation >= BLE_API_CLASSIC_JOB_START && operation <= BLE_API_CLASSIC_JOB_READ) {
-            if (!lease) goto done;
-            static const char *const names[] = {"start", "cancel", "read"};
-            snprintf(uri, sizeof(uri), "/api/classic/job/%s?id=%lu",
-                names[operation - BLE_API_CLASSIC_JOB_START], (unsigned long)lease);
-        } else if (operation >= BLE_API_SLOT_OPEN && operation <= BLE_API_SLOT_CLEAR) {
-            static const char *const names[] = {"open", "read", "begin", "write", "commit",
-                "activate", "nick", "enable", "clear"};
-            snprintf(uri, sizeof(uri), "/api/slots/%s?id=%lu",
-                names[operation - BLE_API_SLOT_OPEN], (unsigned long)lease);
-        } else if (operation >= BLE_API_TEAROFF_START && operation <= BLE_API_TEAROFF_CANCEL) {
-            static const char *const names[] = {"start", "state", "cancel"};
-            snprintf(uri, sizeof(uri), "/api/st25tb/tearoff/%s?id=%lu",
-                names[operation - BLE_API_TEAROFF_START], (unsigned long)lease);
-        } else goto done;
+    case BLE_API_DEVICE: action = API_DEVICE; break;
+    case BLE_API_SLOT: action = API_SLOT; break;
+    case BLE_API_STATUS: action = API_STATUS; break;
+    case BLE_API_READER_SESSION: action = API_READER_SESSION; break;
+    case BLE_API_SLOT_SESSION: action = API_SLOT_SESSION; break;
+    case BLE_API_KEEPALIVE: action = API_KEEPALIVE; break;
+    case BLE_API_END: action = API_END; break;
+    case BLE_API_COMMAND: action = API_COMMAND; break;
+    case BLE_API_SETTINGS: action = API_SETTINGS; break;
+    case BLE_API_SLOT_OPEN: action = API_SLOT_OPEN; break;
+    case BLE_API_SLOT_READ: action = API_SLOT_READ; break;
+    case BLE_API_SLOT_BEGIN: action = API_SLOT_BEGIN; break;
+    case BLE_API_SLOT_WRITE: action = API_SLOT_WRITE; break;
+    case BLE_API_SLOT_COMMIT: action = API_SLOT_COMMIT; break;
+    case BLE_API_SLOT_ACTIVATE: action = API_SLOT_ACTIVATE; break;
+    case BLE_API_SLOT_NICK: action = API_SLOT_NICK; break;
+    case BLE_API_SLOT_ENABLE: action = API_SLOT_ENABLE; break;
+    case BLE_API_SLOT_CLEAR: action = API_SLOT_CLEAR; break;
+    case BLE_API_TEAROFF_START: action = API_TEAROFF_START; break;
+    case BLE_API_TEAROFF_STATE: action = API_TEAROFF_STATE; break;
+    case BLE_API_TEAROFF_CANCEL: action = API_TEAROFF_CANCEL; break;
+    case BLE_API_UPDATE_INFO: action = API_UPDATE_INFO; break;
+    case BLE_API_CLASSIC_JOB_START: action = API_CLASSIC_JOB_START; break;
+    case BLE_API_CLASSIC_JOB_CANCEL: action = API_CLASSIC_JOB_CANCEL; break;
+    case BLE_API_CLASSIC_JOB_READ: action = API_CLASSIC_JOB_READ; break;
+    default: goto done;
     }
-    if (operation == BLE_API_KEEPALIVE || operation == BLE_API_END) {
-        snprintf(uri, sizeof(uri), "%s?id=%lu", path, (unsigned long)lease);
-        path = uri;
-    } else if (!path) path = uri;
-    if (operation >= BLE_API_KEEPALIVE && operation <= BLE_API_COMMAND && !lease) goto done;
-    if ((operation >= BLE_API_SLOT_OPEN && operation <= BLE_API_TEAROFF_CANCEL) && !lease) goto done;
-    if ((operation <= BLE_API_SLOT_SESSION || operation == BLE_API_SETTINGS ||
-        operation == BLE_API_UPDATE_INFO) && lease) goto done;
-    if (!strcmp(method, "GET") && body_size) goto done;
-    response = api_dispatch_from(API_SOURCE_BLE, method, path, body, body_size, payload, available);
+    if (operation == BLE_API_SLOT && argument > 7) goto done;
+    if (action >= API_KEEPALIVE && action <= API_COMMAND && !lease) goto done;
+    if (action >= API_SLOT_OPEN && action <= API_CLASSIC_JOB_READ && !lease) goto done;
+    if ((action <= API_UNKNOWN_READ || action == API_READER_SESSION ||
+        action == API_SLOT_SESSION || action == API_SETTINGS) && lease) goto done;
+    if (action <= API_UNKNOWN_READ && body_size) goto done;
+    response = api_execute(API_SOURCE_BLE, action, lease, argument, body, body_size, payload, available);
+    if (action == API_CLASSIC_JOB_START && response.status == 200 && response.size == 4)
+        streamed_job = read32(payload);
 done:
     if (response.size > available) return STATUS_PAR_ERR;
     output[0] = BLE_API_VERSION;
@@ -109,4 +105,15 @@ done:
     output[7] = strstr(response.type, "application/json") != NULL;
     *length = BLE_API_RESPONSE_HEADER + response.size;
     return STATUS_SUCCESS;
+}
+
+void ble_api_poll(void) {
+    if (!streamed_job) return;
+    uint8_t event[CLASSIC_JOB_EVENT_MAX];
+    size_t size = classic_job_read(streamed_job, event, sizeof(event));
+    if (!size) return;
+    data_frame_tx_t *frame = data_frame_make(DATA_CMD_WEB_EVENT, STATUS_SUCCESS, size, event);
+    bool sent = frame && ble_stream_response(frame->buffer, frame->length);
+    if (!sent) classic_job_reset();
+    if (!sent || (event[7] & 1)) streamed_job = 0;
 }

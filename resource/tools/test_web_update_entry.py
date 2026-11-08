@@ -15,7 +15,7 @@ class WebUpdateEntryTests(unittest.TestCase):
         source = (net / 'update_api.c').read_text()
         production = '\n'.join(function(source, name) for name in (
             'web_update_entering', 'bootloader_present', 'rf_busy', 'pause_emulation',
-            'web_update_application_request', 'web_update_poll'))
+            'web_update_info', 'web_update_application_request', 'web_update_poll'))
         fixture = (ROOT / 'resource/tools/tests/web_update_entry.c').read_text()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -25,6 +25,6 @@ class WebUpdateEntryTests(unittest.TestCase):
             subprocess.run([
                 'cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2',
                 '-fsanitize=address,undefined', '-I', str(net),
-                '-I', str(ROOT / 'firmware/common'), str(path), '-o', str(binary),
+                '-I', str(ROOT / 'firmware/application/src'), '-I', str(ROOT / 'firmware/common'), str(path), '-o', str(binary),
             ], check=True)
             subprocess.run([str(binary)], check=True, timeout=10)

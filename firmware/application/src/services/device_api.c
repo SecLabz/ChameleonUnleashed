@@ -114,15 +114,10 @@ static api_response_t set_setting(const uint8_t *body, size_t size,
     return response(200, 2);
 }
 
-api_response_t web_device_request(const char *method, const char *uri,
+api_response_t web_device_request(api_operation_t operation, uint16_t argument,
     const uint8_t *body, size_t size, uint8_t *output, size_t capacity) {
-    if (!strcmp(method, "GET")) {
-        if (!strcmp(uri, "/api/device")) return device_info(output, capacity);
-        if (!strncmp(uri, "/api/slot/", 10) && strlen(uri) == 11 &&
-            uri[10] >= '0' && uri[10] <= '7')
-            return slot_info(uri[10] - '0', output, capacity);
-    }
-    if (!strcmp(method, "POST") && !strcmp(uri, "/api/settings"))
-        return set_setting(body, size, output, capacity);
+    if (operation == API_DEVICE) return device_info(output, capacity);
+    if (operation == API_SLOT && argument < 8) return slot_info(argument, output, capacity);
+    if (operation == API_SETTINGS) return set_setting(body, size, output, capacity);
     return response(404, 0);
 }
