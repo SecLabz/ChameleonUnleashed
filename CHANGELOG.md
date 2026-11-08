@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.1.0 (unreleased)
+## v2.1.0 — 2026-11-08
 
 - Faster Classic AutoPwn in the native CLI and USB/Bluetooth web app.
 - AutoPwn requires matching firmware 2.1.0 or newer.
