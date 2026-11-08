@@ -357,6 +357,14 @@ uint32_t BATVOL2PERCENT(uint16_t VOL) {
     }
 }
 
+static void battery_level_measure(void) {
+    nrf_saadc_value_t adc_result;
+    ret_code_t err_code = nrfx_saadc_sample_convert(ADC_CHANNEL, &adc_result);
+    APP_ERROR_CHECK(err_code);
+    batt_lvl_in_milli_volts = ADC_RESULT_IN_MILLI_VOLTS(adc_result) + 100;
+    percentage_batt_lvl = BATVOL2PERCENT(batt_lvl_in_milli_volts);
+}
+
 /**@brief Function for initializing services that will be used by the application.
  */
 static void services_init(void) {
@@ -391,7 +399,7 @@ static void services_init(void) {
     bas_init_obj.evt_handler          = on_bas_evt;
     bas_init_obj.support_notification = true;
     bas_init_obj.p_report_ref         = NULL;
-    bas_init_obj.initial_batt_level   = 100;
+    bas_init_obj.initial_batt_level   = percentage_batt_lvl;
 
     if (settings_get_ble_pairing_enable_first_load()) {
         bas_init_obj.bl_rd_sec        = SEC_MITM;
@@ -842,12 +850,7 @@ static void battery_level_meas_timeout_handler(void *p_context) {
     // Here we fetch the conversion result from the ADC, convert the value into
     // percentage and send it to peer.
     ret_code_t err_code;
-    nrf_saadc_value_t adc_result;
-    err_code = nrfx_saadc_sample_convert(ADC_CHANNEL, &adc_result);
-    APP_ERROR_CHECK(err_code);
-
-    batt_lvl_in_milli_volts = ADC_RESULT_IN_MILLI_VOLTS(adc_result) + 100;
-    percentage_batt_lvl = BATVOL2PERCENT(batt_lvl_in_milli_volts);
+    battery_level_measure();
 
     // if battery service is notification enable, we can send msg to device.
     err_code = rf_only_boot ? NRF_SUCCESS :
@@ -898,6 +901,8 @@ void ble_slave_init(void) {
     ble_stack_init();                   // BLE protocol stack initialization
     gap_params_init();                  // GAP parameter initialization
     gatt_init();                        // Gatt protocol initialization
+    // Populate device info and BAS before a peer can connect, not at the first 5s tick.
+    battery_level_measure();
     services_init();                    // Initialization of service characteristics
     advertising_init();                 // Broadcast parameter initialization
     conn_params_init();                 // Connection parameter initialization

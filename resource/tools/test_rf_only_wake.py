@@ -36,7 +36,7 @@ unsigned ble_bas_battery_level_update(int *service,unsigned percent,unsigned con
  updated++;return 0;
 }
 void sleep_timer_start(unsigned delay){assert(delay==SLEEP_NO_BATTERY_SHUTDOWN);sleeps++;}
-''' + function + r'''
+''' + extract_function(source, 'battery_level_measure') + '\n' + function + r'''
 int main(void) {
  services=true;battery_level_meas_timeout_handler(NULL);assert(measured==1 && updated==1 && !sleeps);
  rf_only_boot=true;services=false;battery_level_meas_timeout_handler(NULL);
@@ -177,33 +177,59 @@ int main(void) {
     def test_rf_boot_skips_ble_services_and_full_boot_initializes_them(self):
         source = (ROOT / 'firmware/application/src/ble_main.c').read_text()
         functions = source[source.index('void ble_slave_init(void)'):source.index('void register_lf_adc_callback')]
+        measurement = source[source.index('__INLINE uint32_t map('):source.index('/**@brief Function for initializing services')]
         run_c(r'''
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#define __INLINE
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define ADC_CHANNEL 0
+#define ADC_RESULT_IN_MILLI_VOLTS(x) (x)
 #define POWER_RESETREAS_NFC_Msk (1u<<19)
+#define PROJECT_CHAMELEON_ULTRA
 #define APP_ERROR_CHECK(x) assert((x)==0)
+typedef unsigned ret_code_t;
+typedef int nrf_saadc_value_t;
 static struct {uint32_t RESETREAS;} power;
 #define NRF_POWER (&power)
 static bool rf_only_boot,safe;
-static unsigned security,crypto,steps,sd_only;
+static unsigned security,crypto,steps,sd_only,measured;
+static uint16_t batt_lvl_in_milli_volts;
+static uint8_t percentage_batt_lvl;
+static int sample;
+unsigned nrfx_saadc_sample_convert(unsigned channel,int *value){
+ assert(channel==ADC_CHANNEL);*value=sample;measured++;return 0;
+}
 bool tag_emulation_rf_only_safe(void){return safe;}
 uint32_t nrf_crypto_init(void){crypto++;return 0;}
 uint32_t nrf_sdh_enable_request(void){assert(rf_only_boot);sd_only++;steps++;return 0;}
 #define INIT(name) void name(void){steps++;}
 INIT(adc_configure) INIT(create_battery_timer) INIT(ble_stack_init) INIT(gap_params_init)
-INIT(gatt_init) INIT(services_init) INIT(advertising_init) INIT(conn_params_init)
+INIT(gatt_init) INIT(advertising_init) INIT(conn_params_init)
+''' + measurement + r'''
+void services_init(void){
+ /* A peer may read device info immediately, before the first timer tick. */
+ assert(measured==1 && batt_lvl_in_milli_volts==sample+100);
+ assert(percentage_batt_lvl==BATVOL2PERCENT(batt_lvl_in_milli_volts));
+ steps++;
+}
 void peer_manager_init(void){security++;}
 ''' + functions + r'''
 int main(void) {
  uint32_t reasons[]={0,4,1u<<16,1u<<19,(1u<<19)|4,1u<<20};
- for(unsigned i=0;i<6;i++) for(unsigned eligible=0;eligible<2;eligible++) {
+ int samples[]={3912,3500,4100};
+ unsigned percentages[]={76,0,100};
+ for(unsigned v=0;v<3;v++) for(unsigned i=0;i<6;i++) for(unsigned eligible=0;eligible<2;eligible++) {
   power.RESETREAS=reasons[i];safe=eligible;
-  rf_only_boot=false;security=crypto=steps=sd_only=0;
+  sample=samples[v];batt_lvl_in_milli_volts=percentage_batt_lvl=0;
+  rf_only_boot=false;security=crypto=steps=sd_only=measured=0;
   bool fast=safe && reasons[i]==(1u<<19);
   ble_slave_init();assert(steps==(fast?3u:8u) && ble_slave_rf_only()==fast);
   assert(sd_only==(fast?1u:0u));
   assert(crypto==0 && security==(fast?0u:1u));
+  assert(measured==(fast?0u:1u));
+  assert(percentage_batt_lvl==(fast?0u:percentages[v]));
  }
 }
 ''')
