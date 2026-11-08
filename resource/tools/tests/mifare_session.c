@@ -86,6 +86,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {DATA_CMD_GET_DEVICE_CAPABILITIES, NULL, type2_stub, NULL},
     {DATA_CMD_ENTER_BOOTLOADER, NULL, type2_stub, NULL},
     {2028, before_hf_reader_run, type2_stub, after_hf_reader_run},
+    {2015, before_hf_reader_run, type2_stub, after_hf_reader_run},
+    {2042, NULL, type2_stub, NULL},
     {2027, before_hf_reader_run, type2_stub, after_hf_reader_run},
     {2008, before_hf_reader_run, type2_stub, after_hf_reader_run},
     {2029, before_hf_reader_run, darkside_stub, after_hf_reader_run},
@@ -155,7 +157,7 @@ int main(void) {
     control(0);assert(!active && field_off==previous_off+1);
     on_data_frame_received(2028,0,0,NULL);
     assert(!active && resets==previous_resets+2 && field_off==previous_off+2);
-    // Opt-in HTTP key checks reuse RF preparation; ordinary checks still close.
+    // Opt-in key checks reuse RF preparation; ordinary checks still close.
     previous_resets=resets; previous_off=field_off;
     assert(nfca_prepare(2015,0,NULL)==STATUS_SUCCESS);
     nfca_finish(2015);
@@ -173,6 +175,15 @@ int main(void) {
     assert(nfca_prepare(2015,0,NULL)==STATUS_SUCCESS);
     nfca_finish(2015);
     assert(!active && resets==previous_resets+3);
+    // Serial dispatch must preserve the opt-in lease for key checks and batches.
+    control(1); previous_resets=resets; previous_off=field_off;
+    for (unsigned check=0;check<4;check++) {
+        on_data_frame_received(2015,0,0,NULL);
+        assert(active && prepared && resets==previous_resets+1 && field_off==previous_off);
+    }
+    on_data_frame_received(2042,0,0,NULL);
+    assert(active && prepared && resets==previous_resets+1 && field_off==previous_off);
+    control(0); assert(!active && field_off==previous_off+1);
     control(1); capture();
     web_owned = true;
     previous_off = field_off;

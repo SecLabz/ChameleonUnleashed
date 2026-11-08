@@ -34,7 +34,7 @@ pub use hf::{
     HfReader, HfSnapshot, HfTag, TearoffDiagnostics, TearoffLog, TearoffLogKind, TearoffOutcome,
     TearoffProgress, TearoffReport, TearoffResult, TearoffTiming, UnknownTearoffOutcome,
 };
-pub use nfca::{Card, Reader, TagCredential};
+pub use nfca::{Card, ClassicRecovery, Reader, TagCredential};
 pub use sniff::{
     SNIFF_CRC_CHECKED, SNIFF_CRC_VALID, SNIFF_DECODED, SNIFF_PARITY_CHECKED, SNIFF_PARITY_VALID,
     SNIFF_TRUNCATED, SniffBatch, SniffFrame, SniffSummary,

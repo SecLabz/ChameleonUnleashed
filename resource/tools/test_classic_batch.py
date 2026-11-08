@@ -6,10 +6,55 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from native_test import function
 
 ROOT = Path(__file__).resolve().parents[2]
 
 class ClassicBatch(unittest.TestCase):
+    def test_serial_dispatch_uses_the_same_batch_protocol_and_requires_reader_mode(self):
+        source = (ROOT / 'firmware/application/src/app_cmd.c').read_text()
+        processor = function(source, 'cmd_processor_classic_batch')
+        self.assertRegex(source, r'\{\s*DATA_CMD_MF1_BATCH,\s*NULL,\s*cmd_processor_classic_batch,\s*NULL\s*\}')
+        fixture = '''
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include "app_status.h"
+#define DEVICE_MODE_READER 1
+typedef struct { uint16_t cmd, status, size; uint8_t bytes[512]; } data_frame_tx_t;
+static int mode, calls;
+static data_frame_tx_t frame;
+static int get_device_mode(void) { return mode; }
+static data_frame_tx_t *data_frame_make(uint16_t cmd, uint16_t status, uint16_t size, const uint8_t *data) {
+    frame.cmd=cmd; frame.status=status; frame.size=size;
+    if(size) memcpy(frame.bytes,data,size);
+    return &frame;
+}
+static uint16_t classic_batch_request(const uint8_t *body, size_t size, uint8_t *output, size_t capacity, uint16_t *length) {
+    assert(capacity==512 && size==3 && body[0]==1);
+    calls++; memcpy(output,body,size); *length=size; return 0;
+}
+/* PROCESSOR */
+int main(void) {
+    uint8_t request[]={1,0,1};
+    cmd_processor_classic_batch(2042,0,3,request);
+    assert(frame.status==STATUS_DEVICE_MODE_ERROR && !calls && !frame.size);
+    mode=1;
+    cmd_processor_classic_batch(2042,0,3,request);
+    assert(frame.cmd==2042 && !frame.status && frame.size==3 && calls==1);
+    assert(!memcmp(frame.bytes,request,3));
+}
+'''.replace('/* PROCESSOR */', processor)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / 'serial.c').write_text(fixture)
+            binary = directory / 'serial'
+            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                '-fsanitize=address,undefined', '-I', str(ROOT / 'firmware/application/src'),
+                str(directory / 'serial.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_cooperative_jobs_backpressure_cancel_and_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

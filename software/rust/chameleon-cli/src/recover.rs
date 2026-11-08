@@ -1,11 +1,8 @@
 use crate::{progress::Progress, report::Report, ui};
-use chameleon_client::{Client, Reader, Result};
+use chameleon_client::{ClassicRecovery, Client, Reader, Result};
 use clap::Args;
 use nfc_native::{
-    RecoveryReader, Solvers,
-    autopwn::*,
-    dictionary,
-    formats::image::classic::{blocks, first_block, key_b_readable, sector_count, trailer},
+    RecoveryReader, Solvers, autopwn::*, dictionary, formats::image::classic::sector_count,
 };
 use std::{
     io::{Read, Write},
@@ -83,8 +80,7 @@ pub fn run(options: Options, port: Option<&str>, cancelled: Arc<AtomicBool>) -> 
                     .into(),
             );
         }
-        let block_count = model.classic().unwrap().1;
-        let sectors = sector_count(block_count);
+        let sectors = sector_count(model.classic().unwrap().1);
         if options.source_sector >= sectors {
             return Err("Source sector outside card geometry".into());
         }
@@ -132,11 +128,11 @@ pub fn run(options: Options, port: Option<&str>, cancelled: Arc<AtomicBool>) -> 
         }
         let mut solvers = Solvers::new(options.verbose);
         solvers.configure_dictionary(&plan.nonce_keys);
-        let mut memory = vec![None; block_count];
+        let mut recovery = ClassicRecovery::new(reader)?;
         let mut warnings = Vec::new();
         let operation = (|| -> Result<()> {
             if let Some(key) = anchor {
-                if reader
+                if recovery
                     .verify(options.source_sector, options.source_key_b, &[key])?
                     .is_none()
                 {
@@ -148,26 +144,11 @@ pub fn run(options: Options, port: Option<&str>, cancelled: Arc<AtomicBool>) -> 
                 let (done, total) = engine.count_keys();
                 progress.counts(done, total);
                 progress.action(&action);
-                let result = nfc_native::execute(
-                    reader,
+                let result = recovery.execute(
                     &mut solvers,
                     &action,
                     &engine,
                     |sector, key_b, done, total| progress.dictionary(sector, key_b, done, total),
-                    |reader, sector, key| {
-                        let source = RecoverySource {
-                            sector,
-                            is_key_b: false,
-                            key,
-                        };
-                        let index = usize::from(trailer(sector));
-                        let Some(block) = read_block(reader, &source, index as u8)? else {
-                            return Ok(None);
-                        };
-                        let key = key_b_readable(&block).then(|| block[10..16].try_into().unwrap());
-                        memory[index] = Some(block);
-                        Ok(key)
-                    },
                 )?;
                 engine.submit_result(result)?;
                 let (done, total) = engine.count_keys();
@@ -175,12 +156,9 @@ pub fn run(options: Options, port: Option<&str>, cancelled: Arc<AtomicBool>) -> 
                 events(&mut engine, &options, &mut warnings);
             }
             progress.phase("Reading card memory");
-            read_memory(
-                reader,
-                &engine.build_summary(false).mapping,
-                &mut memory,
-            )
+            recovery.read_memory(&engine.build_summary(false).mapping)
         })();
+        let memory = recovery.into_memory();
         events(&mut engine, &options, &mut warnings);
         progress.finish();
         let cleanup = reader.finish();
@@ -258,107 +236,5 @@ fn events(engine: &mut AutoPwnSession, options: &Options, warnings: &mut Vec<Str
             }
             _ => (),
         }
-    }
-}
-
-fn read_block(
-    reader: &mut Reader<'_>,
-    source: &RecoverySource,
-    block: u8,
-) -> Result<Option<Vec<u8>>> {
-    match reader.block(source, block) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if read_unavailable(&*error) => Ok(None),
-        Err(error) => Err(format!(
-            "Reading block {block} (sector {}, Key {}): {error}",
-            source.sector,
-            if source.is_key_b { 'B' } else { 'A' },
-        )
-        .into()),
-    }
-}
-
-fn read_unavailable(error: &(dyn std::error::Error + 'static)) -> bool {
-    error
-        .downcast_ref::<chameleon_client::DeviceError>()
-        .is_some_and(|error| matches!(error.0, 2 | 6))
-}
-
-fn sector_unsupported(error: &(dyn std::error::Error + 'static)) -> bool {
-    error
-        .downcast_ref::<chameleon_client::DeviceError>()
-        .is_some_and(|error| matches!(error.0, 0x60 | 0x69))
-}
-
-fn read_memory(
-    reader: &mut Reader<'_>,
-    mapping: &[SectorKeys],
-    memory: &mut [Option<Vec<u8>>],
-) -> Result<()> {
-    for (sector, keys) in mapping.iter().enumerate() {
-        for (key_b, key) in [(false, keys.key_a), (true, keys.key_b)] {
-            if key_b && keys.origin_b == Some(KeyOrigin::Trailer) {
-                continue;
-            }
-            let Some(key) = key else {
-                continue;
-            };
-            let source = RecoverySource {
-                sector,
-                is_key_b: key_b,
-                key,
-            };
-            let first = usize::from(first_block(sector));
-            let count = blocks(sector);
-            if memory[first..first + count].iter().all(Option::is_some) {
-                break;
-            }
-            match reader.sector(&source) {
-                Ok(result) => {
-                    for (slot, block) in memory[first..first + count].iter_mut().zip(result) {
-                        if let Some(block) = block {
-                            *slot = Some(block.to_vec());
-                        }
-                    }
-                }
-                Err(error) if sector_unsupported(&*error) => {}
-                Err(error) if read_unavailable(&*error) => continue,
-                Err(error) => return Err(format!("Reading sector {sector}: {error}").into()),
-            }
-            for (index, slot) in memory
-                .iter_mut()
-                .enumerate()
-                .skip(usize::from(first_block(sector)))
-                .take(blocks(sector))
-            {
-                if slot.is_none() {
-                    *slot = read_block(reader, &source, index as u8)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn denied_read_leaves_the_block_for_the_other_sector_key() {
-        assert!(read_unavailable(&chameleon_client::DeviceError(2)));
-        assert!(read_unavailable(&chameleon_client::DeviceError(6)));
-        assert!(!read_unavailable(&chameleon_client::DeviceError(3)));
-    }
-
-    #[test]
-    fn legacy_sector_rejections_fall_back_without_hiding_transport_errors() {
-        assert!(sector_unsupported(&chameleon_client::DeviceError(0x60)));
-        assert!(sector_unsupported(&chameleon_client::DeviceError(0x69)));
-        assert!(!sector_unsupported(&chameleon_client::DeviceError(2)));
-        assert!(!sector_unsupported(&chameleon_client::RequestCancelled));
-        assert!(!sector_unsupported(&std::io::Error::from(
-            std::io::ErrorKind::TimedOut
-        )));
     }
 }

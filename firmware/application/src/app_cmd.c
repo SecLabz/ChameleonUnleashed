@@ -29,6 +29,7 @@
 #include "desfire_reader.h"
 #include "nfc_desfire.h"
 #include "nfca_commands.h"
+#include "classic_batch.h"
 #include "hf_reader.h"
 #include "hf_radio.h"
 #include "parity.h"
@@ -295,6 +296,16 @@ static data_frame_tx_t *cmd_processor_nfca(uint16_t cmd, uint16_t status,
     uint8_t output[NFCA_COMMAND_OUTPUT_BYTES];
     uint16_t output_length;
     status = nfca_command(cmd, length, data, output, &output_length);
+    return data_frame_make(cmd, status, output_length, output);
+}
+
+static data_frame_tx_t *cmd_processor_classic_batch(uint16_t cmd, uint16_t status,
+    uint16_t length, uint8_t *data) {
+    if (get_device_mode() != DEVICE_MODE_READER)
+        return data_frame_make(cmd, STATUS_DEVICE_MODE_ERROR, 0, NULL);
+    uint8_t output[512];
+    uint16_t output_length;
+    status = classic_batch_request(data, length, output, sizeof(output), &output_length);
     return data_frame_make(cmd, status, output_length, output);
 }
 
@@ -3334,6 +3345,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_DESFIRE_SET_IMAGE,           NULL,                        cmd_processor_desfire_image,                 NULL                   },
     {    DATA_CMD_MF1_DARKSIDE_STEP,            before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF1_READ_SECTOR,              before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_BATCH,                    NULL,                        cmd_processor_classic_batch,                 NULL                   },
     {    DATA_CMD_MF1_WRITE_ONE_BLOCK,          before_hf_reader_run,        cmd_processor_mf1_write_one_block,           after_hf_reader_run    },
     {    DATA_CMD_NFCA_WRITE_USER_UNIT,          before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_TYPE2_AUTH_READ,               before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
@@ -3552,6 +3564,7 @@ void on_data_frame_received(uint16_t cmd, uint16_t status, uint16_t length, uint
     if (cmd != DATA_CMD_MF1_COLLECT_OBSERVATIONS && cmd != DATA_CMD_TYPE2_READ &&
         cmd != DATA_CMD_DESFIRE_READER &&
         cmd != DATA_CMD_MF1_READ_SECTOR &&
+        cmd != DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK && cmd != DATA_CMD_MF1_BATCH &&
         cmd != DATA_CMD_MF1_DARKSIDE_STEP && cmd != DATA_CMD_MF1_CAPTURE_SESSION
         && !hf_reader_supports(cmd) && (!web_owned || cmd == DATA_CMD_ENTER_BOOTLOADER)) {
         nfca_session_close();

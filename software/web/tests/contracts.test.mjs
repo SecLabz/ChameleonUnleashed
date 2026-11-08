@@ -10,6 +10,7 @@ import { runAutoPwn } from '../../../.cache/web/assets/modules/recovery/autopwn.
 import { createEngine } from '../../../.cache/web/assets/modules/runtime/nfc-wasm/engine.mjs';
 import { createClassicKeyCache } from '../src/recovery/classic-key-cache.mjs';
 import { classicFixture } from './hardware/classic-fixture.mjs';
+import { createKeyReuseFilter } from '../src/recovery/key-reuse.mjs';
 
 const wasm = await readFile(
   new URL('../../../.cache/web/wasm/wasm32-unknown-unknown/release/nfc_wasm.wasm', import.meta.url)
@@ -70,8 +71,12 @@ class Card {
     return [1];
   }
 
-  async findKey(_sector, _isKeyB, keys, _geometry, onTested = () => {}) {
-    const match = keys.findIndex((key) => key.every((byte) => byte === 255));
+  accepts(_sector, _isKeyB, key) {
+    return key.every((byte) => byte === 255);
+  }
+
+  async findKey(sector, isKeyB, keys, _geometry, onTested = () => {}) {
+    const match = keys.findIndex((key) => this.accepts(sector, isKeyB, key));
     onTested(match < 0 ? keys : keys.slice(0, match + 1));
 
     return match < 0 ? null : keys[match];
@@ -98,7 +103,7 @@ class Card {
 
   async readSector(sector, key, isKeyB, geometry) {
     this.sectorReads++;
-    if (!key.every((byte) => byte === 255)) {
+    if (!this.accepts(sector, isKeyB, key)) {
       throw Object.assign(new Error('Authentication rejected'), { status: 6 });
     }
     const { first, count } = geometry.sectors[sector];
@@ -115,6 +120,44 @@ class Card {
     }
 
     return blocks;
+  }
+
+  async classicBatch(kind, entries) {
+    const sectors = Array.from({ length: 40 }, (_, sector) => ({
+      first: sector < 32 ? sector * 4 : 128 + (sector - 32) * 16,
+      count: sector < 32 ? 4 : 16
+    }));
+    const geometry = { sectors };
+    const replies = [];
+    for (const [address, type, ...key] of entries) {
+      const sector = kind ? address : sectors.findIndex((entry) => entry.first === address);
+      try {
+        if (!kind) {
+          const hit = this.accepts(sector, type === 0x61, key) ? key : null;
+          replies.push({
+            status: hit ? 0 : 6,
+            data: Uint8Array.from([Number(!!hit), ...(hit || Array(6).fill(0))])
+          });
+        } else {
+          const blocks = await this.readSector(sector, key, type === 0x61, geometry);
+          const mask = blocks.reduce((mask, block, index) => mask | (block ? 1 << index : 0), 0);
+          replies.push({
+            status: 0,
+            data: Uint8Array.from([
+              mask >> 8,
+              mask & 255,
+              ...blocks.flatMap((block) => block || Array(16).fill(0))
+            ])
+          });
+        }
+      } catch (error) {
+        if (error.status !== 6) {
+          throw error;
+        }
+        replies.push({ status: 6, data: new Uint8Array() });
+      }
+    }
+    return replies;
   }
 
   async end() {
@@ -321,7 +364,7 @@ test('key verification reuses RF preparation and reopens after idle or another c
 });
 
 for (const unsupported of [0x67, 0x69, 404]) {
-  test(`key verification supports firmware without RF sessions (${unsupported})`, async () => {
+  test(`key verification rejects firmware without RF sessions (${unsupported})`, async () => {
     const commands = [];
     globalThis.fetch = async (path) => {
       const command = Number(path.match(/command\/(\d+)/)?.[1]);
@@ -339,11 +382,8 @@ for (const unsupported of [0x67, 0x69, 404]) {
     device.session = 1;
 
     try {
-      for (let i = 0; i < 2; i++) {
-        assert.equal(await device.findKey(0, false, [[0, 0, 0, 0, 0, 0]], { sectors: [{ first: 0 }] }), null);
-      }
-
-      assert.deepEqual(commands, [2026, 2015, 2015]);
+      await assert.rejects(device.findKey(0, false, [[0, 0, 0, 0, 0, 0]], { sectors: [{ first: 0 }] }));
+      assert.deepEqual(commands, [2026]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -429,7 +469,6 @@ for (const [sak, sectors, blocks, missing, rejectedRead = false] of [
       singleReads++;
       return readSector(...args);
     };
-    device.classicBatchesSupported = true;
     let batches = 0;
     let rejection = false;
     const checked = new Set([0]);
@@ -506,7 +545,6 @@ test('rejected reuse keeps lightweight checks and does not prefetch sector reads
   globalThis.fetch = async () => new Response(wasm);
   const controller = new AbortController();
   const device = new Card();
-  device.classicBatchesSupported = true;
   let checks = 0;
   device.classicBatch = async (kind, entries) => {
     assert.equal(kind, 0);
@@ -534,7 +572,6 @@ test('Stop after a checked read batch retains its data without dispatching the n
   const controller = new AbortController();
   const device = new Card();
   const geometry = { sectors: Array.from({ length: 16 }, (_, i) => ({ first: i * 4, count: 4 })) };
-  device.classicBatchesSupported = true;
   let readBatches = 0;
   device.classicBatch = async (kind, entries) => {
     assert.equal(controller.signal.aborted, false);
@@ -824,6 +861,126 @@ function keyCacheFixture() {
   return { keyCache: createClassicKeyCache(() => storage), storage };
 }
 
+test('reuse parity filtering uses the shared WASM and retains matching candidates for authentication', async () => {
+  const engine = await createEngine(wasm);
+  const key = [0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f];
+  const wrong = Array(6).fill(255);
+  let captures = 0;
+  const filter = createKeyReuseFilter({
+    uid: () => [0x53, 0xbf, 0x9c, 0x43],
+    call: async (request) => engine(request),
+    collect: async () => {
+      captures++;
+      return Array(2).fill({ nt1: 0x85430819, ciphertext: 0xaf9a42f6, parity: [1, 1, 0, 0] });
+    }
+  });
+  const summary = {
+    prng: 'Weak',
+    mapping: [
+      { key_a: wrong, key_b: key },
+      { key_a: Array(6).fill(0), key_b: null }
+    ]
+  };
+  const target = { sector: 1, is_key_b: true };
+  assert.equal(await filter.test(summary, target, wrong), false);
+  assert.equal(await filter.test(summary, target, key), true);
+  assert.equal(captures, 1);
+});
+
+for (const [prng, badPrefix] of [
+  ['Weak', false],
+  ['Hard', false],
+  ['Weak', true],
+  ['Hard', true]
+]) {
+  test(`AutoPwn screens reuse and preserves physical fallback (${prng}, badPrefix=${badPrefix})`, async () => {
+    const device = new Card();
+    const keyA = Array(6).fill(255);
+    const keysB = Array.from({ length: 16 }, (_, sector) => Array(6).fill(sector + 1));
+    // Sector 15 reuses sector 2's key, exercising a positive nonce match.
+    keysB[15] = keysB[2];
+    const same = (a, b) => a.every((byte, i) => byte === b[i]);
+    const expected = (sector, isKeyB) => (isKeyB ? keysB[sector] : keyA);
+    const physical = new Set();
+    device.command = async () => [prng === 'Weak' ? 1 : 2];
+    device.accepts = (sector, isKeyB, key) => {
+      physical.add(`${sector}:${isKeyB}:${key.join(',')}`);
+      return same(key, expected(sector, isKeyB));
+    };
+    const read = device.readBlock.bind(device);
+    device.readBlock = async (block) => {
+      const bytes = await read(block);
+      if (block % 4 === 3) {
+        bytes.splice(6, 10, 0x7f, 7, 0x88, 0x69, ...Array(6).fill(0));
+      }
+      return bytes;
+    };
+    const captures = new Map();
+    device.collectNonces = async (_source, target, count) => {
+      const id = `${target.sector}:${target.is_key_b}`;
+      captures.set(id, (captures.get(id) || 0) + count);
+      return Array.from({ length: count }, () => ({
+        nt1: target.sector,
+        ciphertext: Number(target.is_key_b),
+        parity: [0, 0, 0, 0]
+      }));
+    };
+    let localMisses = 0;
+    const simulatedWorker = () => {
+      const worker = workerFactory();
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = (message) => {
+        const request = message.request;
+        if (request?.op === 'autopwn_submit' && request.result.Sweep?.physically_tested === false) {
+          localMisses++;
+        }
+        if (request?.op !== 'filter_dictionary') {
+          return post(message);
+        }
+        const observation = request.observations[0];
+        const key = expected(observation.nt1, !!observation.ciphertext);
+        const candidates =
+          badPrefix && observation.nt1 === 15 ? [] : request.keys.filter((candidate) => same(candidate, key));
+        queueMicrotask(() =>
+          worker.onmessage({
+            data: { id: message.id, value: { candidates, next_count: 0, exhausted: true } }
+          })
+        );
+      };
+      return worker;
+    };
+    globalThis.fetch = async () => new Response(wasm);
+    try {
+      const result = await runAutoPwn({
+        device,
+        workerFactory: simulatedWorker,
+        keyCache: keyCacheFixture().keyCache,
+        dictionary: keysB
+          .map((key) => key.map((byte) => byte.toString(16).padStart(2, '0')).join(''))
+          .join('\n')
+      });
+      assert(result.complete);
+      assert(localMisses > 20, 'local exclusions are not reported as failed RF authentications');
+      for (let sector = 0; sector < 16; sector++) {
+        assert.deepEqual(result.summary.mapping[sector].key_b, keysB[sector]);
+        assert(
+          physical.has(`${sector}:true:${keysB[sector].join(',')}`),
+          'each recovered key is physically checked'
+        );
+      }
+      assert(
+        [...captures.entries()]
+          .filter(([id]) => id.endsWith(':true') && (!badPrefix || id !== '15:true'))
+          .every(([, count]) => count <= (prng === 'Weak' ? 2 : 3)),
+        'recovery consumes the cached prefix'
+      );
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
 test('remembered keys survive a new read session and avoid searches without reusing memory', async () => {
   const { keyCache, storage } = keyCacheFixture();
   globalThis.fetch = async () => new Response(wasm);
@@ -930,7 +1087,6 @@ for (const batchFailure of [null, 0x67, 0x69, 404, 1]) {
     const before = storage.getItem();
     storage.writes = 0;
     let batches = 0;
-    device.classicBatchesSupported = true;
     device.classicBatch = async (kind, entries) => {
       batches++;
       assert.equal(kind, 1);
@@ -952,13 +1108,13 @@ for (const batchFailure of [null, 0x67, 0x69, 404, 1]) {
     device.findKey = async () => assert.fail('Cached keys need no search');
     globalThis.fetch = async () => new Response(wasm);
     try {
-      if (batchFailure === 1) {
+      if (batchFailure) {
         await assert.rejects(runAutoPwn({ device, workerFactory, keyCache }), /Batch unavailable/);
-        assert.equal(storage.getItem(), before, 'card loss must not invalidate remembered keys');
+        assert.equal(storage.getItem(), before, 'failed commands must not invalidate remembered keys');
       } else {
         const result = await runAutoPwn({ device, workerFactory, keyCache });
         assert(result.complete);
-        assert.equal(batches, batchFailure ? 1 : 3);
+        assert.equal(batches, 3);
         assert.equal(device.reads, 64);
       }
       assert.equal(storage.writes, 0);
@@ -980,7 +1136,6 @@ for (const [size, sak, type] of [
     device.card = card;
     const checked = new Set();
     let blocksRead = 0;
-    device.classicBatchesSupported = true;
     device.findKey = async () => assert.fail('Every cached key is verified by its read');
     device.command = device.findKey;
     device.classicBatch = async (kind, entries) => {
@@ -1072,10 +1227,10 @@ test('cancelling a cached read exposes only freshly verified keys and preserves 
         }
       }
     });
-    assert.equal(result.summary.resolved_keys, 1);
-    assert.equal(result.memory.filter(Boolean).length, 4);
+    assert.equal(result.summary.resolved_keys, 7);
+    assert.equal(result.memory.filter(Boolean).length, 28);
     assert.equal(result.memory[3][0], 255, 'RF-masked bytes are restored only from the verified key');
-    assert.equal(result.summary.mapping[1].key_a, null);
+    assert.equal(result.summary.mapping[7].key_a, null);
     assert.equal(
       storage.getItem(),
       before,
@@ -1087,7 +1242,7 @@ test('cancelling a cached read exposes only freshly verified keys and preserves 
   }
 });
 
-test('cached B checks without batch support do not read memory twice', async () => {
+test('cached B checks do not read memory twice', async () => {
   const device = new Card();
   const block = device.readBlock.bind(device);
   device.readBlock = async (index) => {

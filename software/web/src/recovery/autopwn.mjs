@@ -8,6 +8,7 @@ import { recoverHardnested } from './hardnested.mjs';
 import { recoverDarkside } from './darkside.mjs';
 import { filterDictionary as filterCandidates } from './dictionary.mjs';
 import { classicKeyCache } from './classic-key-cache.mjs';
+import { createKeyReuseFilter } from './key-reuse.mjs';
 
 const verified = (key) => (key ? { Verified: key } : 'NoVerifiedKey');
 
@@ -112,6 +113,8 @@ export async function runAutoPwn({
     return engine.request(request, { signal });
   };
 
+  const keyReuse = createKeyReuseFilter({ call, collect, uid: () => card.uid });
+
   let nonceKeys = [];
   const testedKeysByTarget = new Map();
   // A response can contain several fresh physical authentication results.
@@ -186,17 +189,22 @@ export async function runAutoPwn({
     if (!sweepReplies.has(replyId(args)) && !untestedKeys(args, [args.key]).length) {
       return { Sweep: { hit: false, physically_tested: true } };
     }
-    if (
-      device.classicBatchesSupported &&
-      typeof device.classicBatch === 'function' &&
-      !sweepReplies.has(replyId(args))
-    ) {
+    let screened = false;
+    if (!sweepReplies.has(replyId(args))) {
+      const matches = await keyReuse.test(snapshot.summary, args, args.key);
+      if (matches === false) {
+        return { Sweep: { hit: false, physically_tested: false } };
+      }
+      screened = matches === true;
+    }
+    if (!screened && !sweepReplies.has(replyId(args))) {
       const targets = [args];
       snapshot.summary.mapping.forEach((keys, sector) => {
         const target = { sector, is_key_b: args.is_key_b };
         if (
           sector !== args.sector &&
           !(args.is_key_b ? keys.key_b : keys.key_a) &&
+          !keyReuse.eligible(snapshot.summary, target) &&
           untestedKeys(target, [args.key]).length &&
           !sweepReplies.has(replyId(target))
         ) {
@@ -209,37 +217,31 @@ export async function runAutoPwn({
         target.is_key_b ? 0x61 : 0x60,
         ...args.key
       ]);
-      try {
-        const replies = await device.classicBatch(Number(reading), entries);
-        if (reading) {
-          rememberReplies(batch, args.key, replies);
-        }
-        replies.forEach((reply, i) => {
-          sweepReplies.set(replyId(batch[i]), reply);
-          if ([0, 6].includes(reply.status)) {
-            const id = targetId(batch[i]);
-            const tested = testedKeysByTarget.get(id) ?? new Set();
-            tested.add(hex(args.key));
-            testedKeysByTarget.set(id, tested);
-            if (reply.status === 0) {
-              rememberAuthentication(batch[i].sector, args.key, args.is_key_b);
-            }
-          }
-        });
-        if (!reading && !args.is_key_b) {
-          const hits = batch.filter((_, i) => replies[i]?.status === 0);
-          await readHits(hits, args.key);
-          if (hits.length && replies.every((reply) => reply.status === 0) && readReuse.get(keyId) !== false) {
-            readReuse.set(keyId, true);
+      const replies = await device.classicBatch(Number(reading), entries);
+      if (reading) {
+        rememberReplies(batch, args.key, replies);
+      }
+      replies.forEach((reply, i) => {
+        sweepReplies.set(replyId(batch[i]), reply);
+        if ([0, 6].includes(reply.status)) {
+          const id = targetId(batch[i]);
+          const tested = testedKeysByTarget.get(id) ?? new Set();
+          tested.add(hex(args.key));
+          testedKeysByTarget.set(id, tested);
+          if (reply.status === 0) {
+            rememberAuthentication(batch[i].sector, args.key, args.is_key_b);
           }
         }
-      } catch (error) {
-        if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
-          throw error;
+      });
+      if (!reading && !args.is_key_b) {
+        const hits = batch.filter((_, i) => replies[i]?.status === 0);
+        await readHits(hits, args.key);
+        if (hits.length && replies.every((reply) => reply.status === 0) && readReuse.get(keyId) !== false) {
+          readReuse.set(keyId, true);
         }
-        device.classicBatchesSupported = false;
       }
     }
+
     const reply = sweepReplies.get(replyId(args));
     if (reply) {
       sweepReplies.delete(replyId(args));
@@ -327,37 +329,21 @@ export async function runAutoPwn({
     };
     while (targets.length) {
       check();
-      if (device.classicBatchesSupported && typeof device.classicBatch === 'function') {
-        const reading = needsMemory(targets[0]);
-        const pending = targets.filter(
-          (target) => target.is_key_b === targets[0].is_key_b && needsMemory(target) === reading
-        );
-        const batch = reading ? readBatchTargets(pending) : pending.slice(0, 8);
-        let replies;
-        try {
-          replies = await device.classicBatch(
-            Number(reading),
-            batch.map((target) => [
-              reading ? target.sector : geometry.sectors[target.sector].first,
-              target.is_key_b ? 0x61 : 0x60,
-              ...target.key
-            ])
-          );
-        } catch (error) {
-          if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
-            throw error;
-          }
-          device.classicBatchesSupported = false;
-          continue;
-        }
-        replies.forEach((reply, index) => accept(batch[index], reply, reading));
-        targets = targets.filter((target) => !batch.includes(target));
-      } else {
-        const target = targets[0];
-        const key = await verify(target, [target.key], () => {}, needsMemory(target));
-        accept(target, { status: key ? 0 : 6 }, false);
-        targets = targets.slice(1);
-      }
+      const reading = needsMemory(targets[0]);
+      const pending = targets.filter(
+        (target) => target.is_key_b === targets[0].is_key_b && needsMemory(target) === reading
+      );
+      const batch = reading ? readBatchTargets(pending) : pending.slice(0, 8);
+      const replies = await device.classicBatch(
+        Number(reading),
+        batch.map((target) => [
+          reading ? target.sector : geometry.sectors[target.sector].first,
+          target.is_key_b ? 0x61 : 0x60,
+          ...target.key
+        ])
+      );
+      replies.forEach((reply, index) => accept(batch[index], reply, reading));
+      targets = targets.filter((target) => !batch.includes(target));
       update({ phase: 'Reading memory…' });
     }
     // Preserve the normal quick dictionary probe before a cached anchor can
@@ -388,6 +374,7 @@ export async function runAutoPwn({
       call,
       uid: card.uid,
       keys: untestedKeys(target, nonceKeys),
+      observations: keyReuse.take(target),
       collect: (count) => collect(source, target, count)
     });
     const tested = [];
@@ -408,12 +395,18 @@ export async function runAutoPwn({
     let job;
 
     try {
-      const observations = [];
-      let plan = await call({ op: 'recovery_plan', static_nonce: staticNonce, prefix_count: 0 });
+      const observations = staticNonce ? [] : keyReuse.take(target);
+      let plan = await call({
+        op: 'recovery_plan',
+        static_nonce: staticNonce,
+        prefix_count: observations.length
+      });
 
       if (untestedKeys(target, nonceKeys).length) {
-        for (const step of plan.prefix) {
-          observations.push(...(await collect(source, target, step.count, step.chained)));
+        if (!observations.length) {
+          for (const step of plan.prefix) {
+            observations.push(...(await collect(source, target, step.count, step.chained)));
+          }
         }
 
         const result = await call({
@@ -522,6 +515,7 @@ export async function runAutoPwn({
         }
 
         update({ phase: error.message });
+        keyReuse.disable(target);
         return { Hardnested: 'ResourceLimited' };
       }
     }
@@ -531,20 +525,22 @@ export async function runAutoPwn({
       return hardnestedEngine.request(request, { signal });
     };
 
-    return {
-      Hardnested: await recoverHardnested({
-        call: hardnestedCall,
-        device,
-        source,
-        target,
-        geometry,
-        uid: card.uid,
-        budget,
-        verify,
-        check,
-        update
-      })
-    };
+    const outcome = await recoverHardnested({
+      call: hardnestedCall,
+      device,
+      source,
+      target,
+      geometry,
+      uid: card.uid,
+      budget,
+      verify,
+      check,
+      update
+    });
+    if (!outcome?.Verified) {
+      keyReuse.disable(target);
+    }
+    return { Hardnested: outcome };
   }
 
   async function execute(action) {
