@@ -11,6 +11,11 @@ and battery. After a disconnection it becomes **Reconnect**.
 Normal device controls require Web API contract 1. The hosted app works directly over BLE and does not require
 the USB network connection. Safari and Firefox do not provide native Web Bluetooth.
 
+In **Device → Buttons**, assign **Open Bluetooth web app** to a short or long press
+on A or B. The Ultra then offers the web app URL as a read-only NFC tag, with all
+eight LEDs steady blue. Press either button to exit (its normal action is consumed),
+connect over Bluetooth, or wait 30 seconds. The previous slot resumes automatically.
+
 NFC-V and NFC-B emulation pause while Bluetooth is connected; Slots and Device
 mark them as paused. Transfer the slot image over BLE, then choose
 **Device → Disconnect Bluetooth** to emulate. This restriction applies to

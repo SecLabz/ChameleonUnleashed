@@ -232,6 +232,7 @@ bool is_slot_enabled(uint8_t,tag_sense_type_t);
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)
             (directory/'app_timer.h').write_text('#include <stdint.h>\n#define APP_TIMER_TICKS(ms) ((ms)*16384u/1000u)\nuint32_t app_timer_cnt_get(void);\nuint32_t app_timer_cnt_diff_compute(uint32_t,uint32_t);\n')
+            (directory/'tag_emulation.h').write_text('#include <stdbool.h>\nbool tag_emulation_web_link_stop(void);\n')
             (directory/'rfid_main.h').write_text('extern bool g_is_tag_emulating;\ntypedef int device_mode_t;\n#define DEVICE_MODE_READER 1\nint get_device_mode(void);\nvoid reader_mode_enter(void);\nvoid tag_mode_enter(void);\n')
             (directory/'ble_main.h').write_text('#include <stdbool.h>\n#include <stdint.h>\nbool ble_slave_rf_only(void);\nuint16_t ble_nus_payload_limit(void);\nbool ble_stream_response(uint8_t *,uint16_t);\n#define BLE_LINK_INFO_BYTES 24u\nvoid ble_link_profile(uint8_t,uint8_t,uint8_t *);\n')
             origin = resource_origin('https://' + 'a' * (RESOURCE_ORIGIN_MAX_BYTES - 20) + '.cdn.example/')

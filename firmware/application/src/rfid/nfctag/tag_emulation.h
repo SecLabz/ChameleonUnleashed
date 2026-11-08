@@ -80,6 +80,12 @@ bool tag_emulation_rf_only_safe(void);
 // Some of the data stored in RAM can be saved to Flash through this interface
 void tag_emulation_save(void);
 
+// Temporary, read-only NDEF URL; never replaces a stored slot image.
+void tag_emulation_web_link_start(void);
+bool tag_emulation_web_link_stop(void);
+bool tag_emulation_web_link_active(void);
+void tag_emulation_web_link_poll(void);
+
 // Hold sensing across each bounded HTTP slot transaction, preserving requested state.
 void tag_emulation_sense_hold(bool hold);
 uint32_t tag_emulation_place_revision(uint8_t slot, tag_sense_type_t sense);

@@ -18,6 +18,7 @@ static void mf1_darkside_reset(void) {}
 static void desfire_reader_invalidate(void) {}
 static void hf_sniff_stop(void) {
 }
+static bool tag_emulation_web_link_stop(void) { return false; }
 #define DEVICE_MODE_READER 1
 #define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
 #define NRF_LOG_INFO(...) ((void)0)

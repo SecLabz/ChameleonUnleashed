@@ -26,12 +26,14 @@ static unsigned writes, fail_at, loads;
 static bool senses[3], shadow_hf;
 static unsigned hf_sense_changes;
 static bool slot_sense_held, slot_sense_requested[3];
+static bool web_link_active;
 static unsigned critical_depth;
 #define CRITICAL_REGION_ENTER() do { critical_depth++; } while (0)
 #define CRITICAL_REGION_EXIT() do { assert(critical_depth); critical_depth--; } while (0)
 #define APP_ERROR_CHECK(error) assert((error)==0)
 #define NRF_ERROR_INVALID_PARAM 1
 #define TAG_FIELD_LED_OFF() ((void)0)
+static bool web_link_end(bool resume) { (void)resume; return false; }
 bool g_is_tag_emulating;
 static int mode = DEVICE_MODE_TAG;
 static unsigned index_of(uint16_t id, uint16_t key) {
@@ -266,6 +268,14 @@ int main(void) {
     uint32_t initial_revision=tag_emulation_place_revision(0,TAG_SENSE_HF);
     st25[8]^=0x5a;
     assert(st25tb_load(st25));
+    // Metadata must use the frozen image while the shortcut owns RF storage.
+    web_link_active = true;
+    slot_sense_requested[TAG_SENSE_HF] = true;
+    unsigned before_shortcut_poll = hf_sense_changes;
+    assert(tag_emulation_place_revision(0, TAG_SENSE_HF) == initial_revision);
+    assert(hf_sense_changes == before_shortcut_poll && slot_sense_requested[TAG_SENSE_HF]);
+    web_link_active = false;
+    slot_sense_requested[TAG_SENSE_HF] = false;
     uint32_t changed_revision=tag_emulation_place_revision(0,TAG_SENSE_HF);
     assert(initial_revision!=changed_revision);
     assert(!slot_sense_requested[TAG_SENSE_HF]);

@@ -68,6 +68,7 @@ APP_TIMER_DEF(m_button_check_timer); // Timer for button debounce
 static uint32_t m_last_btn_press = 0;
 
 static volatile bool m_is_btn_long_press = false;
+static volatile bool m_is_btn_web_link_exit;
 
 static volatile bool m_is_b_btn_press = false;
 static volatile bool m_is_a_btn_press = false;
@@ -239,16 +240,22 @@ static void timer_button_event_handle(void *arg) {
     if (nrf_gpio_pin_read(pin) == 1) {
         if (pin == BUTTON_1) {
             // RF-only boots always allow a physical handoff to full controls.
-            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || tag_emulation_web_link_active() ||
+                    settings_get_button_press_config('b') != SettingsButtonDisable ||
+                    settings_get_long_button_press_config('b') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_B_PRESS");
                 m_is_b_btn_press = true;
+                m_is_btn_web_link_exit |= tag_emulation_web_link_active();
                 m_last_btn_press = app_timer_cnt_get();
             }
         }
         if (pin == BUTTON_2) {
-            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || tag_emulation_web_link_active() ||
+                    settings_get_button_press_config('a') != SettingsButtonDisable ||
+                    settings_get_long_button_press_config('a') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_A_PRESS");
                 m_is_a_btn_press = true;
+                m_is_btn_web_link_exit |= tag_emulation_web_link_active();
                 m_last_btn_press = app_timer_cnt_get();
             }
         }
@@ -261,29 +268,24 @@ static void timer_button_event_handle(void *arg) {
         bool is_long_press = ticks > APP_TIMER_TICKS(settings_get_long_press_threshold());
 
         if (pin == BUTTON_1 && m_is_b_btn_press == true) {
-            // RF-only boots always allow a physical handoff to full controls.
-            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
-                m_is_b_btn_release = true;
-                m_is_b_btn_press = false;
-                if (!is_long_press) {
-                    NRF_LOG_INFO("BUTTON_B_RELEASE_SHORT");
-                } else {
-                    NRF_LOG_INFO("BUTTON_B_RELEASE_LONG");
-                }
-                m_is_btn_long_press = is_long_press;
+            m_is_b_btn_release = true;
+            m_is_b_btn_press = false;
+            if (!is_long_press) {
+                NRF_LOG_INFO("BUTTON_B_RELEASE_SHORT");
+            } else {
+                NRF_LOG_INFO("BUTTON_B_RELEASE_LONG");
             }
+            m_is_btn_long_press = is_long_press;
         }
         if (pin == BUTTON_2 && m_is_a_btn_press == true) {
-            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
-                m_is_a_btn_release = true;
-                m_is_a_btn_press = false;
-                if (!is_long_press) {
-                    NRF_LOG_INFO("BUTTON_A_RELEASE_SHORT");
-                } else {
-                    NRF_LOG_INFO("BUTTON_A_RELEASE_LONG");
-                }
-                m_is_btn_long_press = is_long_press;
+            m_is_a_btn_release = true;
+            m_is_a_btn_press = false;
+            if (!is_long_press) {
+                NRF_LOG_INFO("BUTTON_A_RELEASE_SHORT");
+            } else {
+                NRF_LOG_INFO("BUTTON_A_RELEASE_LONG");
             }
+            m_is_btn_long_press = is_long_press;
         }
     }
 }
@@ -864,6 +866,11 @@ static void btn_fn_copy_ic_uid(void) {
 static void run_button_function_by_settings(settings_button_function_t sbf) {
     if (sbf != SettingsButtonShowBattery && sbf != SettingsButtonDisable) web_session_end();
     switch (sbf) {
+        case SettingsButtonDisable:
+            break;
+        case SettingsButtonOpenBle:
+            if (!web_session_active()) tag_emulation_web_link_start();
+            break;
         case SettingsButtonCycleSlot:
             cycle_slot(false);
             break;
@@ -966,6 +973,16 @@ static void button_press_process(void) {
             restart_full_boot();
             return;
         }
+        // A press begun in the shortcut is consumed even if BLE/timeout won
+        // the race before its release. Neither configured action runs.
+        if (tag_emulation_web_link_stop() || m_is_btn_web_link_exit) {
+            m_is_a_btn_press = false;
+            m_is_b_btn_press = false;
+            m_is_a_btn_release = false;
+            m_is_b_btn_release = false;
+            m_is_btn_web_link_exit = false;
+            return;
+        }
         hf_sniff_stop();
         if (m_is_a_btn_release) {
             if (!m_is_btn_long_press) {
@@ -994,6 +1011,7 @@ static void button_press_process(void) {
 
 extern bool g_usb_port_opened;
 static void blink_usb_led_status(void) {
+    if (tag_emulation_web_link_active()) return;
     uint8_t slot = tag_emulation_get_slot();
     uint8_t color = get_color_by_slot(slot);
     uint8_t dir = slot > 3 ? 1 : 0;
@@ -1117,6 +1135,7 @@ int main(void) {
         lesc_event_process();
         // Button event process
         button_press_process();
+        tag_emulation_web_link_poll();
         // Leases must expire on battery too, independently of USB network polling.
         web_session_poll();
 

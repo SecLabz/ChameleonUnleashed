@@ -69,12 +69,17 @@ int main(void) {
     r = web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output));
     assert(r.status == 200 && r.size == 2 && output[1] == STATUS_SUCCESS && animation == 3 && saves == 1);
     unsigned before = mutations;
-    const uint8_t invalid[][3] = {{0, 4}, {1, 6}, {5, 4}, {5, 61}, {6, 0, 199}, {7, 2}, {9, 0}};
+    const uint8_t invalid[][3] = {{0, 4}, {1, 7}, {5, 4}, {5, 61}, {6, 0, 199}, {7, 2}, {9, 0}};
     for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
         assert(web_device_request(API_SETTINGS, 0, invalid[i], invalid[i][0] == 6 ? 3 : 2, output, sizeof(output)).status == 400);
     }
     assert(web_device_request(API_SETTINGS, 0, NULL, 0, output, sizeof(output)).status == 400);
     assert(mutations == before);
+    for (unsigned key = 1; key <= 4; key++) {
+        data[0] = key; data[1] = SettingsButtonOpenBle;
+        assert(web_device_request(API_SETTINGS, 0, data, 2, output, sizeof(output)).status == 200);
+    }
+    assert(short_press[0] == 6 && short_press[1] == 6 && long_press[0] == 6 && long_press[1] == 6);
     data[0] = 6; data[1] = 0xff; data[2] = 0xff;
     assert(web_device_request(API_SETTINGS, 0, data, 3, output, sizeof(output)).status == 200 && long_ms == 65535);
     data[0] = 8; memcpy(data + 1, "012345", 6);

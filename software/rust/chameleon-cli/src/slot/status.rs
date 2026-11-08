@@ -346,6 +346,7 @@ fn button_name(value: Option<u8>) -> String {
             "Clone HF/LF ID",
             "Show battery",
             "Toggle NFC field",
+            "Open Bluetooth web app",
         ],
     )
 }

@@ -78,7 +78,7 @@ static api_response_t set_setting(const uint8_t *body, size_t size,
         settings_set_animation_config(value);
         break;
     case 1: case 2: case 3: case 4:
-        if (size != 2 || value > SettingsButtonNfcFieldGenerator) return response(400, 0);
+        if (size != 2 || value > SettingsButtonOpenBle) return response(400, 0);
         if (key < 3) settings_set_button_press_config(key == 1 ? 'A' : 'B', value);
         else settings_set_long_button_press_config(key == 3 ? 'A' : 'B', value);
         break;

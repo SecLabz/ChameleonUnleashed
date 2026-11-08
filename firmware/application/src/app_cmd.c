@@ -3518,6 +3518,7 @@ static bool rf_only_command_allowed(uint16_t cmd) {
 }
 
 void on_data_frame_received(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    tag_emulation_web_link_stop();
     /* The web service owns RF/session policy. Do not run legacy pre-hooks on
      * its envelope: metadata/keepalives must not close retained RF sessions. */
     if (cmd == DATA_CMD_WEB_API) {

@@ -68,6 +68,16 @@ static unsigned watches;
 static unsigned uninitializations;
 static bool rf_only;
 static bool buttons_disabled;
+static bool long_buttons_disabled;
+static unsigned short_config[2] = {1, 2}, long_config[2] = {3, 4};
+static bool disconnect_while_pressed;
+static bool web_link;
+static bool tag_emulation_web_link_active(void) { return web_link; }
+static bool tag_emulation_web_link_stop(void) {
+    bool active = web_link;
+    web_link = false;
+    return active;
+}
 static unsigned full_restarts;
 
 static bool ble_slave_rf_only(void) {
@@ -171,11 +181,12 @@ static unsigned settings_get_button_press_config(char key) {
     if (buttons_disabled) {
         return SettingsButtonDisable;
     }
-    return key == 'a' ? 1 : 2;
+    return short_config[key == 'b'];
 }
 
 static unsigned settings_get_long_button_press_config(char key) {
-    return key == 'a' ? 3 : 4;
+    if (long_buttons_disabled) return SettingsButtonDisable;
+    return long_config[key == 'b'];
 }
 
 static uint32_t settings_get_long_press_threshold(void) {
@@ -473,14 +484,16 @@ static void service_must_wait(void) {
 }
 
 static void test_click(unsigned pin, uint32_t hold_ms) {
-    now = 100;
+    now += 100;
     unsigned before = dispatches;
+    bool shortcut = web_link;
     pins[pin] = 1;
     service_must_wait(); /* GPIO asserted before its interrupt can run. */
     button_pin_handler(pin, 0);
     now = timer_at;
     timer_button_event_handle(timer_arg);
     service_must_wait(); /* Press debounced and still held. */
+    if (shortcut && disconnect_while_pressed) web_link = false;
     now += hold_ms;
     pins[pin] = 0;
     service_must_wait(); /* Release edge before the GPIOTE interrupt. */
@@ -491,18 +504,25 @@ static void test_click(unsigned pin, uint32_t hold_ms) {
     timer_button_event_handle(timer_arg);
     service_must_wait(); /* Release must reach main-loop dispatch first. */
     button_press_process();
-    assert(!app_buttons_pending() && dispatches == before + 1);
-    unsigned expected = pin == BUTTON_2 ? 1 : 2;
-    if (hold_ms > 500) {
-        expected += 2;
+    assert(!app_buttons_pending() && dispatches == before + !shortcut);
+    if (shortcut) {
+        assert(!web_link && !m_is_btn_web_link_exit);
+    } else {
+        char button = pin == BUTTON_2 ? 'a' : 'b';
+        unsigned expected = hold_ms > 500 ? settings_get_long_button_press_config(button)
+                                         : settings_get_button_press_config(button);
+        assert(dispatched == expected);
     }
-    assert(dispatched == expected);
     unsigned polls_before = radio_polls;
     assert(nfc_st25tb_service());
     assert(radio_polls == polls_before + 1 && !probe_due);
 }
 
 static void test_field_leds(void) {
+    web_link = true;
+    blink_usb_led_status();
+    assert(!led_pwm_running && !led_pwm_stops);
+    web_link = false;
     g_usb_led_marquee_enable = true;
     field_active = false;
     g_is_tag_emulating = false;
@@ -653,6 +673,29 @@ int main(void) {
         test_click(pin, 75);
         test_click(pin, 750);
     }
+    /* The new action is routed on either duration and either physical button. */
+    for (unsigned pin = BUTTON_1; pin <= BUTTON_2; pin++) {
+        short_config[0] = short_config[1] = 6;
+        long_config[0] = long_config[1] = 6;
+        test_click(pin, 75);
+        test_click(pin, 750);
+    }
+    short_config[0] = 1; short_config[1] = 2;
+    long_config[0] = 3; long_config[1] = 4;
+    buttons_disabled = true;
+    for (unsigned pin = BUTTON_1; pin <= BUTTON_2; pin++) test_click(pin, 750);
+    /* Exit works even when both actions are disabled, and is consumed if an
+     * automatic exit happens between the debounced press and release. */
+    long_buttons_disabled = true;
+    for (unsigned raced = 0; raced < 2; raced++) {
+        disconnect_while_pressed = raced;
+        for (unsigned pin = BUTTON_1; pin <= BUTTON_2; pin++) {
+            web_link = true; test_click(pin, 75);
+            web_link = true; test_click(pin, 750);
+        }
+    }
+    buttons_disabled = long_buttons_disabled = false;
+    disconnect_while_pressed = false;
     /* A rejected debounce timer must not leave RF permanently suspended. */
     timer_result = 1;
     button_pin_handler(BUTTON_1, 0);
@@ -674,6 +717,7 @@ int main(void) {
     /* Disabled actions still allow either debounced release to recover a
      * restricted boot; full startup continues to honor disabled actions. */
     buttons_disabled = true;
+    long_buttons_disabled = true;
     for (unsigned restricted = 0; restricted < 2; restricted++) {
         rf_only = restricted;
         for (unsigned pin = BUTTON_1; pin <= BUTTON_2; pin++) {

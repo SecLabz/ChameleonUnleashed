@@ -1,4 +1,5 @@
 #include "api.h"
+#include "tag_emulation.h"
 #include <string.h>
 
 static bool number(const char **text, uint32_t *value) {
@@ -67,6 +68,8 @@ static api_operation_t route(const char *method, const char *uri, uint32_t *id, 
 
 api_response_t api_dispatch_request(const char *method, const char *uri,
     const uint8_t *body, size_t size, uint8_t *output, size_t capacity) {
+    // Metadata polling can continue while the physical shortcut is displayed.
+    if (strcmp(method, "GET")) tag_emulation_web_link_stop();
     uint32_t id = 0;
     uint16_t argument = 0;
     api_operation_t operation = route(method, uri, &id, &argument);

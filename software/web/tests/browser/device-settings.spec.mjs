@@ -9,6 +9,24 @@ test.beforeEach(async ({ page }) => {
   }
 });
 
+test('the NFC web shortcut can be assigned to either press on either button', async ({ page, request }) => {
+  await request.post('/test/reset');
+  await page.goto('/#device');
+  for (const [key, defaultAction] of [
+    ['press_a', '1'],
+    ['press_b', '2'],
+    ['long_a', '3'],
+    ['long_b', '4']
+  ]) {
+    const select = page.locator(`[data-setting="${key}"]`);
+    await expect(select).toHaveValue(defaultAction);
+    await select.selectOption({ label: 'Open Bluetooth web app' });
+    await expect(select).toBeEnabled();
+    await expect(select).toHaveValue('6');
+    expect((await (await request.get('/api/device')).json()).settings[key]).toBe(6);
+  }
+});
+
 test('a setting save invalidates an older pending device refresh', async ({ page, request }) => {
   await request.post('/test/reset');
   await page.goto('/#device');

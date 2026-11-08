@@ -11,6 +11,8 @@
 #include "ble_api.h"
 #include "dataframe.h"
 #include "classic_job.h"
+static unsigned web_link_stops;
+bool tag_emulation_web_link_stop(void) { web_link_stops++; return false; }
 api_response_t web_device_request(api_operation_t operation,uint16_t argument,const uint8_t *body,
     size_t size,uint8_t *output,size_t capacity){
     return (api_response_t){404,"application/octet-stream",0};
@@ -336,6 +338,12 @@ static void ble_lifecycle(void) {
 }
 
 int main(void){
+    unsigned stops_before_metadata = web_link_stops;
+    api_dispatch_request("GET", "/api/device", NULL, 0, output, sizeof(output));
+    api_dispatch_request("GET", "/api/slot/0", NULL, 0, output, sizeof(output));
+    assert(web_link_stops == stops_before_metadata);
+    api("/api/settings");
+    assert(web_link_stops == stops_before_metadata + 1);
     update_entering = true;
     assert(web_session_active());
     assert(api("/api/session").status == 409);

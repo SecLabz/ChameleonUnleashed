@@ -17,7 +17,8 @@ const ACTIONS = [
   'Previous slot',
   'Clone a tag UID',
   'Show battery level',
-  'NFC field on/off'
+  'NFC field on/off',
+  'Open Bluetooth web app'
 ];
 const SETTINGS = ['animation', 'press_a', 'press_b', 'long_a', 'long_b', 'sleep', 'long_ms', 'pairing'];
 
