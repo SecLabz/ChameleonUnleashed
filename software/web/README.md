@@ -18,7 +18,7 @@ connect over Bluetooth, or wait 30 seconds. The previous slot resumes automatica
 
 NFC-V and NFC-B emulation pause while Bluetooth is connected; Slots and Device
 mark them as paused. Transfer the slot image over BLE, then choose
-**Device → Disconnect Bluetooth** to emulate. This restriction applies to
+**Disconnect to resume** in **Device** to emulate. This restriction applies to
 emulation, not the reader functions.
 
 Choose **Device → Firmware update** over USB or Bluetooth and select a release or local ZIP.

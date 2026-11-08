@@ -166,10 +166,6 @@
                   <span class="tag-fact-label">UID write</span>
                   <span id="classic-physical-value" class="tag-fact-value"></span>
                 </span>
-                <span id="classic-prng" class="tag-fact tag-prng" hidden>
-                  <span class="tag-fact-label">PRNG</span>
-                  <span id="classic-prng-type" class="tag-fact-value"></span>
-                </span>
                 <details id="classic-details" class="tag-details" hidden>
                   <summary aria-label="UID detection details">ⓘ</summary>
                   <div class="tag-detail-content">
@@ -178,6 +174,10 @@
                     <p id="classic-emulation" hidden></p>
                   </div>
                 </details>
+                <span id="classic-prng" class="tag-fact tag-prng" hidden>
+                  <span class="tag-fact-label">PRNG</span>
+                  <span id="classic-prng-type" class="tag-fact-value"></span>
+                </span>
                 <div id="lf-chip" class="lf-chip" hidden></div>
                 <span id="memory-status" class="count"></span>
               </div>
@@ -185,11 +185,59 @@
             </div>
             <div class="doc-bar" id="doc-bar">
               <div class="doc-actions">
-                <div class="split" id="read-group">
-                  <button class="btn primary" id="read" type="button">Read</button>
-                  <button class="btn stop" id="stop" type="button" hidden disabled>Stop</button>
-                  <details class="menu" id="read-menu">
-                    <summary class="btn primary" aria-label="Read options">
+                <div class="doc-primary">
+                  <div class="split" id="read-group">
+                    <button class="btn primary" id="read" type="button">Read</button>
+                    <button class="btn stop" id="stop" type="button" hidden disabled>Stop</button>
+                    <details class="menu" id="read-menu">
+                      <summary class="btn primary" aria-label="Read options">
+                        <svg
+                          class="caret"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.6"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="m3 4.5 3 3 3-3" />
+                        </svg>
+                      </summary>
+                      <div class="menu-list">
+                        <button id="read-slix" type="button" hidden>Read with privacy password…</button>
+                        <button id="dictionary-edit" data-classic type="button">
+                          Personal dictionary…<small id="dictionary-count"></small>
+                        </button>
+                        <div id="type2-controls" hidden>
+                          <label class="field" for="type2-profile">
+                            Type 2 profile<select id="type2-profile">
+                              <option value="auto">Detect from version</option>
+                              <option value="ultralight">Original Ultralight (16 pages)</option>
+                              <option value="ultralight_c">Ultralight C (48 pages)</option>
+                              <option value="ultralight_ev1_48">Ultralight EV1 48</option>
+                              <option value="ultralight_ev1_128">Ultralight EV1 128</option>
+                              <option value="ntag210">NTAG210</option>
+                              <option value="ntag212">NTAG212</option>
+                              <option value="ntag213">NTAG213</option>
+                              <option value="ntag215">NTAG215</option>
+                              <option value="ntag216">NTAG216</option>
+                            </select>
+                          </label>
+                          <p class="memory-hint">
+                            Use a manual profile only when you know the tag model. Hidden credentials remain
+                            unknown.
+                          </p>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                  <button class="btn" id="write-changes" type="button" hidden disabled>Write changes</button>
+                </div>
+                <div class="doc-secondary">
+                  <details class="menu" id="save-menu">
+                    <summary class="btn" aria-label="Send to options">
+                      <span>Send to</span>
                       <svg
                         class="caret"
                         viewBox="0 0 12 12"
@@ -204,108 +252,64 @@
                       </svg>
                     </summary>
                     <div class="menu-list">
-                      <button id="read-slix" type="button" hidden>Read with privacy password…</button>
-                      <button id="dictionary-edit" data-classic type="button">
-                        Personal dictionary…<small id="dictionary-count"></small>
+                      <button id="save-slot" type="button">Slot…</button>
+                      <button id="emulate" type="button">Slot &amp; emulate</button>
+                      <hr id="copy-tag-divider">
+                      <button id="copy-tag" type="button">Copy to a tag…</button>
+                    </div>
+                  </details>
+                  <button class="btn" id="export-json" type="button" hidden>Export JSON</button>
+                  <details class="menu" id="export-menu">
+                    <summary class="btn">
+                      Export
+                      <svg
+                        class="caret"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="m3 4.5 3 3 3-3" />
+                      </svg>
+                    </summary>
+                    <div class="menu-list end">
+                      <button id="export" type="button">Flipper file<small>.nfc</small></button>
+                      <button id="export-document" type="button">JSON file<small>.json</small></button>
+                      <button id="export-mct" type="button">MIFARE Classic Tool<small>.mct</small></button>
+                      <button id="export-keys" type="button" hidden disabled>
+                        Document keys<small id="export-keys-format">.dic</small>
                       </button>
-                      <div id="type2-controls" hidden>
-                        <label class="field" for="type2-profile">
-                          Type 2 profile<select id="type2-profile">
-                            <option value="auto">Detect from version</option>
-                            <option value="ultralight">Original Ultralight (16 pages)</option>
-                            <option value="ultralight_c">Ultralight C (48 pages)</option>
-                            <option value="ultralight_ev1_48">Ultralight EV1 48</option>
-                            <option value="ultralight_ev1_128">Ultralight EV1 128</option>
-                            <option value="ntag210">NTAG210</option>
-                            <option value="ntag212">NTAG212</option>
-                            <option value="ntag213">NTAG213</option>
-                            <option value="ntag215">NTAG215</option>
-                            <option value="ntag216">NTAG216</option>
-                          </select>
-                        </label>
-                        <p class="memory-hint">
-                          Use a manual profile only when you know the tag model. Hidden credentials remain
-                          unknown.
-                        </p>
-                      </div>
+                    </div>
+                  </details>
+                  <details class="menu" id="more-menu">
+                    <summary class="btn" aria-label="More actions">
+                      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <circle cx="5" cy="12" r="1.8" />
+                        <circle cx="12" cy="12" r="1.8" />
+                        <circle cx="19" cy="12" r="1.8" />
+                      </svg>
+                    </summary>
+                    <div class="menu-list end">
+                      <button type="button" data-classic data-open-dialog="keys-dialog">Keys…</button>
+                      <hr data-classic>
+                      <button id="change-uid" type="button" hidden disabled>Change tag UID…</button>
+                      <button id="repair-tag" type="button" hidden>Repair tag…</button>
+                      <button id="format-tag" type="button" hidden>Factory format tag…</button>
+                      <hr id="capture-details-divider" hidden>
+                      <button
+                        id="capture-details"
+                        type="button"
+                        data-open-dialog="capture-details-dialog"
+                        hidden
+                      >
+                        Capture details…
+                      </button>
                     </div>
                   </details>
                 </div>
-                <button class="btn" id="write-changes" type="button" hidden disabled>Write changes</button>
-                <details class="menu" id="save-menu">
-                  <summary class="btn" aria-label="Send to options">
-                    <span>Send to</span>
-                    <svg
-                      class="caret"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="m3 4.5 3 3 3-3" />
-                    </svg>
-                  </summary>
-                  <div class="menu-list">
-                    <button id="save-slot" type="button">Slot…</button>
-                    <button id="emulate" type="button">Slot &amp; emulate</button>
-                    <hr id="copy-tag-divider">
-                    <button id="copy-tag" type="button">Copy to a tag…</button>
-                  </div>
-                </details>
-                <button class="btn" id="export-json" type="button" hidden>Export JSON</button>
-                <details class="menu" id="export-menu">
-                  <summary class="btn">
-                    Export
-                    <svg
-                      class="caret"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="m3 4.5 3 3 3-3" />
-                    </svg>
-                  </summary>
-                  <div class="menu-list end">
-                    <button id="export" type="button">Flipper file<small>.nfc</small></button>
-                    <button id="export-document" type="button">JSON file<small>.json</small></button>
-                    <button id="export-mct" type="button">MIFARE Classic Tool<small>.mct</small></button>
-                    <button id="export-keys" type="button" hidden disabled>
-                      Document keys<small id="export-keys-format">.dic</small>
-                    </button>
-                  </div>
-                </details>
-                <details class="menu" id="more-menu">
-                  <summary class="btn" aria-label="More actions">
-                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <circle cx="5" cy="12" r="1.8" />
-                      <circle cx="12" cy="12" r="1.8" />
-                      <circle cx="19" cy="12" r="1.8" />
-                    </svg>
-                  </summary>
-                  <div class="menu-list end">
-                    <button type="button" data-classic data-open-dialog="keys-dialog">Keys…</button>
-                    <hr data-classic>
-                    <button id="change-uid" type="button" hidden disabled>Change tag UID…</button>
-                    <button id="repair-tag" type="button" hidden>Repair tag…</button>
-                    <button id="format-tag" type="button" hidden>Factory format tag…</button>
-                    <hr id="capture-details-divider" hidden>
-                    <button
-                      id="capture-details"
-                      type="button"
-                      data-open-dialog="capture-details-dialog"
-                      hidden
-                    >
-                      Capture details…
-                    </button>
-                  </div>
-                </details>
               </div>
               <div class="read-feedback">
                 <div class="read-summary">
@@ -400,12 +404,15 @@
               <h1>Device</h1>
               <button class="mini-action" id="refresh-device" type="button">Refresh</button>
             </div>
-            <div class="emulation-state pending" id="emulation-state" role="status" hidden>
+            <div class="emulation-state pending" id="emulation-state" hidden>
               <span class="emulation-dot" aria-hidden="true"></span>
-              <div class="emulation-copy">
+              <div class="emulation-copy" role="status">
                 <strong id="emulation-title">Checking emulation…</strong>
                 <span id="emulation-detail">Reading device state</span>
               </div>
+              <button class="mini-action" id="emulation-resume" type="button" hidden>
+                Disconnect to resume
+              </button>
             </div>
             <section
               class="card device-card"
@@ -420,15 +427,22 @@
                     <h2 class="cu-model" id="connection-title">Connecting…</h2>
                     <p class="cu-sub" id="connection-help" role="status">Looking for your Ultra over USB.</p>
                   </div>
-                  <span class="cu-mode" id="device-mode" hidden></span>
+                  <div class="connection-tools" id="connection-tools" hidden>
+                    <button class="mini-action" id="use-usb" type="button" hidden>Use USB</button>
+                    <button
+                      class="mini-action"
+                      id="disconnect-bluetooth"
+                      type="button"
+                      aria-label="Disconnect Bluetooth"
+                      hidden
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
                 <div class="device-list" id="device-rows" hidden></div>
               </div>
               <div class="connection-actions" id="connection-actions" hidden>
-                <button class="btn" id="use-usb" type="button" hidden>Use USB</button>
-                <button class="btn" id="disconnect-bluetooth" type="button" hidden>
-                  Disconnect Bluetooth
-                </button>
                 <button class="btn primary" id="connect-bluetooth" type="button" hidden>
                   Connect Bluetooth
                 </button>

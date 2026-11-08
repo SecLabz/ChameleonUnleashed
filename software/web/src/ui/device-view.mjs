@@ -154,24 +154,30 @@ export function deviceViews({
       current === 'checking' || current === 'connecting' ? SPINNER : ICONS[ble() || HOSTED ? 'ble' : 'usb'];
     $('connection-title').textContent = title;
     $('connection-help').textContent = help;
-    $('device-mode').hidden = !connected;
     $('device-rows').hidden = !connected;
     $('device-settings').hidden = !connected;
     $('emulation-state').hidden = !connected;
     $('nav-slot').hidden = !connected;
 
+    // Controls that change an existing link sit beside the status they change;
+    // without a link, connecting is the card's primary action.
     const connectButton = $('connect-bluetooth');
+    const place = $(connected ? 'connection-tools' : 'connection-actions');
+    if (connectButton.parentElement !== place) {
+      place.append(connectButton);
+    }
     connectButton.hidden = !bluetoothAvailable || (connected && ble());
     connectButton.disabled = connecting;
-    connectButton.className = connected ? 'btn' : 'btn primary';
+    connectButton.className = connected ? 'mini-action' : 'btn primary';
     const connectLabel = bluetoothTransport ? 'Reconnect Bluetooth' : 'Connect Bluetooth';
     connectButton.textContent = connecting ? 'Connecting…' : connectLabel;
     $('use-usb').hidden = HOSTED || !ble();
     $('use-usb').disabled = connecting;
     $('disconnect-bluetooth').hidden = !bluetoothTransport || bluetoothTransport.closed;
     $('disconnect-bluetooth').disabled = connecting;
-    $('connection-actions').hidden =
-      connectButton.hidden && $('use-usb').hidden && $('disconnect-bluetooth').hidden;
+    $('connection-tools').hidden =
+      $('use-usb').hidden && $('disconnect-bluetooth').hidden && (!connected || connectButton.hidden);
+    $('connection-actions').hidden = connected || connectButton.hidden;
 
     const unavailable = (HOSTED || ble()) && !bluetoothAvailable;
     $('firmware-update-link').setAttribute('aria-disabled', String(unavailable));
@@ -261,11 +267,12 @@ export function deviceViews({
   function disconnect() {
     if (!canConnect()) {
       notify('Finish or stop the current operation before changing the connection.', true);
-      return;
+      return false;
     }
     closing = true;
     bluetoothTransport?.disconnect();
     closing = false;
+    return true;
   }
 
   async function retry() {
@@ -314,6 +321,12 @@ export function deviceViews({
     phase() === 'unreachable' && !bluetoothAvailable ? retry() : connect();
   $('scan-connect-secondary').onclick = retry;
   $('disconnect-bluetooth').onclick = disconnect;
+  $('emulation-resume').onclick = () => {
+    const family = PAUSED_FAMILY[pausedEmulation()];
+    if (disconnect()) {
+      notify(`Bluetooth disconnected. ${family} emulation resumes on your Ultra.`);
+    }
+  };
 
   $('use-usb').onclick = async () => {
     if (HOSTED) {
@@ -370,7 +383,7 @@ export function deviceViews({
     $('emulation-state').className = `emulation-state${emulationState}`;
     $('emulation-title').textContent = info.reader ? 'Reader mode' : `Slot ${info.active_slot + 1} selected`;
     $('emulation-detail').textContent = emulationDetail;
-    $('device-mode').textContent = info.reader ? 'Reader' : 'Emulator';
+    $('emulation-resume').hidden = !paused;
     $('device-rows').innerHTML = `
       <div class="device-row"><span>Firmware</span><strong>v${escape(info.version)}</strong></div>
       <div class="device-row">

@@ -1727,6 +1727,11 @@ body:has(#scan-dialog[open]) {
   color: var(--warn);
 }
 
+/* The UID detection details belong to the UID write value they follow. */
+#classic-details {
+  margin-left: -14px;
+}
+
 .tag-details > summary {
   padding: 4px;
   color: var(--muted);
@@ -1784,6 +1789,12 @@ body:has(#scan-dialog[open]) {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
+}
+
+/* Rows only on phones; wider screens keep one toolbar. */
+.doc-primary,
+.doc-secondary {
+  display: contents;
 }
 
 .read-feedback {
@@ -2611,14 +2622,17 @@ body:has(#scan-dialog[open]) {
 }
 
 /* ── Connection ─────────────────────────────────────────────────────── */
+/* Controls end the status row; on a narrow phone they drop below it, still
+   on the right. The copy's basis is the room the status line needs. */
 .connection-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 14px;
+  gap: 10px 12px;
 }
 
 .connection-copy {
-  flex: 1;
+  flex: 1 1 150px;
   min-width: 0;
 }
 
@@ -2668,6 +2682,20 @@ body:has(#scan-dialog[open]) {
 
 #connection-card[data-state="connected"] .connection-actions {
   margin-top: 4px;
+}
+
+.connection-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-self: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.connection-tools .mini-action,
+.emulation-state .mini-action {
+  min-height: 36px;
 }
 
 .scan-connect {
@@ -2987,17 +3015,56 @@ body:has(#scan-dialog[open]) {
   }
 
   .doc-bar {
+    row-gap: 8px;
     margin-inline: -1px;
     padding: 8px 10px;
   }
 
+  /* Full-width rows whatever the tag offers: what changes the tag first,
+     then where the document goes. Both rows share their columns so the
+     buttons line up. Menus open within the row. */
   .doc-actions {
-    position: relative;
+    display: grid;
+    flex: 1 1 100%;
     gap: 6px;
   }
 
-  .doc-actions > .menu:last-child {
+  .doc-primary,
+  .doc-secondary {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px;
+    gap: 6px;
+  }
+
+  .doc-primary:not(:has(> :not([hidden]))),
+  .doc-secondary:not(:has(> :not([hidden]))) {
+    display: none;
+  }
+
+  /* Without a neighbour, a button takes the free columns. */
+  #write-changes,
+  .doc-secondary:has(> #save-menu[hidden]) > :is(#export-json, #export-menu),
+  .doc-secondary:has(> #more-menu[hidden]) > :is(#export-json, #export-menu) {
+    grid-column: span 2;
+  }
+
+  #read-group:has(+ #write-changes[hidden]),
+  #read-group[hidden] + #write-changes,
+  .doc-secondary:has(> #save-menu[hidden]):has(> #more-menu[hidden]) > :is(#export-json, #export-menu) {
+    grid-column: 1 / -1;
+  }
+
+  .doc-secondary > .menu {
     position: static;
+  }
+
+  .doc-secondary > .menu > summary {
+    width: 100%;
+  }
+
+  .split > .btn {
+    flex: 1;
   }
 
   .btn {
@@ -3473,8 +3540,9 @@ a {
 
 .emulation-state {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 10px 12px;
   margin-bottom: 18px;
   padding: 12px 16px;
   border: 1px solid var(--line);
@@ -3502,8 +3570,14 @@ a {
 
 .emulation-copy {
   display: grid;
+  flex: 1 1 180px;
   gap: 3px;
+  min-width: 0;
   font-size: 12px;
+}
+
+.emulation-state .mini-action {
+  margin-left: auto;
 }
 
 .emulation-copy span {

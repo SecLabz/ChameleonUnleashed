@@ -145,6 +145,7 @@ test('the connection card, pill and Scan prompt share one USB connection state',
   assert.equal(get('scanner').hidden, false);
   assert.equal(get('device-settings').hidden, false);
   assert.equal(get('connection-actions').hidden, true, 'USB alone offers no transport actions');
+  assert.equal(get('connection-tools').hidden, true, 'nor controls beside the connection status');
   assert.equal(get('firmware-update-note').hidden, true, 'firmware updates are available over USB');
 });
 

@@ -3252,3 +3252,37 @@ for (const [state, title] of [
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
+
+for (const width of [390, 320]) {
+  test(`phone actions form full-width rows without overflow at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await scan(page);
+    const [read, write, send, exportMenu, more, actions] = await Promise.all(
+      ['#read-group', '#write-changes', '#save-menu', '#export-menu', '#more-menu', '.doc-actions'].map(
+        (selector) => page.locator(selector).boundingBox()
+      )
+    );
+    expect(write.y).toBe(read.y);
+    expect(send.y).toBeGreaterThan(read.y + read.height);
+    for (const item of [exportMenu, more]) {
+      expect(item.y).toBe(send.y);
+    }
+    for (const first of [read, send]) {
+      expect(first.x).toBeCloseTo(actions.x, 0);
+    }
+    for (const last of [write, more]) {
+      expect(last.x + last.width).toBeCloseTo(actions.x + actions.width, 0);
+    }
+    expect(read.x + read.width).toBeCloseTo(send.x + send.width, 0);
+    expect(write.x).toBeCloseTo(exportMenu.x, 0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // Labels fit their column instead of spilling over the next button.
+    const spilled = await page.evaluate(() =>
+      ['#read', '#write-changes', '#save-menu > summary', '#export-menu > summary', '#more-menu > summary']
+        .map((selector) => document.querySelector(selector))
+        .filter((button) => button.scrollWidth > button.clientWidth)
+        .map((button) => button.id || button.parentElement.id)
+    );
+    expect(spilled).toEqual([]);
+  });
+}
