@@ -12,7 +12,8 @@ The CLI keeps an already matching Unleashed bootloader. Use
 
 1. Open [192.168.16.1](http://192.168.16.1) over USB, or connect through the HTTPS Bluetooth app.
 2. Choose **Device → Firmware update**.
-3. Select the firmware and version, then install. Over Bluetooth, select the Ultra in DFU when prompted.
+3. Select the firmware and version, then install. Over Bluetooth, select the Ultra in DFU when prompted,
+   then choose **Reconnect and verify** once it restarts.
 
 You can also choose a Nordic DFU ZIP with **Update from a file**.
 A local ZIP works without Internet; downloading a release requires Internet access.

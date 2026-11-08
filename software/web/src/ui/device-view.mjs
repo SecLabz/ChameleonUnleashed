@@ -193,11 +193,16 @@ export function deviceViews({
     $('scan-connect-secondary').hidden = !(current === 'unreachable' && bluetoothAvailable);
   }
 
-  async function connect() {
+  /** @param {boolean} [owned] The caller owns the device, as a firmware update does; errors are its own. */
+  async function connect(owned = false, signal) {
+    signal?.throwIfAborted();
     if (connecting) {
+      if (owned) {
+        throw new Error('A Bluetooth connection is already in progress.');
+      }
       return;
     }
-    if (!canConnect()) {
+    if (!owned && !canConnect()) {
       notify('Finish or stop the current operation before changing the connection.', true);
       return;
     }
@@ -212,11 +217,20 @@ export function deviceViews({
       transport = await connectBluetooth({
         onDisconnect: (reason) => disconnected(transport, reason)
       });
+      signal?.throwIfAborted();
       bluetoothTransport = transport;
       lostReason = '';
       setDeviceTransport(transport);
       await refresh(true);
+      signal?.throwIfAborted();
+      return transport;
     } catch (error) {
+      if (signal?.aborted) {
+        transport?.disconnect(error);
+      }
+      if (owned) {
+        throw error;
+      }
       if (error.name !== 'NotFoundError') {
         notify(error.message, true);
       }
@@ -295,7 +309,7 @@ export function deviceViews({
     };
   }
 
-  $('connect-bluetooth').onclick = connect;
+  $('connect-bluetooth').onclick = () => connect();
   $('scan-connect-button').onclick = () =>
     phase() === 'unreachable' && !bluetoothAvailable ? retry() : connect();
   $('scan-connect-secondary').onclick = retry;

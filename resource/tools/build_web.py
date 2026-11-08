@@ -97,7 +97,11 @@ def wasm_package(shared, verify=True):
     return modules, worker
 
 
-def frontend_sources(web, shared, core_asset, modules, package_modules):
+def update_config(base):
+    return ('export const RESOURCE_BASE = ' + json.dumps(base) + ';\n').encode()
+
+
+def frontend_sources(web, shared, core_asset, modules, package_modules, base):
     sources = {}
     for path in sorted((web / 'src').rglob('*')):
         if path.is_file() and path.suffix in ('.mjs', '.json'):
@@ -107,6 +111,8 @@ def frontend_sources(web, shared, core_asset, modules, package_modules):
             sources['/' + path.name] = path.read_bytes()
     for name, data in package_modules.items():
         sources['/runtime/nfc-wasm/' + name] = data
+    # The update form reads its release base from the module the recovery also generates.
+    sources['/ui/update-config.mjs'] = update_config(base)
     sources['/runtime/core-build.mjs'] = ('export const CORE = ' + json.dumps(core_asset) + ';\n').encode()
     sources['/runtime/hardnested-build.mjs'] = ('export const HARDNESTED = ' + json.dumps(modules) + ';\n').encode()
     # Use the shared essentials prefix without loading the recovery WASM during discovery.
@@ -236,7 +242,7 @@ def main():
         return
 
     (out / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
-    sources = frontend_sources(WEB, shared, core_asset, modules, package_modules)
+    sources = frontend_sources(WEB, shared, core_asset, modules, package_modules, config['baseUrl'])
     # Keep generated source modules for unit tests, separate from shipped assets.
     source_dir = out / 'modules'
     site = out / 'site'

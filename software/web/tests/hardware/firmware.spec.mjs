@@ -29,17 +29,18 @@ test('the physical Ultra installs a Nordic application ZIP over Bluetooth DFU', 
   await page.locator('#firmware-update-link').click();
   const modal = page.getByRole('dialog', { name: 'Firmware update', exact: true });
   await modal.getByLabel('Nordic firmware ZIP').setInputFiles(firmware);
-  await modal.getByRole('button', { name: 'Prepare update', exact: true }).click();
+  await modal.getByRole('button', { name: 'Install selected ZIP', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: 'Install firmware?', exact: true });
-  await expect(confirm).toContainText('USB DFU remains available');
-  await confirm.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(modal.getByRole('button', { name: 'Connect DFU and install', exact: true })).toBeEnabled();
+  await expect(confirm).toContainText('classic DFU');
+  await confirm.getByRole('button', { name: 'Install', exact: true }).click();
+  const select = modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true });
+  await expect(select).toBeEnabled();
   const started = Date.now();
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
+  await select.click();
   let previous = -1;
   while (await modal.getByRole('button', { name: 'Stop', exact: true }).isVisible()) {
     if (Date.now() - started > 12 * 60 * 1000) {
-      throw new Error(await modal.getByRole('status').textContent());
+      throw new Error(await modal.locator('#fw-message').textContent());
     }
     const progress = await modal.locator('progress').evaluate((node) => Math.floor(node.value * 10));
     if (progress !== previous) {
@@ -48,12 +49,13 @@ test('the physical Ultra installs a Nordic application ZIP over Bluetooth DFU', 
     }
     await page.waitForTimeout(1000);
   }
-  await expect(modal.getByRole('status')).toContainText('Firmware accepted');
+  await expect(modal.locator('#fw-message')).toContainText('Firmware transferred');
   const elapsedMs = Date.now() - started;
+  await modal.getByRole('button', { name: 'Reconnect and verify', exact: true }).click();
+  await expect(modal.locator('#fw-title')).toHaveText('Your Ultra is up to date', { timeout: 60000 });
   await page.screenshot({ path: testInfo.outputPath('physical-ble-update.png') });
-  await modal.getByRole('button', { name: 'Close', exact: true }).click();
-  await page.locator('#connect-bluetooth').click();
-  await expect(page.locator('#device-info')).toContainText('Bluetooth');
+  await modal.getByRole('button', { name: 'Return to Chameleon', exact: true }).click();
+  await expect(page.locator('#device-info')).toContainText('Connected over Bluetooth');
   const rows = page.locator('#device-rows');
   if (process.env.CHAMELEON_DFU_EXPECT_GIT) {
     await expect(rows).toContainText(process.env.CHAMELEON_DFU_EXPECT_GIT);

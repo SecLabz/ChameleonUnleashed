@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from build_web import resource_origin
+from build_web import resource_origin, update_config
 from web_update import ROOT
 
 
@@ -17,7 +17,7 @@ def assets(base):
     files['update-unzip.mjs'] = (ROOT / 'software/web/src/vendor/unzip.mjs').read_bytes()
     files['fflate.LICENSE.txt'] = (ROOT / 'software/web/src/vendor/fflate.LICENSE.txt').read_bytes()
     files['update.mjs'] = (ROOT / 'software/web/src/ui/firmware-update.mjs').read_bytes()
-    files['update-config.mjs'] = ('export const RESOURCE_BASE = ' + json.dumps(base) + ';\n').encode()
+    files['update-config.mjs'] = update_config(base)
     files['update-sha256.mjs'] = (ROOT / 'software/web/src/runtime/sha256.mjs').read_bytes()
     return files
 

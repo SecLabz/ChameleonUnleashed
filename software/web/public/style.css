@@ -3826,37 +3826,444 @@ a {
   justify-self: start;
 }
 
-.firmware-dialog {
-  max-width: 34rem;
-}
-.firmware-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1rem;
-  margin: 1.5rem 0;
-}
-.app-dialog .firmware-fields .field {
-  min-width: 0;
+/* ── Bluetooth firmware update: the USB update page (update.css) as a sheet ── */
+.update-sheet {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
   margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 0;
+  background: var(--bg);
+  color: var(--ink);
 }
-.firmware-fields label:last-child {
+
+.update-sheet::backdrop {
+  background: var(--bg);
+}
+
+.update-page {
+  width: min(100%, 600px);
+  margin: auto;
+  padding: max(24px, env(safe-area-inset-top)) 20px max(32px, env(safe-area-inset-bottom));
+}
+
+.update-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 16px;
+  margin: 16px 0 22px;
+}
+
+.update-heading h2 {
+  margin: 0;
+  font-size: clamp(32px, 7.5vw, 42px);
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+}
+
+.update-heading h2 span {
+  color: var(--accent);
+}
+
+.update-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.update-device::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.update-device[data-state="connecting"]::before {
+  animation: update-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.update-device[data-state="connected"],
+.update-device[data-state="recovery"] {
+  color: var(--ink);
+}
+
+.update-device[data-state="connected"]::before {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(67, 214, 155, 0.16);
+}
+
+.update-device[data-state="recovery"]::before {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(240, 180, 90, 0.16);
+}
+
+.update-device[data-state="disconnected"]::before {
+  background: var(--danger);
+}
+
+@keyframes update-pulse {
+  to {
+    opacity: 0.25;
+  }
+}
+
+.update-card {
+  padding: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.04),
+    0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.update-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.update-fields > div {
+  min-width: 0;
+}
+
+.update-fields .update-channel {
   grid-column: 1 / -1;
 }
-.firmware-fields select {
+
+.update-fields label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.update-sheet select {
   width: 100%;
-  appearance: none;
-  padding-right: 38px;
-  background-image: url("./chevron-down.svg");
-  background-repeat: no-repeat;
-  background-position: right 14px center;
+  min-height: 48px;
+  padding: 0 40px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background-color: var(--field);
+  background-position: right 16px center;
   background-size: 12px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
-.firmware-dialog progress {
+
+.update-sheet select:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.update-sheet select:focus-visible {
+  border-color: rgba(138, 124, 255, 0.55);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(138, 124, 255, 0.15);
+}
+
+.update-sheet select:disabled,
+.update-drop:has(:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.update-note {
+  margin: 12px 0 0;
+  padding: 13px 14px;
+  border: 1px solid var(--warn-line);
+  border-radius: 12px;
+  background: rgba(240, 180, 90, 0.08);
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.update-sheet details {
+  margin-top: 18px;
+  border-block: 1px solid var(--line);
+}
+
+.update-sheet summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  list-style: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-sheet summary:hover {
+  color: var(--ink);
+}
+
+.update-sheet summary::-webkit-details-marker {
+  display: none;
+}
+
+.update-sheet summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.update-sheet details[open] summary::after {
+  transform: translateY(2px) rotate(-135deg);
+}
+
+.update-drop {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 76px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.update-drop:hover:not(:has(:disabled)) {
+  border-color: var(--accent-line);
+  color: var(--ink);
+}
+
+.update-drop svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.update-drop input {
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.update-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.update-hint:empty {
+  display: none;
+}
+
+.update-status:has(h3:not(:empty), p:not(:empty), progress:not([hidden])) {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field);
+}
+
+.update-status:has(h3:not(:empty)) {
+  border-color: rgba(67, 214, 155, 0.3);
+  background: rgba(67, 214, 155, 0.07);
+}
+
+.update-status h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.update-status h3:empty,
+.update-status:has(h3:not(:empty)) progress {
+  display: none;
+}
+
+.update-status h3::before {
+  content: "✓";
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--success);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.update-status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-status progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--line);
   accent-color: var(--accent);
-  margin: 1rem 0;
 }
-.firmware-dialog input[type="file"] {
+
+.update-status progress::-webkit-progress-bar {
+  background: var(--line);
+}
+
+.update-status progress::-webkit-progress-value {
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.update-status progress::-moz-progress-bar {
+  border-radius: 99px;
+  background: var(--accent);
+}
+
+.update-primary,
+.update-stop {
   width: 100%;
-  margin: 1rem 0;
+  min-height: 50px;
+  margin-top: 18px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.update-primary:hover:not(:disabled),
+.update-stop:hover {
+  filter: brightness(1.08);
+}
+
+.update-primary:disabled {
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--muted);
+  opacity: 1;
+}
+
+.update-stop {
+  margin-top: 10px;
+  border-color: rgba(255, 112, 112, 0.45);
+  background: rgba(255, 112, 112, 0.1);
+  color: #ffc4c4;
+}
+
+.update-footer {
+  display: grid;
+  justify-items: center;
+  margin-top: 14px;
+}
+
+.update-return {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-return:hover {
+  color: var(--ink);
+}
+
+.update-return::before {
+  content: "←";
+  content: "←" / "";
+  margin-right: 8px;
+}
+
+.update-sheet summary:focus-visible,
+.update-drop:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 380px) {
+  .update-page {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .update-card {
+    padding: 18px;
+  }
+
+  .update-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 700px) {
+  .update-page {
+    padding-top: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-device::before,
+  .update-sheet summary::after,
+  .update-status progress::-webkit-progress-value {
+    animation: none;
+    transition: none;
+  }
 }

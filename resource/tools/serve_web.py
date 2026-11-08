@@ -44,9 +44,9 @@ def bundle(name, web, cache, shared, bundler):
     core = json.loads((cache / 'core.json').read_text())
     hardnested = json.loads((cache / 'hardnested.json').read_text())
     package_modules, worker = wasm_package(shared, verify=False)
-    sources = frontend_sources(web, shared, core, hardnested['modules'], package_modules)
     config = json.loads((web / 'config.json').read_text())
     config['baseUrl'] = '/'
+    sources = frontend_sources(web, shared, core, hardnested['modules'], package_modules, config['baseUrl'])
     # Each request owns its staging directory, including concurrent app/worker loads.
     with tempfile.TemporaryDirectory(prefix='chameleon-web-') as temporary:
         out = Path(temporary)

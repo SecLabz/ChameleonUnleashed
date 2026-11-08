@@ -181,13 +181,16 @@ export async function installFirmware(
   return running;
 }
 
-export const loadCatalogue = (signal, development = false) =>
-  readCatalogue(signal, development, RESOURCE_BASE);
-export const downloadFirmware = (asset, signal, onProgress, development = false) =>
-  download(asset, signal, onProgress, development, RESOURCE_BASE);
+export const loadCatalogue = (signal, development = false, base = RESOURCE_BASE) =>
+  readCatalogue(signal, development, base);
+export const downloadFirmware = (asset, signal, onProgress, development = false, base = RESOURCE_BASE) =>
+  download(asset, signal, onProgress, development, base);
 
-if (typeof document !== 'undefined') {
-  const $ = (id) => document.getElementById(id);
+const TOO_LARGE = 'Choose a Nordic firmware ZIP smaller than 4 MiB.';
+
+// Shared by the USB page and the Bluetooth sheet. The driver describes the
+// Ultra, installs over its transport, explains a stop and leaves the form.
+export function updateForm($, driver) {
   let controller;
   let catalogue;
   let device;
@@ -196,28 +199,40 @@ if (typeof document !== 'undefined') {
   let fileSelection = 0;
   let catalogueRequest = 0;
   let busy = false;
-  let restored = false;
-  let canReturn = false;
+  let final = false;
+  const say = (text) => {
+    $('message').textContent = text;
+  };
   const showProgress = (value, label) => {
     $('progress').hidden = false;
     $('progress').value = value;
-    $('message').textContent = label;
+    say(label);
     if (label === 'Verifying and activating firmware…') {
       $('stop').hidden = true;
     }
   };
+  const show = (next) => {
+    device = next;
+    $('device').dataset.state = next.state;
+    $('device').textContent = next.label;
+  };
+  const development = () => $('channel').value === 'development';
   const selectedSource = () => catalogue?.sources.find((source) => source.id === $('source').value);
   const selectedRelease = () =>
     selectedSource()?.releases.find((release) => release.version === $('version').value);
   const updateControls = () => {
-    const locked = busy || restored;
-    for (const id of ['channel', 'source', 'version', 'file', 'wipe', 'restart']) {
-      $(id).disabled = locked;
+    const locked = busy || final;
+    for (const id of ['channel', 'source', 'version', 'file', 'wipe']) {
+      if ($(id)) {
+        $(id).disabled = locked;
+      }
     }
-    $('file').disabled ||= Boolean(device && device.layout !== RECOVERY_LAYOUT);
-    $('update').disabled = locked || device?.layout !== 2 || !(localFile ? localInfo : selectedRelease());
-    $('restart').hidden = locked || !canReturn;
-    $('exit-hint').hidden = $('restart').hidden || device?.mode !== 'recovery';
+    $('file').disabled ||= Boolean(device?.blocked);
+    $('update').disabled = locked || !device?.ready || !(localFile ? localInfo : selectedRelease());
+    $('restart').hidden = busy || !device?.exit;
+    if ($('exit-hint')) {
+      $('exit-hint').hidden = $('restart').hidden || device.state !== 'recovery';
+    }
   };
   const selectRelease = () => {
     updateControls();
@@ -228,18 +243,17 @@ if (typeof document !== 'undefined') {
       return;
     }
     const release = selectedRelease();
+    const complete = release && release.layout !== RECOVERY_LAYOUT;
     $('release').textContent = release ? '' : 'No compatible release available';
-    $('update').textContent =
-      !release || release.layout === RECOVERY_LAYOUT ? 'Install update' : 'Install complete firmware';
-    $('transition').hidden = !release || release.layout === RECOVERY_LAYOUT;
+    $('update').textContent = complete ? 'Install complete firmware' : 'Install update';
+    $('transition').hidden = !complete;
   };
   const selectSource = () => {
     $('version').replaceChildren();
     for (const release of selectedSource()?.releases ?? []) {
-      const development = $('channel').value === 'development';
-      const label = development ? release.version.replace('-dev.', ' · ') : release.version;
+      const label = development() ? release.version.replace('-dev.', ' · ') : release.version;
       $('version').add(
-        new Option(`${label}${release.prerelease && !development ? ' (preview)' : ''}`, release.version)
+        new Option(`${label}${release.prerelease && !development() ? ' (preview)' : ''}`, release.version)
       );
     }
     const stable = selectedSource()?.releases.find((release) => !release.prerelease);
@@ -248,29 +262,12 @@ if (typeof document !== 'undefined') {
     }
     selectRelease();
   };
-  const refresh = async (showConnectionError = true) => {
-    try {
-      device = await (await request('/api/update')).json();
-      $('device').dataset.state = device.mode === 'recovery' ? 'recovery' : 'connected';
-      $('device').textContent =
-        device.mode === 'recovery'
-          ? 'Ultra connected · Recovery mode'
-          : `Ultra connected · v${versionLabel(device.version)}`;
-      canReturn = device.mode === 'application' || Boolean(device.valid);
-      if (device.layout !== RECOVERY_LAYOUT) {
-        $('message').textContent = 'Install the Nordic ZIP recovery bootloader through classic DFU first.';
-      }
-      selectRelease();
-    } catch {
-      device = undefined;
-      canReturn = false;
-      $('device').textContent = 'Ultra not connected';
-      $('device').dataset.state = 'disconnected';
-      updateControls();
-      if (showConnectionError) {
-        $('message').textContent = 'Connect your Ultra, then reload this page.';
-      }
+  const refresh = async (note = true) => {
+    show(await driver.refresh());
+    if (note && device.note) {
+      say(device.note);
     }
+    selectRelease();
   };
   const fetchCatalogue = async () => {
     const generation = ++catalogueRequest;
@@ -280,24 +277,21 @@ if (typeof document !== 'undefined') {
     $('release').textContent = 'Loading releases…';
     updateControls();
     try {
-      const next = await loadCatalogue(undefined, $('channel').value === 'development');
-      if (generation !== catalogueRequest || busy || restored) {
+      const next = await loadCatalogue(undefined, development(), driver.base);
+      if (generation !== catalogueRequest || busy || final) {
         return;
       }
       catalogue = next;
-      $('source').replaceChildren();
-      for (const source of catalogue.sources) {
-        $('source').add(new Option(source.label, source.id));
-      }
+      $('source').replaceChildren(...catalogue.sources.map((source) => new Option(source.label, source.id)));
       selectSource();
     } catch (error) {
-      if (generation === catalogueRequest && !busy && !restored) {
+      if (generation === catalogueRequest && !busy && !final) {
         $('release').textContent = error.message;
       }
     }
   };
   const run = async (file) => {
-    if (busy || restored) {
+    if (busy || final) {
       return;
     }
     busy = true;
@@ -305,76 +299,44 @@ if (typeof document !== 'undefined') {
     updateControls();
     $('progress').hidden = true;
     $('title').textContent = '';
-    $('message').textContent = 'Checking firmware…';
+    say('Checking firmware…');
     $('stop').hidden = false;
-    let replacement = false;
-    let recoveryUpdate = false;
-    let finished = false;
+    let info;
+    let result;
     try {
       if (file && file.size > MAXIMUM_SIZE) {
-        throw new Error('Choose a Nordic firmware ZIP smaller than 4 MiB.');
+        throw new Error(TOO_LARGE);
       }
       const release = selectedRelease();
-      const asset = release?.packages[release.layout === RECOVERY_LAYOUT ? 'application' : 'full'];
       const bytes = file
         ? new Uint8Array(await file.arrayBuffer())
         : await downloadFirmware(
-            asset,
+            release?.packages[release.layout === RECOVERY_LAYOUT ? 'application' : 'full'],
             controller.signal,
             showProgress,
-            $('channel').value === 'development'
+            development(),
+            driver.base
           );
-      const info = await inspectFirmware(bytes, controller.signal);
-      replacement = info.restore;
-      // Another page or a classic DFU update may have changed recovery since
-      // this page connected. Confirm against the current device, not that snapshot.
-      const current = await (await request('/api/update', undefined, controller.signal)).json();
-      recoveryUpdate = !replacement && info.recoveryCrc !== current.recovery_crc32;
-      if (
-        (replacement || recoveryUpdate) &&
-        !confirm(
-          replacement
-            ? 'Install complete firmware? This removes web recovery. An interrupted installation may require classic DFU.' +
-                ($('wipe').checked
-                  ? ' All saved tags and settings will be erased.'
-                  : ' Stored data may be incompatible with the selected firmware.')
-            : 'This version also replaces web recovery. An interrupted recovery replacement may require classic DFU. Continue?'
-        )
-      ) {
-        return;
-      }
-      const result = await installFirmware(bytes, {
+      info = await inspectFirmware(bytes, controller.signal);
+      result = await driver.install(bytes, info, {
         signal: controller.signal,
-        onProgress: showProgress,
-        allowRestore: replacement,
-        allowRecoveryUpdate: recoveryUpdate,
-        wipe: $('wipe').checked
+        progress: showProgress,
+        wipe: $('wipe')?.checked
       });
-      restored = result.mode === 'restored';
-      $('title').textContent =
-        result.mode === 'restored' ? 'Firmware transferred and verified' : 'Your Ultra is up to date';
-      $('message').textContent =
-        result.mode === 'restored'
-          ? 'Your Ultra is restarting with the selected firmware. This web interface is removed; reinstall Unleashed through classic DFU to return.'
-          : 'Firmware verified and running. Your slots and settings are preserved.';
-      if (result.mode !== 'restored') {
-        device = result;
-        $('device').textContent = `Ultra connected · v${versionLabel(result.version)}`;
-        canReturn = true;
+      if (result) {
+        $('title').textContent = result.title;
+        say(result.message);
+        show(result.device);
+        final = Boolean(result.final);
+      } else {
+        $('progress').hidden = true;
+        say('Update cancelled. Nothing installed.');
       }
-      finished = true;
     } catch (error) {
-      let message = error.message;
-      if (controller.signal.aborted) {
-        message =
-          replacement || recoveryUpdate
-            ? 'Installation stopped. If this page no longer opens, finish installation through classic DFU.'
-            : 'Update stopped. Reopen this page to install again.';
-      }
-      $('message').textContent = message;
+      say(controller.signal.aborted ? driver.stopped(info) : error.message);
     } finally {
       $('stop').hidden = true;
-      if (!finished) {
+      if (!result) {
         await refresh(false);
       }
       busy = false;
@@ -389,7 +351,7 @@ if (typeof document !== 'undefined') {
   };
   const resetStatus = () => {
     $('title').textContent = '';
-    $('message').textContent = '';
+    say('');
     $('progress').hidden = true;
   };
   $('channel').onchange = () => {
@@ -418,7 +380,7 @@ if (typeof document !== 'undefined') {
     try {
       if (file) {
         if (file.size > MAXIMUM_SIZE) {
-          throw new Error('Choose a Nordic firmware ZIP smaller than 4 MiB.');
+          throw new Error(TOO_LARGE);
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
         if (selection !== fileSelection) {
@@ -434,25 +396,21 @@ if (typeof document !== 'undefined') {
       if (selection !== fileSelection) {
         return;
       }
-      $('message').textContent = error.message;
+      say(error.message);
     }
     selectRelease();
   };
   $('stop').onclick = () => controller?.abort(new Error('Installation cancelled'));
   $('restart').onclick = async () => {
-    if (busy || restored) {
+    if (busy) {
       return;
     }
     busy = true;
     updateControls();
     try {
-      if (device?.mode === 'recovery') {
-        $('message').textContent = 'Starting the installed firmware…';
-        device = await startApplication();
-      }
-      location.href = '/';
+      await driver.exit(device, say);
     } catch (error) {
-      $('message').textContent = error.message;
+      say(error.message);
     } finally {
       busy = false;
       selectRelease();
@@ -460,4 +418,90 @@ if (typeof document !== 'undefined') {
   };
   refresh();
   fetchCatalogue();
+  return () => controller?.abort(new Error('Update stopped'));
+}
+
+// Only the USB update page has #update; the Bluetooth sheet mounts its own form.
+if (typeof document !== 'undefined' && document.getElementById('update')) {
+  let risky = false;
+  const describe = (state) => {
+    const recovery = state.mode === 'recovery';
+    const blocked = state.layout !== RECOVERY_LAYOUT;
+    return {
+      state: recovery ? 'recovery' : 'connected',
+      label: recovery
+        ? 'Ultra connected · Recovery mode'
+        : `Ultra connected · v${versionLabel(state.version)}`,
+      ready: !blocked,
+      blocked,
+      exit: !recovery || Boolean(state.valid),
+      note: blocked ? 'Install the Nordic ZIP recovery bootloader through classic DFU first.' : ''
+    };
+  };
+  updateForm((id) => document.getElementById(id), {
+    base: RESOURCE_BASE,
+    async refresh() {
+      try {
+        return describe(await (await request('/api/update')).json());
+      } catch {
+        return {
+          state: 'disconnected',
+          label: 'Ultra not connected',
+          note: 'Connect your Ultra, then reload this page.'
+        };
+      }
+    },
+    async install(bytes, info, { signal, progress, wipe }) {
+      risky = false;
+      // Another page or a classic DFU update may have changed recovery since
+      // this page connected. Confirm against the current device, not that snapshot.
+      const current = await (await request('/api/update', undefined, signal)).json();
+      const recoveryUpdate = !info.restore && info.recoveryCrc !== current.recovery_crc32;
+      if (
+        (info.restore || recoveryUpdate) &&
+        !confirm(
+          info.restore
+            ? 'Install complete firmware? This removes web recovery. An interrupted installation may require classic DFU.' +
+                (wipe
+                  ? ' All saved tags and settings will be erased.'
+                  : ' Stored data may be incompatible with the selected firmware.')
+            : 'This version also replaces web recovery. An interrupted recovery replacement may require classic DFU. Continue?'
+        )
+      ) {
+        return;
+      }
+      risky = info.restore || recoveryUpdate;
+      const result = await installFirmware(bytes, {
+        signal,
+        onProgress: progress,
+        allowRestore: info.restore,
+        allowRecoveryUpdate: recoveryUpdate,
+        wipe
+      });
+      return result.mode === 'restored'
+        ? {
+            title: 'Firmware transferred and verified',
+            message:
+              'Your Ultra is restarting with the selected firmware. This web interface is removed; reinstall Unleashed through classic DFU to return.',
+            device: { state: 'connecting', label: 'Ultra restarting' },
+            final: true
+          }
+        : {
+            title: 'Your Ultra is up to date',
+            message: 'Firmware verified and running. Your slots and settings are preserved.',
+            device: describe(result)
+          };
+    },
+    stopped: (info) =>
+      info && risky
+        ? 'Installation stopped. If this page no longer opens, finish installation through classic DFU.'
+        : 'Update stopped. Reopen this page to install again.',
+    async exit(device, say) {
+      if (device.state === 'recovery') {
+        say('Starting the installed firmware…');
+        await startApplication();
+      }
+      location.href = '/';
+    }
+  });
 }

@@ -439,6 +439,7 @@ button.return:hover {
 }
 button.return::before {
   content: "←";
+  content: "←" / "";
   margin-right: 8px;
 }
 #exit-hint {

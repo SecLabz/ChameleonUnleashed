@@ -1,233 +1,272 @@
 import config from '../../config.json' with { type: 'json' };
-import { inspectFirmware, MAXIMUM_SIZE } from './nordic-package.mjs';
-import { loadCatalogue, downloadFirmware } from './firmware-catalogue.mjs';
 import { connectDfu } from '../device/dfu-bluetooth.mjs';
 import { ask } from './dialogs.mjs';
+import { updateForm, versionLabel } from './firmware-update.mjs';
+import { RECOVERY_LAYOUT } from './nordic-package.mjs';
 
-export async function bleFirmwareUpdate({ transport, signal, beforeDfu = () => {} } = {}) {
-  const base = document.querySelector('meta[name="chameleon-resources"]')?.content ?? config.baseUrl;
-  const dialog = document.createElement('dialog');
-  dialog.className = 'app-dialog firmware-dialog';
-  dialog.setAttribute('aria-labelledby', 'ble-update-title');
-  dialog.innerHTML = `
-    <h2 id="ble-update-title">Firmware update</h2>
-    <p>Update over Bluetooth. Keep your Ultra nearby and this page open.</p>
-    <div class="firmware-fields">
-      <label class="field">Channel<select id="ble-update-channel" aria-label="Channel"><option value="stable">Stable</option><option value="development">Development</option></select></label>
-      <label class="field">Firmware<select id="ble-update-source" aria-label="Firmware"></select></label>
-      <label class="field">Version<select id="ble-update-version" aria-label="Version"></select></label>
+// Mirrors public/update.html: both transports present the same form.
+const SHEET = `
+  <div class="update-page">
+    <div class="update-heading">
+      <h2 id="fw-heading">Firmware update<span aria-hidden="true">.</span></h2>
+      <p class="update-device" id="fw-device" role="status" data-state="connecting">Connecting to your Ultra…</p>
     </div>
-    <details><summary>Update from a file</summary><input id="ble-update-file" type="file" accept=".zip,application/zip" aria-label="Nordic firmware ZIP"></details>
-    <p id="ble-update-status" role="status">Loading releases…</p>
-    <progress id="ble-update-progress" max="1" value="0" aria-label="Firmware update progress" hidden></progress>
-    <div class="dialog-actions"><button class="secondary" id="ble-update-close">Close</button><button class="primary-action" id="ble-update-install" disabled>Prepare update</button></div>`;
-  const $ = (id) => dialog.querySelector('#ble-update-' + id);
-  const controller = new AbortController();
-  const abort = () => controller.abort(signal.reason);
-  signal?.addEventListener('abort', abort, { once: true });
-  const stopped = controller.signal;
-  let catalogue;
-  let generation = 0;
-  let busy = false;
-  let info;
-  let images;
-  let index = 0;
-  let done = false;
-  const sources = () => catalogue?.sources ?? [];
-  const releases = () => sources().find((source) => source.id === $('source').value)?.releases ?? [];
-  const selected = () => releases()[Number($('version').value)];
-  const progress = (value, label) => {
-    $('progress').hidden = false;
-    $('progress').value = value;
-    $('status').textContent = label;
+    <section class="update-card">
+      <div class="update-fields">
+        <div class="update-channel">
+          <label for="fw-channel">Channel</label>
+          <select id="fw-channel" aria-label="Update channel">
+            <option value="stable">Stable</option>
+            <option value="development">Development</option>
+          </select>
+        </div>
+        <div>
+          <label for="fw-source">Firmware</label>
+          <select id="fw-source" aria-label="Firmware source"></select>
+        </div>
+        <div>
+          <label for="fw-version">Version</label>
+          <select id="fw-version" aria-label="Firmware version"></select>
+        </div>
+      </div>
+      <p class="update-note" id="fw-transition" hidden>
+        Complete firmware removes web recovery and may erase saved tags. Export them first.
+      </p>
+      <details>
+        <summary>Update from a file</summary>
+        <label class="update-drop">
+          <input id="fw-file" type="file" accept=".zip,application/zip" aria-label="Nordic firmware ZIP">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 15V4M8 8l4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
+          </svg>
+          Drop or choose a Nordic DFU ZIP
+        </label>
+      </details>
+      <p class="update-hint" id="fw-release" role="status">Loading releases…</p>
+      <div class="update-status">
+        <h3 id="fw-title"></h3>
+        <p id="fw-message" role="status"></p>
+        <progress id="fw-progress" max="1" value="0" aria-label="Firmware update progress" hidden></progress>
+      </div>
+      <button class="update-primary" id="fw-update" type="button" disabled>Install update</button>
+      <button class="update-primary" id="fw-next" type="button" hidden></button>
+      <button class="update-stop" id="fw-stop" type="button" hidden>Stop</button>
+    </section>
+    <footer class="update-footer">
+      <button class="update-return" id="fw-restart" type="button" hidden>Return to Chameleon</button>
+    </footer>
+  </div>`;
+
+/**
+ * The Bluetooth counterpart of the USB update page. A browser opens a Bluetooth
+ * chooser only from a click, so the sheet asks for one per DFU image and one to
+ * reconnect and verify the installed version.
+ * Resolves true when an application was transferred but not verified.
+ */
+export async function bleFirmwareUpdate({ transport, signal, beforeDfu = () => {}, reconnect } = {}) {
+  signal?.throwIfAborted();
+  const lifetime = new AbortController();
+  const dialog = document.createElement('dialog');
+  dialog.className = 'update-sheet';
+  dialog.setAttribute('aria-labelledby', 'fw-heading');
+  dialog.innerHTML = SHEET;
+  const $ = (id) => dialog.querySelector('#fw-' + id);
+  const live = () => transport && !transport.closed;
+  const pill = (state, label) => {
+    $('device').dataset.state = state;
+    $('device').textContent = label;
   };
-  const paint = () => {
-    for (const control of dialog.querySelectorAll('select,input')) {
-      control.disabled = busy || !!images || done;
-    }
-    $('install').disabled =
-      busy || done || stopped.aborted || (!images && !$('file').files.length && !selected());
-    $('install').textContent = images ? 'Connect DFU and install' : 'Prepare update';
-    $('close').textContent = busy ? 'Stop' : 'Close';
-  };
-  const versions = () => {
-    $('version').replaceChildren(...releases().map((release, i) => new Option(release.version, String(i))));
-    $('status').textContent = releases().length
-      ? 'Choose a release or a local Nordic DFU ZIP.'
-      : 'No releases available. You can choose a local Nordic DFU ZIP.';
-    paint();
-  };
-  const catalogueChanged = async () => {
-    const current = ++generation;
-    catalogue = null;
-    $('source').replaceChildren();
-    $('version').replaceChildren();
-    paint();
-    try {
-      const result = await loadCatalogue(stopped, $('channel').value === 'development', base);
-      if (current !== generation || stopped.aborted || busy || images || !dialog.open) {
+  const connected = (version) => ({
+    state: 'connected',
+    label: version === undefined ? 'Ultra connected' : `Ultra connected · v${versionLabel(version)}`,
+    ready: true,
+    exit: true
+  });
+  let dfu = false;
+  let unverified = false;
+
+  // The main button becomes the click a chooser needs. An installation can be
+  // stopped while it waits; a cancelled chooser or failed connection re-arms it.
+  const step = (label, message, action, stopped) =>
+    new Promise((resolve, reject) => {
+      const next = $('next');
+      let settled = false;
+      const abort = () => settle(reject, stopped.reason);
+      const settle = (finish, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        stopped?.removeEventListener('abort', abort);
+        next.hidden = true;
+        $('update').hidden = false;
+        finish(value);
+      };
+      const arm = (text) => {
+        $('update').hidden = true;
+        $('progress').hidden = true;
+        $('stop').hidden = !stopped;
+        $('message').textContent = text;
+        next.textContent = label;
+        next.hidden = false;
+        next.disabled = false;
+        next.onclick = () => {
+          next.disabled = true;
+          // Called synchronously: the chooser still needs this click's activation.
+          action().then(
+            (value) => settle(resolve, value),
+            (error) => {
+              if (stopped?.aborted) {
+                settle(reject, error);
+              } else {
+                arm(error.name === 'NotFoundError' ? message : error.message);
+              }
+            }
+          );
+        };
+      };
+      if (stopped?.aborted) {
+        abort();
         return;
       }
-      catalogue = result;
-      $('source').replaceChildren(...sources().map((source) => new Option(source.label, source.id)));
-      versions();
-    } catch (error) {
-      if (current === generation && !stopped.aborted) {
-        $('status').textContent = error.message;
-        paint();
-      }
-    }
-  };
-
-  async function prepare() {
-    const file = $('file').files[0];
-    if (file && file.size > MAXIMUM_SIZE) {
-      throw new Error('Firmware ZIP is too large.');
-    }
-    const release = selected();
-    const development = $('channel').value === 'development';
-    const bytes = file
-      ? new Uint8Array(await file.arrayBuffer())
-      : await downloadFirmware(
-          release.packages[release.layout === 2 ? 'application' : 'full'],
-          stopped,
-          progress,
-          development,
-          base
-        );
-    info = await inspectFirmware(bytes, stopped);
-    if (transport && !transport.closed) {
-      const device = await transport.request('/api/device');
-      if (device.busy) {
-        throw new Error('Finish the active device operation before updating firmware.');
-      }
-    }
-    const state = transport && !transport.closed ? await transport.request('/api/update') : null;
-    if (!info.restore && state && state.layout !== 2) {
-      throw new Error('Install the complete Unleashed CLI kit first to enable its web recovery bootloader.');
-    }
-    let warning =
-      'Bluetooth DFU rewrites the application and web recovery. If interrupted, reconnect in DFU; USB DFU remains available.';
-    if (!info.restore && !state) {
-      warning =
-        'This application ZIP requires an already installed Unleashed web recovery bootloader. If interrupted, reconnect in DFU; USB DFU remains available.';
-    }
-    if (info.restore) {
-      warning =
-        'Export saved tags first. Replacing system firmware may erase them; an interrupted installation may require USB DFU.';
-    }
-    let message = 'Select your Ultra in DFU to install.';
-    if (transport && !transport.closed) {
-      message =
-        'Your Ultra will restart in DFU. Then select the same Ultra in the Bluetooth window to install.';
-    }
-    if (info.restore) {
-      message = 'This installs the selected firmware and removes web recovery.';
-    }
-    const confirmed = await ask({
-      title: 'Install firmware?',
-      message,
-      warning,
-      confirmLabel: 'Continue',
-      signal: stopped
+      stopped?.addEventListener('abort', abort, { once: true });
+      arm(message);
     });
-    if (!confirmed) {
-      $('status').textContent = 'Update cancelled. Nothing installed.';
-      $('progress').hidden = true;
-      return;
-    }
-    if (transport && !transport.closed) {
-      beforeDfu();
-      progress(0, 'Restarting in DFU…');
-      await transport.enterDfu(stopped);
-    }
-    images = [info.system, info.application].filter(Boolean);
-    $('status').textContent =
-      'Select your Ultra in DFU to install. If it is off, hold B while connecting USB.';
-    $('progress').hidden = true;
-  }
 
-  async function install() {
-    // Called synchronously from the button: requestDevice needs user activation.
-    const connection = connectDfu({ signal: stopped });
-    let dfu;
-    try {
-      dfu = await connection;
+  const verify = (expected) =>
+    step(
+      'Reconnect and verify',
+      'Firmware transferred. When your Ultra has restarted, reconnect it to verify the installed version.',
+      async () => {
+        const next = await reconnect(lifetime.signal);
+        lifetime.signal.throwIfAborted();
+        const running = await next.request('/api/update');
+        if (running.version !== expected) {
+          throw new Error(
+            'The Ultra returned with an unexpected firmware version. Reconnect to check again.'
+          );
+        }
+        return next;
+      },
+      lifetime.signal
+    ).then((next) => {
+      lifetime.signal.throwIfAborted();
+      transport = next;
+      unverified = false;
+      $('title').textContent = 'Your Ultra is up to date';
+      $('message').textContent = 'Firmware verified and running. Your slots and settings are preserved.';
+      pill('connected', `Ultra connected · v${versionLabel(expected)}`);
+    });
+
+  const stop = updateForm($, {
+    base: document.querySelector('meta[name="chameleon-resources"]')?.content ?? config.baseUrl,
+    async refresh() {
+      if (!live()) {
+        return {
+          state: 'disconnected',
+          label: 'Ultra not connected',
+          ready: true,
+          exit: true,
+          note: 'You will select your Ultra in DFU during installation.'
+        };
+      }
+      const state = await transport.request('/api/update').catch(() => null);
+      return connected(state?.version);
+    },
+    async install(bytes, info, { signal, progress }) {
+      dfu = false;
+      const restarting = live();
+      if (restarting) {
+        if ((await transport.request('/api/device')).busy) {
+          throw new Error('Finish the active device operation before updating firmware.');
+        }
+        const state = await transport.request('/api/update');
+        if (!info.restore && state.layout !== RECOVERY_LAYOUT) {
+          throw new Error(
+            'Install the complete Unleashed CLI kit first to enable its web recovery bootloader.'
+          );
+        }
+      }
+      const confirmed = await ask({
+        title: info.restore ? 'Install complete firmware?' : 'Install firmware?',
+        message: restarting
+          ? 'Your Ultra restarts in DFU, then you select it in the Bluetooth window.'
+          : 'You select your Ultra in DFU in the Bluetooth window.',
+        warning: info.restore
+          ? 'This removes web recovery. Export saved tags first: stored data may be erased or incompatible. An interrupted installation may require classic DFU.'
+          : 'Bluetooth installation also replaces web recovery. An interrupted installation may require classic DFU.',
+        confirmLabel: 'Install',
+        signal
+      });
+      if (!confirmed) {
+        return;
+      }
+      if (restarting) {
+        beforeDfu();
+        progress(0, 'Restarting in DFU…');
+        await transport.enterDfu(signal);
+        pill('recovery', 'Ultra in DFU mode');
+      }
+      dfu = true;
+      const images = [info.system, info.application].filter(Boolean);
       const total = images.reduce((sum, image) => sum + image.payload.length, 0);
-      const previous = images.slice(0, index).reduce((sum, image) => sum + image.payload.length, 0);
-      const image = images[index];
-      await dfu.flash(image, (value, label) =>
-        progress((previous + value * image.payload.length) / total, label)
-      );
-      index++;
-      if (index === images.length) {
-        done = true;
-        progress(
-          1,
-          info.restore
-            ? 'Firmware accepted. Reconnect using its application.'
-            : 'Firmware accepted. Reconnect your Ultra to verify the installed version.'
-        );
-      } else {
-        $('status').textContent =
-          'System firmware accepted. Select the same Ultra in DFU again to install the application.';
+      let installed = 0;
+      for (const image of images) {
+        let message = 'Select your Ultra in DFU. If it is off, hold B while connecting USB.';
+        if (installed) {
+          message = 'System firmware installed. Select your Ultra in DFU again to install the application.';
+        } else if (restarting) {
+          message = 'Your Ultra restarted in DFU. Select it in the Bluetooth window.';
+        }
+        const session = await step('Select Ultra in DFU', message, () => connectDfu({ signal }), signal);
+        try {
+          await session.flash(image, (value, label) =>
+            progress((installed + value * image.payload.length) / total, label)
+          );
+        } finally {
+          session.close();
+        }
+        installed += image.payload.length;
       }
-    } finally {
-      dfu?.close();
-    }
-  }
+      const restarted = { state: 'connecting', label: 'Ultra restarting', ready: true, exit: true };
+      if (info.restore) {
+        return {
+          title: 'Firmware transferred and verified',
+          message:
+            'Your Ultra is restarting with the selected firmware. Web recovery is removed; reinstall Unleashed through classic DFU to return.',
+          device: restarted,
+          final: true
+        };
+      }
+      unverified = true;
+      void verify(info.version).catch(() => {}); // Closing the sheet cancels optional verification.
+      return { title: '', message: $('message').textContent, device: restarted, final: true };
+    },
+    stopped: () =>
+      dfu
+        ? 'Update stopped. Install again and select your Ultra in DFU; classic DFU remains available.'
+        : 'Update stopped. Nothing installed.',
+    exit: () => dialog.close()
+  });
 
-  $('install').onclick = async () => {
-    if (busy || done || stopped.aborted) {
-      return;
-    }
-    busy = true;
-    paint();
-    try {
-      if (images) {
-        await install();
-      } else {
-        await prepare();
-      }
-    } catch (error) {
-      if (error.name !== 'NotFoundError') {
-        $('status').textContent = stopped.aborted
-          ? 'Stopped. Reconnect in DFU and install again.'
-          : error.message;
-      }
-    } finally {
-      busy = false;
-      paint();
-    }
-  };
-  $('channel').onchange = catalogueChanged;
-  $('source').onchange = versions;
-  $('version').onchange = paint;
-  $('file').onchange = () => {
-    $('status').textContent = $('file').files[0]?.name ?? 'Choose a release or a local Nordic DFU ZIP.';
-    paint();
-  };
-  const close = () => {
-    if (busy) {
-      controller.abort(new Error('Update stopped'));
-    } else {
+  dialog.oncancel = (event) => {
+    event.preventDefault();
+    if (!$('restart').hidden) {
       dialog.close();
     }
   };
-  $('close').onclick = close;
-  dialog.oncancel = (event) => {
-    event.preventDefault();
-    close();
-  };
+  const close = () => dialog.close();
+  signal?.addEventListener('abort', close, { once: true });
   document.body.append(dialog);
   dialog.showModal();
-  void catalogueChanged();
   try {
     await new Promise((resolve) => dialog.addEventListener('close', resolve, { once: true }));
   } finally {
-    controller.abort();
-    signal?.removeEventListener('abort', abort);
+    lifetime.abort(new Error('Firmware update closed'));
+    stop();
+    signal?.removeEventListener('abort', close);
     dialog.remove();
   }
-  return done && !info.restore;
+  return unverified;
 }

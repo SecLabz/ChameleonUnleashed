@@ -21,10 +21,10 @@ print(json.dumps({name:{'zip':base64.b64encode(archive(*f[name],*(f['system'] if
   )
 );
 
-async function dfu(page, sizes, failCrc = false, fast = false) {
+async function dfu(page, sizes, { failCrc = false, fast = false, cancelFirst = false } = {}) {
   await page.addInitScript(
-    ({ sizes, failCrc, fast }) => {
-      window.dfuTest = { choices: 0, activated: [], packetBytes: 0 };
+    ({ sizes, failCrc, fast, cancelFirst }) => {
+      window.dfuTest = { choices: 0, prompts: 0, activated: [], packetBytes: 0 };
       const crc32 = (bytes) => {
         let crc = 0xffffffff;
         for (const byte of bytes) {
@@ -45,6 +45,9 @@ async function dfu(page, sizes, failCrc = false, fast = false) {
           async requestDevice(options) {
             if (options.filters[0].services[0] !== 0xfe59 || options.filters[0].namePrefix !== 'CU-') {
               throw new Error('Expected Nordic DFU service');
+            }
+            if (cancelFirst && window.dfuTest.prompts++ === 0) {
+              throw new DOMException('User cancelled the requestDevice() chooser.', 'NotFoundError');
             }
             const choice = window.dfuTest.choices++;
             const device = new EventTarget();
@@ -128,37 +131,139 @@ async function dfu(page, sizes, failCrc = false, fast = false) {
         }
       });
     },
-    { sizes, failCrc, fast }
+    { sizes, failCrc, fast, cancelFirst }
   );
 }
 
-async function prepare(page, name) {
+const zip = (name) => ({
+  name: name + '.zip',
+  mimeType: 'application/zip',
+  buffer: Buffer.from(fixtures[name].zip, 'base64')
+});
+
+async function prepare(page, name, confirmTitle = 'Install firmware?') {
   await page.goto('./#device');
   await page.locator('#firmware-update-link').click();
   const modal = page.getByRole('dialog', { name: 'Firmware update', exact: true });
   await expect(modal).toBeVisible();
-  await modal.getByLabel('Nordic firmware ZIP').setInputFiles({
-    name: name + '.zip',
-    mimeType: 'application/zip',
-    buffer: Buffer.from(fixtures[name].zip, 'base64')
-  });
-  await modal.getByRole('button', { name: 'Prepare update', exact: true }).click();
-  const confirm = page.getByRole('dialog', { name: 'Install firmware?', exact: true });
+  await modal.getByLabel('Nordic firmware ZIP').setInputFiles(zip(name));
+  await modal.getByRole('button', { name: 'Install selected ZIP', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: confirmTitle, exact: true });
   await expect(confirm).toBeVisible();
   return { modal, confirm };
 }
 
-test('a hosted BLE updater transfers an application and waits for the bootloader reset', async ({ page }) => {
+// Mounts the sheet directly, as the app does, with a stubbed reconnection.
+async function sheet(page, { transport, version, deferReconnect = false } = {}) {
+  await page.goto('./#device');
+  await page.evaluate(
+    async ({ transport, version, deferReconnect }) => {
+      const { bleFirmwareUpdate } = await import(new URL('ble-update.mjs', document.baseURI).href);
+      window.enteredDfu = 0;
+      window.reconnects = 0;
+      window.sheetResult = bleFirmwareUpdate({
+        transport: transport && {
+          closed: false,
+          async request(path) {
+            return path === '/api/device'
+              ? { busy: transport.busy }
+              : { layout: transport.layout, version: 1 };
+          },
+          async enterDfu() {
+            window.enteredDfu++;
+          }
+        },
+        reconnect: async (signal) => {
+          window.reconnects++;
+          if (deferReconnect) {
+            window.verifySignal = signal;
+            await new Promise((resolve) => {
+              window.finishReconnect = resolve;
+            });
+          }
+          window.verificationRequests = 0;
+          return {
+            request: async () => {
+              window.verificationRequests++;
+              return { version: window.reconnects === 1 ? version - 1 : version };
+            }
+          };
+        }
+      });
+    },
+    { transport, version, deferReconnect }
+  );
+  const modal = page.getByRole('dialog', { name: 'Firmware update', exact: true });
+  await expect(modal).toBeVisible();
+  return modal;
+}
+
+test('a hosted BLE update matches the USB page and asks once per Bluetooth chooser', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await dfu(page, fixtures.normal.sizes, false, true);
+  await dfu(page, fixtures.normal.sizes, { fast: true });
   const { modal, confirm } = await prepare(page, 'normal');
-  await confirm.getByRole('button', { name: 'Continue', exact: true }).click();
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText('Firmware accepted. Reconnect your Ultra');
+  await expect(confirm).toContainText('replaces web recovery');
+  await confirm.getByRole('button', { name: 'Install', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Install selected ZIP' })).toBeHidden();
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Reconnect and verify', exact: true })).toBeEnabled();
+  await expect(modal.locator('#fw-message')).toContainText('Firmware transferred');
   expect(await page.evaluate(() => window.dfuTest.choices)).toBe(1);
-  await modal.getByRole('button', { name: 'Close', exact: true }).click();
+  await modal.getByRole('button', { name: 'Return to Chameleon', exact: true }).click();
   await expect(modal).toHaveCount(0);
+  await expect(page.locator('#toast')).toContainText('Reconnect Bluetooth to verify');
+  expect(errors).toEqual([]);
+});
+
+test('the sheet reconnects and verifies the installed version before reporting success', async ({ page }) => {
+  await dfu(page, fixtures.normal.sizes);
+  const modal = await sheet(page, { version: 0x1000001 });
+  await expect(modal.locator('#fw-device')).toHaveText('Ultra not connected');
+  await modal.getByLabel('Nordic firmware ZIP').setInputFiles(zip('normal'));
+  await modal.getByRole('button', { name: 'Install selected ZIP', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Install firmware?', exact: true })
+    .getByRole('button', { name: 'Install', exact: true })
+    .click();
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  const verify = modal.getByRole('button', { name: 'Reconnect and verify', exact: true });
+  for (const control of await modal.locator('select,input').all()) {
+    await expect(control).toBeDisabled();
+  }
+  await verify.click();
+  await expect(modal.locator('#fw-message')).toContainText('unexpected firmware version');
+  await expect(modal.locator('#fw-title')).toBeEmpty();
+  await verify.click();
+  await expect(modal.locator('#fw-title')).toHaveText('Your Ultra is up to date');
+  await expect(modal.locator('#fw-device')).toHaveText('Ultra connected · v1.0.1');
+  await expect(verify).toBeHidden();
+  await modal.getByRole('button', { name: 'Return to Chameleon', exact: true }).click();
+  expect(await page.evaluate(() => window.sheetResult)).toBe(false);
+});
+
+test('closing the sheet cancels a pending verification without using a late connection', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await dfu(page, fixtures.normal.sizes);
+  const modal = await sheet(page, { version: 0x1000001, deferReconnect: true });
+  await modal.getByLabel('Nordic firmware ZIP').setInputFiles(zip('normal'));
+  await modal.getByRole('button', { name: 'Install selected ZIP', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Install firmware?', exact: true })
+    .getByRole('button', { name: 'Install', exact: true })
+    .click();
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await modal.getByRole('button', { name: 'Reconnect and verify', exact: true }).click();
+  await modal.getByRole('button', { name: 'Return to Chameleon', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  expect(await page.evaluate(() => window.sheetResult)).toBe(true);
+  expect(await page.evaluate(() => window.verifySignal.aborted)).toBe(true);
+  await page.evaluate(async () => {
+    window.finishReconnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(await page.evaluate(() => window.verificationRequests)).toBe(0);
   expect(errors).toEqual([]);
 });
 
@@ -166,25 +271,29 @@ test('restoring Official requires confirmation and a separate DFU connection for
   page
 }) => {
   await dfu(page, fixtures.legacy.sizes);
-  const { modal, confirm } = await prepare(page, 'legacy');
+  const { modal, confirm } = await prepare(page, 'legacy', 'Install complete firmware?');
+  await expect(modal.locator('#fw-transition')).toBeVisible();
   await expect(confirm).toContainText('removes web recovery');
   await expect(confirm).toContainText('Export saved tags first');
-  await confirm.getByRole('button', { name: 'Continue', exact: true }).click();
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText('System firmware accepted');
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText(
-    'Firmware accepted. Reconnect using its application.'
-  );
+  await confirm.getByRole('button', { name: 'Install', exact: true }).click();
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await expect(modal.locator('#fw-message')).toContainText('System firmware installed');
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await expect(modal.locator('#fw-title')).toHaveText('Firmware transferred and verified');
   expect(await page.evaluate(() => window.dfuTest.choices)).toBe(2);
+  await expect(modal.getByRole('button', { name: 'Reconnect and verify' })).toBeHidden();
+  await modal.getByRole('button', { name: 'Return to Chameleon', exact: true }).click();
+  await expect(modal).toHaveCount(0);
 });
 
 test('a CRC mismatch stops installation and never claims success', async ({ page }) => {
-  await dfu(page, fixtures.normal.sizes, true);
+  await dfu(page, fixtures.normal.sizes, { failCrc: true });
   const { modal, confirm } = await prepare(page, 'normal');
-  await confirm.getByRole('button', { name: 'Continue', exact: true }).click();
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText('CRC mismatch');
+  await confirm.getByRole('button', { name: 'Install', exact: true }).click();
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await expect(modal.locator('#fw-message')).toContainText('CRC mismatch');
+  await expect(modal.locator('#fw-title')).toBeEmpty();
+  await expect(modal.getByRole('button', { name: 'Install selected ZIP', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => window.dfuTest.activated)).toEqual([]);
 });
 
@@ -192,7 +301,29 @@ test('cancelling confirmation leaves the Ultra untouched', async ({ page }) => {
   await dfu(page, fixtures.normal.sizes);
   const { modal, confirm } = await prepare(page, 'normal');
   await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(modal.getByRole('button', { name: 'Prepare update', exact: true })).toBeEnabled();
+  await expect(modal.locator('#fw-message')).toHaveText('Update cancelled. Nothing installed.');
+  await expect(modal.getByRole('button', { name: 'Install selected ZIP', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => window.dfuTest.choices)).toBe(0);
+});
+
+test('a dismissed chooser asks again; Escape cannot interrupt and Stop explains how to resume', async ({
+  page
+}) => {
+  await dfu(page, fixtures.normal.sizes, { cancelFirst: true });
+  const { modal, confirm } = await prepare(page, 'normal');
+  await confirm.getByRole('button', { name: 'Install', exact: true }).click();
+  const select = modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true });
+  await select.click();
+  await expect(select).toBeEnabled();
+  expect(await page.evaluate(() => window.dfuTest.prompts)).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Return to Chameleon' })).toBeHidden();
+  await modal.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(modal.locator('#fw-message')).toContainText('Install again and select your Ultra in DFU');
+  await expect(select).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
   expect(await page.evaluate(() => window.dfuTest.choices)).toBe(0);
 });
 
@@ -213,7 +344,14 @@ test('mobile catalogue selection downloads the dev ZIP from the shared Pages pre
             id: 'unleashed',
             label: 'Unleashed',
             releases: route.request().url().includes('/dev/')
-              ? [{ version: 'v1.0.0-dev.0573e5b', layout: 2, packages: { application: asset } }]
+              ? [
+                  {
+                    version: 'v1.0.0-dev.0573e5b',
+                    prerelease: true,
+                    layout: 2,
+                    packages: { application: asset }
+                  }
+                ]
               : []
           }
         ]
@@ -228,17 +366,19 @@ test('mobile catalogue selection downloads the dev ZIP from the shared Pages pre
   await page.goto('./#device');
   await page.locator('#firmware-update-link').click();
   const modal = page.getByRole('dialog', { name: 'Firmware update', exact: true });
-  await modal.getByLabel('Channel', { exact: true }).selectOption('development');
-  await expect(modal.getByLabel('Version', { exact: true })).toHaveText('v1.0.0-dev.0573e5b');
+  await modal.getByLabel('Update channel').selectOption('development');
+  await expect(modal.getByLabel('Firmware version')).toHaveValue('v1.0.0-dev.0573e5b');
+  await expect(modal.getByLabel('Firmware version').locator('option')).toHaveText('v1.0.0 · 0573e5b');
   expect(await modal.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('ble-update-mobile.png') });
-  await modal.getByRole('button', { name: 'Prepare update', exact: true }).click();
+  await modal.getByRole('button', { name: 'Install update', exact: true }).click();
   await page
     .getByRole('dialog', { name: 'Install firmware?', exact: true })
-    .getByRole('button', { name: 'Continue', exact: true })
+    .getByRole('button', { name: 'Install', exact: true })
     .click();
-  await modal.getByRole('button', { name: 'Connect DFU and install', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText('Firmware accepted');
+  await modal.getByRole('button', { name: 'Select Ultra in DFU', exact: true }).click();
+  await expect(modal.locator('#fw-message')).toContainText('Firmware transferred');
+  await page.screenshot({ path: testInfo.outputPath('ble-update-verify.png') });
   expect(downloads).toHaveLength(1);
   expect(downloads[0]).toContain('/project/ChameleonUnleashed/updates/dev/files/');
 });
@@ -251,30 +391,11 @@ for (const state of [
     page
   }) => {
     await dfu(page, fixtures.normal.sizes);
-    await page.goto('./#device');
-    await page.evaluate(async (state) => {
-      const { bleFirmwareUpdate } = await import(new URL('ble-update.mjs', document.baseURI).href);
-      window.enteredDfu = 0;
-      void bleFirmwareUpdate({
-        transport: {
-          closed: false,
-          async request(path) {
-            return path === '/api/device' ? { busy: state.busy } : { layout: state.layout };
-          },
-          async enterDfu() {
-            window.enteredDfu++;
-          }
-        }
-      });
-    }, state);
-    const modal = page.getByRole('dialog', { name: 'Firmware update', exact: true });
-    await modal.getByLabel('Nordic firmware ZIP').setInputFiles({
-      name: 'app.zip',
-      mimeType: 'application/zip',
-      buffer: Buffer.from(fixtures.normal.zip, 'base64')
-    });
-    await modal.getByRole('button', { name: 'Prepare update', exact: true }).click();
-    await expect(modal.getByRole('status')).toContainText(
+    const modal = await sheet(page, { transport: state });
+    await expect(modal.locator('#fw-device')).toHaveText('Ultra connected · v0.0.1');
+    await modal.getByLabel('Nordic firmware ZIP').setInputFiles(zip('normal'));
+    await modal.getByRole('button', { name: 'Install selected ZIP', exact: true }).click();
+    await expect(modal.locator('#fw-message')).toContainText(
       state.busy ? 'Finish the active device operation' : 'Install the complete Unleashed CLI kit'
     );
     expect(await page.evaluate(() => window.enteredDfu)).toBe(0);

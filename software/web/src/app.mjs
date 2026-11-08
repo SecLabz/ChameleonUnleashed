@@ -117,12 +117,18 @@ const views = deviceViews({
   notify,
   canConnect: () => !state.controller,
   async onFirmwareUpdate(transport, beforeDfu) {
-    let reconnect = false;
+    let unverified = false;
     await physicalTask(async (signal) => {
       const { bleFirmwareUpdate } = await import(appUrl('ble-update.mjs'));
-      reconnect = await bleFirmwareUpdate({ transport, signal, beforeDfu });
+      unverified = await bleFirmwareUpdate({
+        transport,
+        signal,
+        beforeDfu,
+        // The update owns the device until it closes: verification reconnects inside it.
+        reconnect: (signal) => views.connect(true, signal)
+      });
     });
-    if (reconnect) {
+    if (unverified) {
       notify('Update transferred. Reconnect Bluetooth to verify the firmware.', false, {
         label: 'Reconnect',
         run: views.connect
