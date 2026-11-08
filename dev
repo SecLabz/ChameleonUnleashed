@@ -56,6 +56,7 @@ def main(argv=None):
   ./dev build         Build firmware and the matching CDN archive
   ./dev flash         Build and flash the application over USB
   ./dev serve         Serve web sources; refresh after edits
+  ./dev serve ble     Serve the Bluetooth app locally
   ./dev cdn           Build and package the CDN resources
 
 Run ./dev COMMAND --help for options.''',
@@ -91,8 +92,10 @@ CLI prerequisites: Python, Git, Rust and a native linker.'''
             command.add_argument('--install-recovery', action='store_true',
                                  help='Install Nordic ZIP web recovery (bootloader v5)')
         if name == 'serve':
+            command.add_argument('transport', nargs='?', choices=['usb', 'ble'], default='usb',
+                                 help='Device transport (default: usb)')
             command.add_argument('--port', type=int, default=8080)
-            command.add_argument('--device', default='http://192.168.16.1')
+            command.add_argument('--device', default='http://192.168.16.1', help='USB device origin')
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -143,7 +146,8 @@ CLI prerequisites: Python, Git, Rust and a native linker.'''
                 print('Preparing local WASM and tables.', flush=True)
                 web(source, True, env, args.shared_source is not None, None)
 
-            serve(ROOT / 'software/web', cache, source, args.device, args.port)
+            device = args.device if args.transport == 'usb' else None
+            serve(ROOT / 'software/web', cache, source, device, args.port)
             return
 
         web(source, False, env, args.shared_source is not None, args.asset_base)

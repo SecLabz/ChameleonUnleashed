@@ -1,4 +1,4 @@
-"""Serve local web resources and relay the Ultra's HTTP API."""
+"""Serve live web sources over USB or Bluetooth with local resources."""
 
 from functools import partial
 from http.client import HTTPConnection, HTTPException
@@ -108,7 +108,11 @@ class Handler(SimpleHTTPRequestHandler):
         name = urlsplit(self.path).path
         from build_recovery import assets
         files = assets('/')
-        asset = 'update.html' if name == '/update' else name.removeprefix('/')
+        if self.device is None and name in {'/', '/index.html'}:
+            files['index.html'] = (Path(self.directory) / 'index.html').read_bytes().replace(
+                b'</head>', b'<meta name="chameleon-hosted" content="1">\n'
+                b'<meta name="chameleon-resources" content="/">\n</head>')
+        asset = 'update.html' if name == '/update' else name.removeprefix('/') or 'index.html'
         if asset in files:
             body = files[asset]
             self.send_response(200)
@@ -144,6 +148,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def relay(self):
+        if self.device is None:
+            self.send_error(404)
+            return
         port = self.server.server_port
         host = self.headers.get('Host')
         origin = self.headers.get('Origin')
@@ -208,8 +215,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def server(site, resources, device, port, bundle=None):
-    address = urlsplit(device)
-    if (
+    address = urlsplit(device) if device is not None else None
+    if address is not None and (
         address.scheme != 'http' or not address.hostname or address.username or address.password
         or address.path not in {'', '/'} or address.query or address.fragment
     ):
@@ -222,6 +229,7 @@ def server(site, resources, device, port, bundle=None):
 def serve(web, cache, shared, device, port):
     build = partial(bundle, web=web, cache=cache, shared=shared, bundler=ensure_esbuild())
     with server(web / 'public', cache / 'cdn', device, port, bundle=build) as http:
-        print(f'Local interface: http://127.0.0.1:{http.server_port} (device: {device})', flush=True)
+        mode = f'USB device: {device}' if device is not None else 'Bluetooth'
+        print(f'Local interface: http://127.0.0.1:{http.server_port} ({mode})', flush=True)
         print('Refresh after web edits. After Rust changes, run ./dev cdn with the same --shared-source.', flush=True)
         http.serve_forever()
