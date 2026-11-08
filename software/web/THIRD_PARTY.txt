@@ -15,3 +15,6 @@ https://github.com/SecLabz/nfc-libs-rs (GPL-3.0-or-later). Its LICENSE and
 docs/licenses accompany each engine and Hardnested table pack.
 
 The firmware retains its existing Nordic SDK and other upstream notices.
+
+Recovery ZIP reader: fflate 0.8.2, MIT, Copyright (c) 2023 Arjun Barrett.
+Full license: src/vendor/fflate.LICENSE.txt (also embedded at /fflate.LICENSE.txt).

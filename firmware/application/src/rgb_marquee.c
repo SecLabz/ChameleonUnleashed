@@ -1,4 +1,3 @@
-#include "math.h"
 #include "nrf_gpio.h"
 #include "hw_connect.h"
 #include "bsp_delay.h"
@@ -57,8 +56,21 @@ void rgb_marquee_reset(void) {
 }
 
 // Brightness to PWM value
-uint16_t get_pwmduty(uint8_t light_level) {
-    return PWM_MAX - (PWM_MAX * pow(((double)light_level / LIGHT_LEVEL_MAX), 2.2));
+static uint16_t get_pwmduty(uint8_t light_level) {
+    /* PWM_MAX * (1 - (level / LIGHT_LEVEL_MAX)^2.2), truncated as before. */
+    static const uint16_t duty[LIGHT_LEVEL_MAX + 1] = {
+        1000, 999, 999, 999, 999, 998, 997, 997, 996, 994,
+        993, 992, 990, 988, 986, 984, 981, 979, 976, 973,
+        970, 967, 963, 959, 955, 951, 947, 942, 937, 932,
+        927, 922, 916, 910, 904, 898, 891, 885, 878, 871,
+        863, 856, 848, 840, 832, 823, 814, 805, 796, 787,
+        777, 767, 757, 747, 736, 725, 714, 703, 691, 679,
+        667, 655, 642, 630, 617, 603, 590, 576, 562, 548,
+        533, 518, 503, 488, 472, 457, 441, 424, 408, 391,
+        374, 356, 339, 321, 303, 284, 266, 247, 228, 208,
+        189, 169, 148, 128, 107, 86, 65, 43, 22, 0,
+    };
+    return duty[MIN(light_level, LIGHT_LEVEL_MAX)];
 }
 
 // 4 Lights and the level of brightness levels (no return)

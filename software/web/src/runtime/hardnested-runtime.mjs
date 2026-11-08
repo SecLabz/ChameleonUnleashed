@@ -1,6 +1,7 @@
 import { createClient } from './nfc-wasm/index.mjs';
 import { HARDNESTED } from './hardnested-build.mjs';
 import { getResource, resourceUrl } from './assets.mjs';
+import { appUrl } from './environment.mjs';
 
 export const HARDNESTED_URL = resourceUrl('hardnested/');
 
@@ -20,7 +21,7 @@ export function supportsSimd() {
 
 export async function createHardnestedRuntime(
   signal,
-  workerFactory = () => new Worker('/worker.mjs', { type: 'module' })
+  workerFactory = () => new Worker(appUrl('worker.mjs'), { type: 'module' })
 ) {
   const variants = supportsSimd() ? [HARDNESTED.simd, HARDNESTED.scalar] : [HARDNESTED.scalar];
 

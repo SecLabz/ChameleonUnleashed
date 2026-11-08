@@ -6,7 +6,8 @@ GROUP(-lgcc -lc -lnosys)
 MEMORY
 {
   /* FDS: 22 virtual pages of 8192 bytes below bootloader 0xF3000. */
-  FLASH (rx) : ORIGIN = 0x27000, LENGTH = 0xA0000
+  /* Permanent recovery 0x27000..0x3AFFF; commit/header page at 0x3B000. */
+  FLASH (rx) : ORIGIN = 0x3C000, LENGTH = 0x8B000
   RAM (rwx) :  ORIGIN = 0x20002ae8, LENGTH = 0x35518
 }
 

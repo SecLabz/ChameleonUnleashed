@@ -146,6 +146,39 @@ class LocalServerTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/')[2], b'edited page')
         self.assertEqual(self.request('GET', '/style.css')[2], b'body { color: red; }')
 
+    def test_ble_mode_uses_live_html_and_local_resources_without_usb_relay(self):
+        self.http = self.start(serve_web.server(self.site, self.resources, None, 0))
+        for label in ('first', 'edited'):
+            (self.site / 'index.html').write_text(f'<html><head></head><body>{label}</body></html>')
+            for path in ('/', '/index.html?v=edited'):
+                status, headers, body = self.request('GET', path)
+                self.assertEqual(status, 200)
+                self.assertTrue(headers['content-type'].startswith('text/html'))
+                self.assertEqual(headers['cache-control'], 'no-store')
+                self.assertIn(b'<meta name="chameleon-hosted" content="1">', body)
+                self.assertIn(b'<meta name="chameleon-resources" content="/">', body)
+                self.assertNotIn(b'chameleon-shell', body)
+                self.assertIn(label.encode(), body)
+        self.assertEqual(self.request('GET', '/core/module.wasm')[2], b'local wasm')
+        self.assertEqual(self.request('GET', '/api/device')[0], 404)
+        self.assertEqual(self.request('POST', '/api/session', b'')[0], 404)
+        self.assertEqual(self.device.calls, [])
+
+    def test_updater_serves_every_embedded_module_license_and_local_resource_url(self):
+        from build_recovery import assets
+        for name, expected in assets('/').items():
+            with self.subTest(name=name):
+                status, headers, body = self.request('GET', '/' + name + '?v=edited')
+                self.assertEqual((status, body), (200, expected))
+                if name.endswith('.mjs'):
+                    self.assertTrue(headers['content-type'].startswith('text/javascript'))
+        self.assertEqual(self.request('GET', '/update')[2], assets('/')['update.html'])
+        self.assertIn(b'RESOURCE_BASE = "/"', self.request('GET', '/update-config.mjs')[2])
+        catalogue = self.resources / 'updates/catalog.json'
+        catalogue.parent.mkdir()
+        catalogue.write_bytes(b'{"format":1,"sources":[]}')
+        self.assertEqual(self.request('GET', '/updates/catalog.json')[2], catalogue.read_bytes())
+
     def test_bundles_use_current_sources_and_generated_definitions(self):
         self.enable_bundles()
         output = self.app_output()

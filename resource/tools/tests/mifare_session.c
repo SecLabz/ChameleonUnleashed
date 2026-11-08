@@ -4,6 +4,7 @@
 #include <string.h>
 #include "app_status.h"
 #include "data_cmd.h"
+#include "net/ble_api.h"
 #include "mf1_capture_stats.h"
 #include "nrf.h"
 
@@ -17,6 +18,7 @@ static void mf1_darkside_reset(void) {}
 static void desfire_reader_invalidate(void) {}
 static void hf_sniff_stop(void) {
 }
+static bool tag_emulation_web_link_stop(void) { return false; }
 #define DEVICE_MODE_READER 1
 #define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
 #define NRF_LOG_INFO(...) ((void)0)
@@ -25,6 +27,14 @@ static uint32_t rtc_ticks;
 static int mode = DEVICE_MODE_READER, resets, field_on, field_off;
 static uint8_t capture_status;
 static bool web_owned;
+enum { DATA_SOURCE_BLE = 1 };
+static unsigned frame_source, ble_calls;
+static unsigned data_frame_source(void) { return frame_source; }
+uint16_t ble_api_request(const uint8_t *request, size_t size, uint8_t *out,
+    size_t capacity, uint16_t *length) {
+    assert(web_owned && capacity == BLE_API_RESPONSE_MAX);
+    ble_calls++; *length = 0; return STATUS_SUCCESS;
+}
 static bool web_session_active(void) { return web_owned; }
 static uint32_t app_timer_cnt_get(void) { return rtc_ticks; }
 static uint32_t app_timer_cnt_diff_compute(uint32_t now, uint32_t before) {
@@ -210,6 +220,15 @@ int main(void) {
     control(1); capture(); previous_resets = resets;
     on_data_frame_received(2027, 0, sizeof(legacy_sector), legacy_sector);
     assert(!active && !reading && resets == previous_resets + 1);
+    // Optional diagnostics retain the checked-read lifecycle without new resets.
+    uint8_t detailed_sector[] = {0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                4, 1, 2, 3, 4, 1};
+    previous_resets = resets;
+    on_data_frame_received(2027, 0, sizeof(detailed_sector), detailed_sector);
+    assert(active && reading && resets == previous_resets + 1);
+    on_data_frame_received(2027, 0, sizeof(detailed_sector), detailed_sector);
+    assert(active && reading && resets == previous_resets + 1);
+    control(0);
     // Capture-to-read transitions must prepare a new RF lease.
     control(1); capture(); previous_resets = resets;
     on_data_frame_received(2027, 0, 0, NULL);
@@ -234,5 +253,17 @@ int main(void) {
     assert(!active && !prepared && resets == previous_resets + 1);
     nfca_finish(DATA_CMD_MF1_MAGIC_PROBE);
     assert(!active && !reading);
+    control(1); capture();
+    assert(active && prepared);
+    previous_resets = resets; previous_off = field_off;
+    web_owned = true; frame_source = DATA_SOURCE_BLE;
+    on_data_frame_received(DATA_CMD_WEB_API, 0, 0, NULL);
+    assert(ble_calls == 1 && frame.status == STATUS_SUCCESS);
+    assert(active && prepared && resets == previous_resets && field_off == previous_off);
+    frame_source = 0;
+    on_data_frame_received(DATA_CMD_WEB_API, 0, 0, NULL);
+    assert(ble_calls == 1 && frame.status == STATUS_NOT_IMPLEMENTED);
+    assert(active && prepared && resets == previous_resets && field_off == previous_off);
+    web_owned = false; control(0);
     return 0;
 }

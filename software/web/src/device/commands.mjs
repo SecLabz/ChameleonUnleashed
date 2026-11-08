@@ -1,5 +1,6 @@
 // USB/BLE command IDs from firmware/application/src/data_cmd.h.
 export const COMMAND = {
+  ENTER_BOOTLOADER: 1010,
   SLIX_PRIVACY_SCAN: 2312,
   SCAN_A: 2000,
   CLASSIC_PRNG: 2002,
@@ -19,6 +20,7 @@ export const COMMAND = {
   SET_BLOCK0: 2038,
   CLASSIC_MAINTENANCE: 2039,
   CLASSIC_INSPECT: 2040,
+  CLASSIC_BATCH: 2042,
   NFCV_INVENTORY: 2300,
   NFCV_SYSTEM_INFO: 2301,
   SCAN_B: 2304,

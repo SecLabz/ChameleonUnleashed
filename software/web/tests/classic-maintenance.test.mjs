@@ -4,6 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inspectClassic } from '../../../.cache/web/assets/modules/device/classic-inspect.mjs';
 import { repairBlock0, factoryTrailer, maintenanceSectors } from '../src/documents/classic-maintenance.mjs';
+import { createEngine } from '../../../.cache/web/assets/modules/runtime/nfc-wasm/engine.mjs';
+import { readFile } from 'node:fs/promises';
 
 const card = { uid: [1, 2, 3, 4], atqa: [0, 4], sak: 8 };
 
@@ -80,6 +82,23 @@ test('block-0 repair changes only identity bytes and respects UID layout and man
   assert.deepEqual(seven.slice(10), before.slice(10));
 });
 
+test('2K repair preserves observed SL1 or SL2 SAK using production geometry', async () => {
+  const before = Array.from({ length: 16 }, (_, index) => index);
+  const call = await createEngine(
+    await readFile(
+      new URL('../../../.cache/web/wasm/wasm32-unknown-unknown/release/nfc_wasm.wasm', import.meta.url)
+    )
+  );
+  const geometry = call({ op: 'classic_geometry', sak: 16 });
+  assert.equal(geometry.blocks, 128);
+  assert.equal(geometry.sak, 8, 'selector 16 selects 2K, whose canonical SL1 SAK is 08');
+  assert.equal(repairBlock0(before, card.uid, geometry, 8)[5], 8);
+  assert.equal(repairBlock0(before, card.uid, geometry, 16)[5], 16);
+  assert.equal(repairBlock0(before, card.uid, geometry)[5], 8);
+  assert.deepEqual(repairBlock0(before, [4, 1, 2, 3, 4, 5, 6], geometry, 8).slice(7, 10), [8, 0x44, 0]);
+  assert.throws(() => repairBlock0(before, card.uid, geometry, 24), /SAK/);
+});
+
 test('factory trailers and explicit repair sector selection are distinct', () => {
   assert.deepEqual(factoryTrailer().slice(6, 10), [255, 7, 128, 105]);
   assert.deepEqual(factoryTrailer(true).slice(6, 10), [255, 7, 128, 188]);
@@ -103,4 +122,28 @@ test('maintenance rejects a mismatching response UID without changing the bound 
     /target changed/
   );
   assert.deepEqual(options.uid, [1, 2, 3, 4]);
+});
+
+test('checked 2K maintenance requires its flag on reads and mutations without a legacy retry', async () => {
+  const options = { method: 3, model: 6, uid: [1, 2, 3, 4], capacityCheck: true };
+  const credential = { key: Array(6).fill(255), keyB: false };
+  for (const [change, check, expected] of [
+    [null, false, 20],
+    [{ before: Array(16).fill(0), after: Array(16).fill(42) }, true, 52],
+    [{ before: Array(16).fill(0), after: Array(16).fill(42) }, false, 52]
+  ]) {
+    const device = new Device();
+    let calls = 0;
+    const reject = async (number, request) => {
+      calls++;
+      assert.equal(number, 2039);
+      assert.equal(request.length, expected);
+      assert.equal(request.at(-1), 1);
+      throw Object.assign(new Error('old firmware rejects checked maintenance'), { status: 0x60 });
+    };
+    device.command = reject;
+    device.writeCommand = reject;
+    await assert.rejects(device.maintenanceUnit(options, 126, credential, change, check), /old firmware/);
+    assert.equal(calls, 1);
+  }
 });

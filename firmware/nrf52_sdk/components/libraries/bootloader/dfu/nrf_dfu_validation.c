@@ -46,6 +46,7 @@
 #include "pb.h"
 #include "pb_common.h"
 #include "pb_decode.h"
+#include "nordic_update.h"
 #include "dfu-cc.pb.h"
 #include "crc32.h"
 #include "nrf_crypto.h"
@@ -151,10 +152,9 @@ static void pb_decoding_callback(pb_istream_t *str,
  *  @retval true   If the stored init command was successfully decoded.
  *  @retval false  If there was no stored init command, or the decoding failed.
  */
-static bool stored_init_cmd_decode(void)
+static bool init_cmd_decode_buffer(const uint8_t *data, size_t size)
 {
-    m_pb_stream = pb_istream_from_buffer(s_dfu_settings.init_command,
-                                         s_dfu_settings.progress.command_size);
+    m_pb_stream = pb_istream_from_buffer(data, size);
 
     dfu_init_command_t * p_init;
 
@@ -204,6 +204,11 @@ static bool stored_init_cmd_decode(void)
     return true;
 }
 
+
+static bool stored_init_cmd_decode(void)
+{
+    return init_cmd_decode_buffer(s_dfu_settings.init_command, s_dfu_settings.progress.command_size);
+}
 
 static void crypto_init(void)
 {
@@ -456,6 +461,28 @@ static nrf_dfu_result_t update_data_size_get(dfu_init_command_t const * p_init, 
     return ret_val;
 }
 
+
+/* Reuse the existing Nordic decoder and cryptographic backend in the bootloader
+ * rather than linking a second parser into its fixed 44 KiB partition. */
+bool nordic_init_verify(const uint8_t *packet, size_t size, nordic_init_t *info)
+{
+    if (!size || size > NORDIC_INIT_MAX || !init_cmd_decode_buffer(packet, size) ||
+        !m_packet.has_signed_command || !mp_init->has_type || !mp_init->has_fw_version ||
+        !mp_init->has_hw_version || mp_init->hw_version != NORDIC_HW_ULTRA ||
+        (mp_init->has_is_debug && mp_init->is_debug) || !mp_init->has_hash ||
+        mp_init->hash.hash_type != DFU_HASH_TYPE_SHA256 || mp_init->hash.hash.size != NORDIC_SHA256_BYTES) return false;
+    bool compatible = false;
+    for (unsigned i = 0; i < mp_init->sd_req_count; i++) compatible |= mp_init->sd_req[i] == NORDIC_SD_S140_7_2_0;
+    if (!compatible || nrf_dfu_validation_signature_check(m_packet.signed_command.signature_type,
+        m_packet.signed_command.signature.bytes, m_packet.signed_command.signature.size,
+        m_init_packet_data_ptr, m_init_packet_data_len) != NRF_DFU_RES_CODE_SUCCESS) return false;
+    memset(info, 0, sizeof(*info));
+    info->type = mp_init->type; info->version = mp_init->fw_version; info->hardware = mp_init->hw_version;
+    info->sd_size = mp_init->sd_size; info->bl_size = mp_init->bl_size; info->app_size = mp_init->app_size;
+    info->softdevice_compatible = true;
+    for (unsigned i = 0; i < sizeof(info->hash); i++) info->hash[i] = mp_init->hash.hash.bytes[sizeof(info->hash) - 1u - i];
+    return true;
+}
 
 /**
  * @brief Function to check if single bank update should be used.
@@ -938,6 +965,9 @@ static bool postvalidate_sd_bl(dfu_init_command_t const  * p_init,
             // If the update contains a bootloader, update the version.
             // Unless the update is a debug packet.
             s_dfu_settings.bootloader_version = p_init->fw_version;
+            /* The next image may be handled by the original bootloader, whose
+             * standard application packages still use counter 1. */
+            s_dfu_settings.app_version = 0;
         }
     }
 

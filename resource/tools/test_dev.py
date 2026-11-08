@@ -64,7 +64,8 @@ class DevelopmentTests(unittest.TestCase):
                 self.assertEqual(self.app.read_bytes(), b'previous firmware')
 
     def test_flash_selects_application_or_full_after_a_successful_build(self):
-        for options, package in [([], self.app), (['--full'], self.full)]:
+        install = self.app.with_name('chameleon-unleashed-install.zip')
+        for options, package in [([], self.app), (['--full'], self.full), (['--install-recovery'], install)]:
             with self.subTest(options=options):
                 self.run.reset_mock()
                 dev.main(['flash', '--shared-source', str(self.root), *options])
@@ -162,6 +163,15 @@ class DevelopmentTests(unittest.TestCase):
 
         self.assertEqual(error.exception.code, 1)
         serve.assert_not_called()
+
+    def test_ble_server_reuses_local_resources_without_usb_or_packaging(self):
+        with mock.patch('serve_web.serve') as serve, mock.patch('serve_web.resources_ready', return_value=True):
+            dev.main(['serve', 'ble', '--shared-source', str(self.root), '--port', '8091'])
+
+        self.run.assert_not_called()
+        serve.assert_called_once_with(
+            self.root / 'software/web', self.root / '.cache/web', self.root.resolve(), None, 8091,
+        )
 
     def test_native_flash_failure_is_reported_without_retry(self):
         def run(*command, **kwargs):

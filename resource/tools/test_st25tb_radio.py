@@ -44,7 +44,7 @@ class RadioTests(unittest.TestCase):
                 'ppi_fork', 'ppi_enable', 'timeslot_denied', 'field_loss',
                 'unloaded', 'ble_window', 'active_window', 'rf_only_window',
                 'usb_idle_window', 'usb_active_window', 'usb_ble_window',
-                'usb_enumerating_window', 'usb_disconnect_window',
+                'usb_powering_window', 'usb_enumerating_window', 'usb_suspended_window', 'usb_disconnect_window',
                 'field_dip_reply', 'eof_noise', 'eof_noise_stale',
                 'field_dips', 'field_drop_busy',
                 'field_return', 'field_return_busy', 'field_unreadable',

@@ -37,10 +37,13 @@ export async function maintainClassic(format, source, options, signal, onProgres
         }
       }
       let observation;
-      if (card && !options.method) {
+      if (card && (!options.method || options.model === 6 || source?.type === 1002)) {
         observation = classicObservationMatches(source?.classicObservation, card)
           ? source.classicObservation
-          : await inspectClassic(device, card, onProgress);
+          : await inspectClassic(device, card, onProgress, { modelEvidence: true });
+        if (observation.ats) {
+          card.ats = observation.ats;
+        }
       }
       // Method 3 is standard authenticated writing; formatting never writes block 0.
       const method =
@@ -55,7 +58,10 @@ export async function maintainClassic(format, source, options, signal, onProgres
           { setup: true }
         );
       }
-      const model = options.model || MODELS[card?.sak & ~0x20];
+      const known2k = source?.type === 1002 && classicObservationMatches({ card: source.card }, card);
+      const detectedModel =
+        observation?.type === 1002 || (known2k && card?.sak === 8) ? 6 : MODELS[card?.sak & ~0x20];
+      const model = options.model || detectedModel;
       const sak = Number(Object.keys(MODELS).find((sak) => MODELS[sak] === model));
       if (!model) {
         throw Object.assign(
@@ -65,7 +71,7 @@ export async function maintainClassic(format, source, options, signal, onProgres
           { setup: !format }
         );
       }
-      if (card && (MODELS[card.sak & ~0x20] !== model || ![4, 7].includes(card.uid.length))) {
+      if (card && (detectedModel !== model || ![4, 7].includes(card.uid.length))) {
         if (!format && options.method && options.model) {
           card = null;
         } else {
@@ -102,6 +108,11 @@ export async function maintainClassic(format, source, options, signal, onProgres
       const target = {
         method,
         model,
+        capacityCheck:
+          method === 3 &&
+          model === 6 &&
+          card?.sak === 8 &&
+          !(options.method && options.model && observation?.type !== 1002),
         uid: card?.uid || Array(options.uid?.length || 4).fill(0),
         unbound: !card
       };
@@ -183,7 +194,8 @@ export async function maintainClassic(format, source, options, signal, onProgres
           }
           let after = Array(16).fill(0);
           if (index === 0) {
-            after = repairBlock0(before, options.uid || target.uid, geometry);
+            const observedSak = model === 6 && [8, 16].includes(card.sak) ? card.sak : undefined;
+            after = repairBlock0(before, options.uid || target.uid, geometry, observedSak);
           } else if (trailer) {
             after = factoryTrailer(format && sector === geometry.sectors.length - 1);
           }

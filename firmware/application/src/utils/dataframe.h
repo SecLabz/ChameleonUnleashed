@@ -29,6 +29,8 @@ typedef struct {
 
 void data_frame_receive(const uint8_t *data, uint16_t length);
 void data_frame_process(void);
+/* Long web jobs service only their BLE control envelope, never legacy RF work. */
+void data_frame_process_ble_control(void);
 void on_data_frame_complete(data_frame_cbk_t callback);
 
 data_frame_tx_t *data_frame_make(

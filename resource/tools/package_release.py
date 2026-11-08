@@ -14,6 +14,8 @@ from project_version import check_tag, read_version
 
 PLATFORMS = ('linux-x64', 'macos-arm64', 'macos-x64', 'windows-x64')
 FIRMWARE = {
+    'installation': 'chameleon-unleashed-install.zip',
+    'bootloader': 'chameleon-unleashed-bootloader.zip',
     'application': 'chameleon-unleashed-app.zip',
     'system': 'chameleon-unleashed-full.zip',
     'images': 'chameleon-unleashed-binaries.zip',
@@ -60,6 +62,8 @@ def installation(label, platform):
 
 1. Connect one Chameleon Ultra using a USB data cable.
    Close any other application using the device.
+   Before the first bootloader migration, export your saved tags:
+   an older bootloader may overwrite slot storage during migration.
 
 2. Open {terminal} in this folder and run:
 
@@ -68,12 +72,13 @@ def installation(label, platform):
 3. Confirm the update and keep the device connected
    until flashing completes and the Ultra restarts.
 
-4. Open http://192.168.16.1 in your browser.
-
 Keep firmware.zip intact - do not extract it.
+Use the same command for installation, reinstallation and future updates.
+First installation requires S140 7.2.0.
 
-Internet access is needed to download web resources
-on first use. They are then cached for offline use.
+You can also update through a browser on a compatible device connected
+to the Ultra over USB. Open http://192.168.16.1 and choose
+Device > Firmware update.
 
 Help:
 https://github.com/SecLabz/ChameleonUnleashed#quick-installation
@@ -109,6 +114,7 @@ def prepare(artifacts, output, version, tag=None, development=False):
         label += '-dev.' + revision[:7]
 
     application = sources['application'].read_bytes()
+    installation_package = sources['installation'].read_bytes()
     downloads = {}
     for platform in PLATFORMS:
         native = read_zip(artifacts / f'chameleon-{platform}.zip')
@@ -116,29 +122,70 @@ def prepare(artifacts, output, version, tag=None, development=False):
         if set(native) != {executable}:
             raise ValueError(f'Unexpected native archive contents for {platform}')
         downloads[f'ChameleonUnleashed-{label}-{platform}.zip'] = (
-            {executable: native[executable], 'firmware.zip': application,
+            {executable: native[executable], 'firmware.zip': installation_package,
              'INSTALL.txt': installation(label, platform)}, executable)
 
     resources = {
+        'firmware/install.zip': installation_package,
+        'firmware/bootloader.zip': sources['bootloader'].read_bytes(),
         'firmware/application.zip': application,
         'firmware/system.zip': sources['system'].read_bytes(),
         **{'images/' + name: data for name, data in firmware['images'].items()},
         **{'cdn/' + name: data for name, data in firmware['cdn'].items()},
         'README.txt': f"""ChameleonUnleashed {label} - firmware & web resources
 
-firmware/application.zip  Application-only USB DFU update.
-firmware/system.zip       Application, bootloader and SoftDevice USB DFU update.
-images/                   HEX images for direct programming, plus notices.
-cdn/                      Matching web resources, manifests and license notices.
+START HERE
 
-For routine USB updates, use firmware/application.zip with the native CLI.
-Keep both DFU ZIPs intact. System updates may overwrite slot storage;
-export your slots first and read the USB update and recovery guide:
-https://github.com/SecLabz/ChameleonUnleashed/blob/main/software/rust/REFERENCE.md#usb-firmware-updates
+For installation, reinstallation or a CLI update, use firmware/install.zip:
+  chameleon flash firmware/install.zip
+
+The CLI is not included here. Download the archive for your computer if you
+need it; its firmware.zip is identical to firmware/install.zip in this archive.
+
+You can also update in a browser on a compatible USB-connected device:
+http://192.168.16.1 > Device > Firmware update.
+
+FIRMWARE PACKAGES - ONE APPLICATION BUILD, DIFFERENT COMPONENTS
+
+All packages below belong to {label}. Choose by installation method;
+the four ZIPs are not successive firmware versions.
+
+firmware/install.zip      Application with web recovery + bootloader.
+                          Recommended for installation and CLI updates.
+                          Does not include the SoftDevice.
+firmware/application.zip  Application with web recovery, without bootloader
+                          or SoftDevice. Update an Ultra that already has
+                          the matching Unleashed bootloader.
+firmware/bootloader.zip   Bootloader only, for DFU clients that need a
+                          separate package. Does not include the application.
+firmware/system.zip       Application with web recovery + bootloader +
+                          S140 SoftDevice (the Nordic Bluetooth stack),
+                          for DFU clients supporting this combined package.
+images/                   HEX images for direct hardware programming.
+
+Keep the DFU ZIPs intact. Export saved tags before the first bootloader
+migration, system updates or switching firmware. First installation requires S140 7.2.0.
+
+WEB RESOURCES
+
+cdn/ contains the web interface, modules and tables matching this build.
+Development archives contain only the current build, without a history/ folder.
+Long file and folder names are content hashes, not version numbers or dates.
 
 For self-hosting, publish the contents of cdn/ at the firmware's configured
-resource URL and keep older resource versions available. The standard firmware
-uses GitHub Pages automatically; local hosting requires a matching firmware build.
+resource URL, preserving the relative paths. Keep resources for stable releases
+available; replace development resources when publishing a new development build.
+
+VERSIONS
+
+A -dev.<commit> suffix identifies a development build, which may be unstable.
+The commit distinguishes builds even when their numeric version is unchanged.
+The dev release downloads and hosted resources are replaced for each new build.
+Older development builds may need updating to use the hosted web resources.
+For published stable versions, see GitHub Releases:
+https://github.com/SecLabz/ChameleonUnleashed/releases
+
+Guide: https://github.com/SecLabz/ChameleonUnleashed/blob/main/docs/web-updates.md
 """.encode(),
     }
     downloads[f'ChameleonUnleashed-{label}-firmware-resources.zip'] = (resources, None)
@@ -158,9 +205,10 @@ def main():
     parser.add_argument('--artifacts', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--tag')
+    parser.add_argument('--version', help='Version of verified CI source artifacts; defaults to the workspace')
     parser.add_argument('--development', action='store_true')
     args = parser.parse_args()
-    for name in prepare(args.artifacts, args.output, read_version(), args.tag, args.development):
+    for name in prepare(args.artifacts, args.output, args.version or read_version(), args.tag, args.development):
         print(args.output / name)
 
 

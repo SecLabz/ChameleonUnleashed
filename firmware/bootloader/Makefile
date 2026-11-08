@@ -9,6 +9,8 @@ $(OUTPUT_DIRECTORY)/bootloader.out: \
 SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/dfu_public_key.c \
+  $(PROJ_DIR)/web_recovery_boot.c \
+  $(SRC_COMMON)/web_update.c \
   $(SRC_COMMON)/hw_connect.c \
   $(SRC_COMMON)/libc_nano_stubs.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_clock.c \
@@ -286,7 +288,7 @@ flash_softdevice:
 # Flash with ST-Link + OpenOCD
 flash_stlink:
 	@echo Generating settings...
-	nrfutil settings generate --family NRF52840 --application $(OUTPUT_DIRECTORY)/application.hex --application-version 1 --bootloader-version 1 --bl-settings-version 2 $(OUTPUT_DIRECTORY)/settings.hex
+	nrfutil settings generate --family NRF52840 --application $(OUTPUT_DIRECTORY)/application.hex --application-version 1 --bootloader-version $(shell python3 ../../resource/tools/bootloader_version.py) --bl-settings-version 2 $(OUTPUT_DIRECTORY)/settings.hex
 	@echo Merging required files
 	mergehex --merge $(OUTPUT_DIRECTORY)/bootloader.hex $(OUTPUT_DIRECTORY)/settings.hex --output $(OUTPUT_DIRECTORY)/bootloader_settings.hex
 	mergehex --merge $(OUTPUT_DIRECTORY)/bootloader_settings.hex $(OUTPUT_DIRECTORY)/application.hex $(SDK_ROOT)/components/softdevice/s140/hex/s140_nrf52_7.2.0_softdevice.hex --output $(OUTPUT_DIRECTORY)/project.hex

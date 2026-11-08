@@ -6,6 +6,11 @@ on:
       checkout-sha:
         required: false
         type: string
+      run-tests:
+        description: Run the Python client regression suite
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -89,6 +94,7 @@ jobs:
 
   test_python:
     name: Test Python client
+    if: ${{ inputs.run-tests }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo

@@ -17,11 +17,15 @@
 #include "nfc_st25tb.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "nfc_15.h"
+#include "rf_workspace.h"
 #endif
 #include "st25tb/model.h"
 #include "rfid_main.h"
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
+#include "app_timer.h"
+#include "ble_main.h"
+#include "syssleep.h"
 
 #define NRF_LOG_MODULE_NAME tag_emu
 #include "nrf_log.h"
@@ -42,6 +46,32 @@ NRF_LOG_MODULE_REGISTER();
 // Is the logo in the analog card?
 bool g_is_tag_emulating = false;
 static bool slot_sense_held, slot_sense_requested[3];
+
+APP_TIMER_DEF(m_web_link_timer);
+static volatile bool web_link_active, web_link_expired;
+typedef struct {
+    nfc_tag_14a_coll_res_entity_t res_coll;
+    nfc_tag_mf0_ntag_configure_t config;
+    uint8_t memory[NTAG213_TOTAL_PAGES][NFC_TAG_MF0_NTAG_DATA_SIZE];
+} web_link_image_t;
+static const web_link_image_t web_link_template = {
+    .res_coll = {
+        .size = NFC_TAG_14A_UID_DOUBLE_SIZE,
+        .atqa = {0x44, 0x00},
+        .uid = {0x04, 0x68, 0x95, 0xFA, 0x5C, 0x64, 0x80},
+    },
+    .config = {.mode_block_write = NFC_TAG_MF0_NTAG_WRITE_DENIED},
+    .memory = {
+        [0] = {0x04, 0x68, 0x95, 0x71},
+        [1] = {0xFA, 0x5C, 0x64, 0x80},
+        [2] = {0x42, 0x48, 0x00, 0x00},
+        [3] = {0xE1, 0x10, 0x12, 0x0F}, // 144 NDEF bytes, read-only
+        [41] = {0x04, 0x00, 0x00, 0xFF}, // no password protection
+        [43] = {0xFF, 0xFF, 0xFF, 0xFF},
+        [NTAG213_PAGES + 1] = {0x00, 0x04, 0x04, 0x02},
+        [NTAG213_PAGES + 2] = {0x01, 0x00, 0x0F, 0x03},
+    },
+};
 
 static tag_specific_type_t tag_specific_type_old2new_lf_values[][2] = {TAG_SPECIFIC_TYPE_OLD2NEW_LF_VALUES};
 static tag_specific_type_t tag_specific_type_old2new_hf_values[][2] = {TAG_SPECIFIC_TYPE_OLD2NEW_HF_VALUES};
@@ -144,6 +174,7 @@ static tag_base_handler_map_t tag_base_map[] = {
 
 static void tag_emulation_load_config(void);
 static void tag_emulation_save_config(void);
+static bool sync_snapshot_buffer(tag_specific_type_t type, tag_data_buffer_t *buffer);
 
 /**
  * get the data loader for the specific type of tag
@@ -155,6 +186,82 @@ static tag_datas_loadcb_t get_data_loadcb_from_tag_type(tag_specific_type_t type
         }
     }
     return NULL;
+}
+
+bool tag_emulation_web_link_active(void) {
+    return web_link_active;
+}
+
+static void web_link_timeout(void *context) {
+    (void)context;
+    web_link_expired = true;
+}
+
+static bool web_link_end(bool resume) {
+    if (!web_link_active) return false;
+    APP_ERROR_CHECK(app_timer_stop(m_web_link_timer));
+    nfc_tag_14a_sense_switch(false);
+    web_link_active = false;
+    web_link_expired = false;
+    g_is_tag_emulating = false;
+    // Rebind the original RAM image, preserving unsaved and shadow writes.
+    tag_specific_type_t type = slotConfig.slots[tag_emulation_get_slot()].tag_hf;
+    tag_datas_loadcb_t loader = get_data_loadcb_from_tag_type(type);
+    if (loader) loader(type, &m_tag_data_hf);
+    if (resume && get_device_mode() == DEVICE_MODE_TAG) tag_emulation_sense_run();
+    TAG_FIELD_LED_OFF();
+    set_slot_light_color(get_color_by_slot(tag_emulation_get_slot()));
+    light_up_by_slot();
+    sleep_timer_start(SLEEP_DELAY_MS_BUTTON_CLICK);
+    return true;
+}
+
+bool tag_emulation_web_link_stop(void) {
+    return web_link_end(true);
+}
+
+void tag_emulation_web_link_start(void) {
+    if (g_is_ble_connected || slot_sense_held || web_link_active) return;
+    tag_mode_enter();
+    tag_emulation_sense_end();
+    if (!sync_snapshot_buffer(slotConfig.slots[tag_emulation_get_slot()].tag_hf, &m_tag_data_hf)) {
+        tag_emulation_sense_run();
+        return;
+    }
+#if defined(PROJECT_CHAMELEON_ULTRA)
+    // Reader/sniffer operations have stopped; reuse their existing scratch RAM.
+    web_link_image_t *image = rf_hf_sniff_workspace();
+    STATIC_ASSERT(sizeof(*image) <= RF_HF_SNIFF_BYTES);
+#else
+    static web_link_image_t storage;
+    web_link_image_t *image = &storage;
+#endif
+    memcpy(image, &web_link_template, sizeof(*image));
+    static const char uri[] = "seclabz.github.io/ChameleonUnleashed/app/";
+    const uint8_t header[] = {0x03, sizeof(uri) + 4, 0xD1, 0x01, sizeof(uri), 0x55, 0x04};
+    uint8_t *ndef = image->memory[4];
+    memcpy(ndef, header, sizeof(header));
+    memcpy(ndef + sizeof(header), uri, sizeof(uri) - 1);
+    ndef[sizeof(header) + sizeof(uri) - 1] = 0xFE;
+    tag_data_buffer_t buffer = {sizeof(*image), (uint8_t *)image, NULL};
+    nfc_tag_mf0_ntag_data_loadcb(TAG_TYPE_NTAG_213, &buffer);
+    web_link_expired = false;
+    web_link_active = true;
+    g_is_tag_emulating = false;
+    extern bool g_usb_led_marquee_enable;
+    g_usb_led_marquee_enable = false;
+    rgb_marquee_stop();
+    set_slot_light_color(RGB_BLUE);
+    uint32_t *leds = hw_get_led_array();
+    for (unsigned i = 0; i < RGB_LIST_NUM; i++) nrf_gpio_pin_set(leds[i]);
+    sleep_timer_stop();
+    APP_ERROR_CHECK(app_timer_start(m_web_link_timer, APP_TIMER_TICKS(30000), NULL));
+    nfc_tag_14a_sense_switch(true);
+}
+
+void tag_emulation_web_link_poll(void) {
+    if (web_link_active && (web_link_expired || g_is_ble_connected))
+        tag_emulation_web_link_stop();
 }
 
 /**
@@ -230,7 +337,11 @@ bool tag_emulation_load_by_buffer(tag_specific_type_t tag_type, bool update_crc)
     }
 
     int length = loader(tag_type, buffer);
-    if (length > 0 && update_crc) {
+    if (length <= 0 || length > buffer->length) return false;
+    // Revisions include the live buffer. A smaller image must not retain
+    // another slot's bytes beyond its native data, including in shadow mode.
+    memset(buffer->buffer + length, 0, buffer->length - length);
+    if (update_crc) {
         // afterReadingIsCompleted,WeCanSaveACrcOfTheCurrentDataWhenItIsStoredLater,ItCanBeUsedAsAReferenceForChangesComparison
         calc_14a_crc_lut(buffer->buffer, length, (uint8_t *)buffer->crc);
         return true;
@@ -262,6 +373,7 @@ static bool load_data_by_tag_type(uint8_t slot, tag_specific_type_t tag_type) {
     // The callback must see the record length, not the larger shared buffer.
     int length = loader(tag_type, &image);
     if (length <= 0 || length > image.length) return false;
+    memset(image.buffer + length, 0, buffer->length - length);
     calc_14a_crc_lut(image.buffer, length, (uint8_t *)image.crc);
     return true;
 }
@@ -349,6 +461,7 @@ void tag_emulation_load_data(void) {
  *Save the emulated card configuration data. At the right time, this function should be called for data preservation of data
  */
 void tag_emulation_save_data(void) {
+    tag_emulation_web_link_stop();
     uint8_t slot = tag_emulation_get_slot();
     save_data_by_tag_type(slot, slotConfig.slots[slot].tag_hf);
     save_data_by_tag_type(slot, slotConfig.slots[slot].tag_lf);
@@ -588,6 +701,7 @@ void tag_emulation_sense_run(void) {
  * If you still need to be awakened by NFC after the MCU is required, please do not call this function
  */
 void tag_emulation_sense_end(void) {
+    web_link_end(false);
     TAG_FIELD_LED_OFF();
     tag_emulation_sense_switch_all(false);
 }
@@ -614,6 +728,7 @@ bool tag_emulation_rf_only_safe(void) {
 
 /** Initialize the selected tag configuration and data. */
 void tag_emulation_init(void) {
+    APP_ERROR_CHECK(app_timer_create(&m_web_link_timer, APP_TIMER_MODE_SINGLE_SHOT, web_link_timeout));
     tag_emulation_load_config();  // Configuration of loading the card slot of the emulation card
     tag_emulation_load_data();    // Load the data of the emulated card
 }
@@ -837,10 +952,13 @@ uint32_t tag_emulation_place_revision(uint8_t slot, tag_sense_type_t sense) {
     hash = fds_hash_sync(map.id, map.key, hash);
     tag_data_buffer_t *buffer = get_buffer_by_tag_type(type);
     if (slot == tag_emulation_get_slot() && buffer) {
-        bool resume = (type == TAG_TYPE_ST25TB512_AT || type == TAG_TYPE_SLIX_L || type == TAG_TYPE_SLIX) && get_device_mode() != DEVICE_MODE_READER &&
+        bool resume = !web_link_active &&
+            (type == TAG_TYPE_ST25TB512_AT || type == TAG_TYPE_SLIX_L || type == TAG_TYPE_SLIX) && get_device_mode() != DEVICE_MODE_READER &&
             !slot_sense_held && slot_sense_requested[sense];
         if (resume) tag_emulation_sense_switch(sense, false);
-        hash = sync_snapshot_buffer(type, buffer) ? fds_hash_bytes(hash, buffer->buffer, buffer->length) : 0;
+        // The shortcut already captured the slot before borrowing RF storage.
+        hash = (web_link_active || sync_snapshot_buffer(type, buffer)) ?
+            fds_hash_bytes(hash, buffer->buffer, buffer->length) : 0;
         if (resume) tag_emulation_sense_switch(sense, true);
     }
     return hash;

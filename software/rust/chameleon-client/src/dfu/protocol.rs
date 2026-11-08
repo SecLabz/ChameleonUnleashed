@@ -15,7 +15,12 @@ const EXECUTE: u8 = 0x04;
 const SELECT: u8 = 0x06;
 const MTU: u8 = 0x07;
 const WRITE: u8 = 0x08;
+const FIRMWARE_VERSION: u8 = 0x0b;
+const ABORT: u8 = 0x0c;
 const RESPONSE: u8 = 0x60;
+const NOT_SUPPORTED: u8 = 0x02;
+const BOOTLOADER_IMAGE: u8 = 0;
+const BOOTLOADER_TYPE: u8 = 2;
 const COMMAND: u8 = 1;
 const DATA: u8 = 2;
 const END: u8 = 0xc0;
@@ -68,6 +73,11 @@ impl<'a, P: Read + Write> Session<'a, P> {
     }
 
     fn response<const N: usize>(&mut self, operation: u8) -> Result<[u8; N]> {
+        self.optional_response(operation)?
+            .ok_or_else(|| format!("DFU opcode 0x{operation:02X} is not supported").into())
+    }
+
+    fn optional_response<const N: usize>(&mut self, operation: u8) -> Result<Option<[u8; N]>> {
         let deadline = Instant::now() + RESPONSE_TIMEOUT;
         let mut bytes = Vec::new();
         let mut escaped = false;
@@ -115,6 +125,9 @@ impl<'a, P: Read + Write> Session<'a, P> {
         if bytes.len() < 3 || bytes[..2] != [RESPONSE, operation] {
             return Err(format!("Unexpected DFU response to opcode 0x{operation:02X}").into());
         }
+        if bytes[2] == NOT_SUPPORTED && bytes.len() == 3 {
+            return Ok(None);
+        }
         if bytes[2] != 1 {
             let reason = match (bytes[2], bytes.get(3)) {
                 (0x0b, Some(0x05)) => "firmware version rejected",
@@ -129,7 +142,30 @@ impl<'a, P: Read + Write> Session<'a, P> {
         }
         bytes[3..]
             .try_into()
+            .map(Some)
             .map_err(|_| "Invalid DFU response length".into())
+    }
+
+    pub(super) fn bootloader_version(&mut self) -> Result<Option<u32>> {
+        self.send(FIRMWARE_VERSION, &[BOOTLOADER_IMAGE])?;
+        let Some(bytes) = self.optional_response::<13>(FIRMWARE_VERSION)? else {
+            return Ok(None);
+        };
+        if bytes[0] != BOOTLOADER_TYPE {
+            return Err("DFU returned an unexpected bootloader image type".into());
+        }
+        let address = u32::from_le_bytes(bytes[5..9].try_into()?);
+        let size = u32::from_le_bytes(bytes[9..13].try_into()?);
+        if address == 0 || size == 0 || address.checked_add(size).is_none() {
+            return Err("DFU returned invalid bootloader bounds".into());
+        }
+        Ok(Some(u32::from_le_bytes(bytes[1..5].try_into()?)))
+    }
+
+    pub(super) fn leave(&mut self) -> Result<()> {
+        // Nordic can reset USB before acknowledging ABORT. The USB lifecycle
+        // owner observes the disconnect instead of waiting for that reply.
+        self.send(ABORT, &[])
     }
 
     fn request<const N: usize>(&mut self, operation: u8, payload: &[u8]) -> Result<[u8; N]> {

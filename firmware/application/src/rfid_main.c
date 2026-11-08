@@ -42,7 +42,7 @@ void reader_mode_enter(void) {
  * @brief Function for enter tag emulation mode
  */
 void tag_mode_enter(void) {
-    if (rfid_state != DEVICE_MODE_TAG) {
+    if (rfid_state != DEVICE_MODE_TAG || m_is_field_on) {
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // A running reader still needs the original field discharge interval.
         bool reader_was_active = rfid_state == DEVICE_MODE_READER || m_is_field_on;

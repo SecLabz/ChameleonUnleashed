@@ -1,3 +1,7 @@
-Download the archive matching your OS and architecture. It includes the native CLI, application firmware and installation instructions.
+Download the archive for your computer and follow `INSTALL.txt` to install or update.
 
-**Firmware & resources:** standalone firmware packages, HEX images and matching CDN resources for manual updates or self-hosting.
+You can also update through a browser over USB at [192.168.16.1](http://192.168.16.1) or through the [Bluetooth app](https://seclabz.github.io/ChameleonUnleashed/app/). Choose **Device → Firmware update**.
+
+Upgrading from v1.0.0? Export saved tags, then install `firmware.zip` with the CLI once to enable browser updates and USB web recovery. [Update and recovery guide](https://github.com/SecLabz/ChameleonUnleashed/blob/HEAD/docs/web-updates.md) · [Changelog](https://github.com/SecLabz/ChameleonUnleashed/blob/HEAD/CHANGELOG.md).
+
+**Firmware & resources:** standalone firmware, HEX images and web resources.

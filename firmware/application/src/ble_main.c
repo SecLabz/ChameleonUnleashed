@@ -26,6 +26,7 @@
 #include "hw_connect.h"
 #include "settings.h"
 #include "tag_emulation.h"
+#include "services/control.h"
 
 #define NRF_LOG_MODULE_NAME ble_main
 #include "nrf_log.h"
@@ -97,6 +98,48 @@ static bool rf_only_boot;
 static uint16_t   m_conn_handle          = BLE_CONN_HANDLE_INVALID;                 /**< Handle of the current connection. */
 static uint16_t   m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;            /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 lf_adc_callback_t m_lf_adc_callback      = NULL;
+static ble_gap_conn_params_t link_params;
+static uint16_t link_min, link_max;
+static uint8_t link_tx_phy = BLE_GAP_PHY_1MBPS, link_rx_phy = BLE_GAP_PHY_1MBPS;
+
+void ble_link_profile(uint8_t profile, uint8_t phy, uint8_t output[BLE_LINK_INFO_BYTES]) {
+    uint32_t gap_result = NRF_SUCCESS, phy_result = NRF_SUCCESS;
+    if (profile) {
+        ble_gap_conn_params_t params = {0};
+        params.min_conn_interval = profile == 1 ? MIN_CONN_INTERVAL :
+            MSEC_TO_UNITS(profile == 3 ? 7.5 : profile == 4 ? 30 : 15, UNIT_1_25_MS);
+        params.max_conn_interval = profile == 1 ? MAX_CONN_INTERVAL :
+            MSEC_TO_UNITS(profile == 4 ? 30 : 15, UNIT_1_25_MS);
+        params.conn_sup_timeout = CONN_SUP_TIMEOUT;
+        gap_result = ble_conn_params_change_conn_params(m_conn_handle, &params);
+        if (gap_result == NRF_SUCCESS) {
+            link_min = params.min_conn_interval;
+            link_max = params.max_conn_interval;
+        }
+    }
+    if (phy) {
+        ble_gap_phys_t params = {.rx_phys = phy == 2 ? BLE_GAP_PHY_2MBPS : BLE_GAP_PHY_1MBPS,
+                                .tx_phys = phy == 2 ? BLE_GAP_PHY_2MBPS : BLE_GAP_PHY_1MBPS};
+        phy_result = sd_ble_gap_phy_update(m_conn_handle, &params);
+    }
+    const uint16_t words[] = {m_ble_nus_max_data_len, link_params.min_conn_interval,
+        link_params.slave_latency, link_params.conn_sup_timeout};
+    memset(output, 0, BLE_LINK_INFO_BYTES);
+    output[0] = 1;
+    output[1] = m_conn_handle != BLE_CONN_HANDLE_INVALID;
+    for (unsigned i = 0; i < 4; i++) {
+        output[2 + 2 * i] = words[i] >> 8;
+        output[3 + 2 * i] = words[i];
+    }
+    output[10] = link_tx_phy;
+    output[11] = link_rx_phy;
+    output[12] = link_min >> 8; output[13] = link_min;
+    output[14] = link_max >> 8; output[15] = link_max;
+    for (unsigned i = 0; i < 4; i++) {
+        output[16 + i] = gap_result >> (24 - 8 * i);
+        output[20 + i] = phy_result >> (24 - 8 * i);
+    }
+}
 
 static ble_uuid_t m_adv_uuids[]          =                                          /**< Universally unique service identifier. */
 {
@@ -193,6 +236,10 @@ static void nus_data_handler(ble_nus_evt_t *p_evt) {
 }
 /**@snippet [Handling the data received over BLE] */
 
+uint16_t ble_nus_payload_limit(void) {
+    return m_ble_nus_max_data_len;
+}
+
 void nus_data_response(uint8_t *p_data, uint16_t length) {
     NRF_LOG_INFO("BLE nus service response data length: %d", length);
     NRF_LOG_HEXDUMP_DEBUG(p_data, length);
@@ -227,6 +274,29 @@ void nus_data_response(uint8_t *p_data, uint16_t length) {
 
 bool is_nus_working(void) {
     return g_is_ble_connected;
+}
+
+bool ble_stream_response(uint8_t *data, uint16_t length) {
+    uint16_t connection = m_conn_handle, sent = 0;
+    uint32_t progress = app_timer_cnt_get();
+    while (sent < length && g_is_ble_connected && m_conn_handle == connection) {
+        uint16_t count = MIN(m_ble_nus_max_data_len, length - sent);
+        ret_code_t result = ble_nus_data_send(&m_nus, data + sent, &count, connection);
+        if (result == NRF_SUCCESS) {
+            sent += count; progress = app_timer_cnt_get();
+        } else if (result != NRF_ERROR_RESOURCES && result != NRF_ERROR_BUSY) {
+            goto failed;
+        } else if (app_timer_cnt_diff_compute(app_timer_cnt_get(), progress) >= APP_TIMER_TICKS(250)) {
+            goto failed;
+        }
+        bsp_wdt_feed();
+    }
+    return sent == length;
+failed:
+    /* A partial frame cannot be followed by another reply on the same stream. */
+    if (g_is_ble_connected && m_conn_handle == connection)
+        (void)sd_ble_gap_disconnect(connection, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+    return false;
 }
 
 /**@brief Function for handling Queued Write Module errors.
@@ -352,8 +422,9 @@ static void on_conn_params_evt(ble_conn_params_evt_t *p_evt) {
     uint32_t err_code;
 
     if (p_evt->evt_type == BLE_CONN_PARAMS_EVT_FAILED) {
-        err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_CONN_INTERVAL_UNACCEPTABLE);
-        APP_ERROR_CHECK(err_code);
+        /* A central can decline a speed profile while retaining a valid link. */
+        err_code = ble_conn_params_change_conn_params(m_conn_handle, NULL);
+        NRF_LOG_INFO("Connection profile declined; default request: %u", err_code);
     }
 }
 
@@ -416,9 +487,14 @@ static void ble_evt_handler(ble_evt_t const *p_ble_evt, void *p_context) {
     switch (p_ble_evt->header.evt_id) {
         case BLE_GAP_EVT_CONNECTED:
             sleep_timer_stop();
+            /* The next peer may negotiate a smaller MTU than its predecessor. */
+            m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;
 
             NRF_LOG_INFO("Connected");
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
+            link_params = p_ble_evt->evt.gap_evt.params.connected.conn_params;
+            link_min = MIN_CONN_INTERVAL; link_max = MAX_CONN_INTERVAL;
+            link_tx_phy = link_rx_phy = BLE_GAP_PHY_1MBPS;
             err_code = nrf_ble_qwr_conn_handle_assign(&m_qwr, m_conn_handle);
             APP_ERROR_CHECK(err_code);
             g_is_ble_connected = true;
@@ -430,8 +506,20 @@ static void ble_evt_handler(ble_evt_t const *p_ble_evt, void *p_context) {
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
             g_is_ble_connected = false;
             data_frame_disconnect(DATA_SOURCE_BLE);
+            web_session_disconnect(API_SOURCE_BLE);
             // call sleep_timer_start *after* unsetting g_is_ble_connected
             sleep_timer_start(SLEEP_DELAY_MS_BLE_DISCONNECTED);
+            break;
+
+        case BLE_GAP_EVT_CONN_PARAM_UPDATE:
+            link_params = p_ble_evt->evt.gap_evt.params.conn_param_update.conn_params;
+            break;
+
+        case BLE_GAP_EVT_PHY_UPDATE:
+            if (p_ble_evt->evt.gap_evt.params.phy_update.status == BLE_HCI_STATUS_CODE_SUCCESS) {
+                link_tx_phy = p_ble_evt->evt.gap_evt.params.phy_update.tx_phy;
+                link_rx_phy = p_ble_evt->evt.gap_evt.params.phy_update.rx_phy;
+            }
             break;
 
         case BLE_GAP_EVT_PHY_UPDATE_REQUEST: {

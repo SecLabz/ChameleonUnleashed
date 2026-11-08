@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#0a0c11">
+    <meta name="referrer" content="no-referrer">
+    <title>Update · Chameleon Unleashed</title>
+    <link rel="stylesheet" href="/update.css">
+    <script type="module" src="/update.mjs"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a href="/" class="brand">
+          <span class="mark" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+            >
+              <path d="M16.5 7.2A6.5 6.5 0 1 0 16.5 16.8M12.6 10.2a2.6 2.6 0 0 1 0 3.6" />
+            </svg>
+          </span>
+          Chameleon Unleashed
+        </a>
+      </header>
+      <div class="page-heading">
+        <h1>Firmware update<span aria-hidden="true">.</span></h1>
+        <p id="device" role="status" data-state="connecting">Connecting to your Ultra…</p>
+      </div>
+      <section>
+        <div class="fields">
+          <div class="channel-field">
+            <label for="channel">Channel</label>
+            <div class="select-field">
+              <select id="channel" aria-label="Update channel">
+                <option value="stable">Stable</option>
+                <option value="development">Development</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label for="source">Firmware</label>
+            <div class="select-field">
+              <select id="source" aria-label="Firmware source">
+                <option value="unleashed">Unleashed</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label for="version">Version</label>
+            <div class="select-field">
+              <select id="version" aria-label="Firmware version"></select>
+            </div>
+          </div>
+        </div>
+        <label id="transition" class="check" hidden>
+          <input id="wipe" type="checkbox"> Erase saved tags and settings
+        </label>
+        <details>
+          <summary>Update from a file</summary>
+          <label class="drop">
+            <input id="file" type="file" accept=".zip,application/zip" aria-label="Nordic firmware ZIP">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 15V4M8 8l4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
+            </svg>
+            Drop or choose a Nordic DFU ZIP
+          </label>
+        </details>
+        <p id="release" class="hint" role="status">Loading releases…</p>
+        <div class="status">
+          <h2 id="title"></h2>
+          <p id="message" role="status"></p>
+          <progress id="progress" max="1" value="0" aria-label="Firmware update progress" hidden></progress>
+        </div>
+        <button id="update" disabled>Install update</button>
+        <button id="stop" hidden>Stop</button>
+      </section>
+      <footer>
+        <button id="restart" class="return" hidden>Return to Chameleon</button>
+        <p id="exit-hint" hidden>Or press and release B on your Ultra.</p>
+      </footer>
+    </main>
+  </body>
+</html>

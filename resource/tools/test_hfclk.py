@@ -21,7 +21,7 @@ class HfclkTests(unittest.TestCase):
 #define NRF_ERROR_INVALID_PARAM 7
 #define NRF_ERROR_TIMEOUT 13
 #define APP_ERROR_CHECK(x) assert((x)==0)
-enum {HFCLK_USB=1,HFCLK_LF=2,HFCLK_NFC=4};
+enum {HFCLK_USB=1,HFCLK_LF=2,HFCLK_NFC=4,HFCLK_READER=8};
 enum {NRF_DRV_POWER_USB_EVT_DETECTED,NRF_DRV_POWER_USB_EVT_REMOVED,NRF_DRV_POWER_USB_EVT_READY};
 static bool critical,physical;
 static uint32_t request_error,release_error,query_error;
@@ -50,6 +50,16 @@ int main(void){
   assert(app_hfclk_release(first)==0 && owners==second && releases==0 && physical);
   assert(app_hfclk_release(first)==0 && releases==0);
   assert(app_hfclk_release(second)==0 && owners==0 && releases==1 && !physical);
+ }
+ for(unsigned first=1;first<=8;first*=2){
+  for(unsigned second=1;second<=8;second*=2){
+   requests=releases=0;
+   assert(app_hfclk_acquire(first)==0);
+   assert(app_hfclk_acquire(second)==0 && owners==(first|second) && requests==1);
+   assert(app_hfclk_release(first)==0);
+   if(first!=second) assert(owners==second && physical && releases==0);
+   assert(app_hfclk_release(second)==0 && !owners && !physical && releases==1);
+  }
  }
  assert(app_hfclk_acquire(3)==NRF_ERROR_INVALID_PARAM && owners==0);
  request_error=99;assert(app_hfclk_acquire(1)==99 && owners==0);request_error=0;

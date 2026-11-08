@@ -300,13 +300,23 @@ static void poll_window(void) {
 void nfcv_radio_poll(void) {
     if (!enabled)
         return;
+    /* HTTP can have queued/unacknowledged TCP data after TinyUSB has drained
+     * its event queue. Do not request another idle RF window between every
+     * USB packet. The detector remains armed; a real field still gets RF
+     * service, and acquired frames retain their existing atomic handling. */
+    if (!nfcv_radio_field_present() && usb_work_pending())
+        return;
     bool connected = g_is_ble_connected;
+    /* Restarting advertising on every field-free poll prevents its first event
+     * from ever running. Keep discovery live between actual RF exchanges;
+     * RF-only wakes still own the radio for long autonomous responses. */
+    bool discovery = !ble_slave_rf_only() && !nfcv_radio_field_present();
     bool resume = false;
-    bool idle = advertising_pause(&resume);
+    bool idle = !discovery && advertising_pause(&resume);
     if (idle)
         bsp_wdt_feed();
     uint32_t window_us = idle ? NFCV_IDLE_WINDOW_US : connected ? NFCV_CONNECTED_WINDOW_US : NFCV_DISCOVERY_WINDOW_US;
-    rf_timeslot_run(window_us, !connected, idle, poll_window);
+    rf_timeslot_run(window_us, !connected && !discovery, idle, poll_window);
     if (resume)
         advertising_start(false);
 }

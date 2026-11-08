@@ -173,7 +173,7 @@ static bool fw_version_required(dfu_fw_type_t new_fw_type)
 
     if (new_fw_type == DFU_FW_TYPE_SOFTDEVICE)
     {
-        result = false; // fw_version is optional in SoftDevice updates. If present, it will be checked against the app version.
+        result = false; // fw_version is optional in SoftDevice updates.
     }
     else if (new_fw_type == DFU_FW_TYPE_APPLICATION)
     {
@@ -209,57 +209,6 @@ static bool fw_type_ok(dfu_init_command_t const * p_init)
 }
 
 
-#ifndef NRF_DFU_APP_ACCEPT_SAME_VERSION
-#define NRF_DFU_APP_ACCEPT_SAME_VERSION 1
-#endif
-
-
-// This function assumes p_init->has_fw_version.
-static bool fw_version_ok(dfu_init_command_t const * p_init)
-{
-    ASSERT(p_init != NULL);
-    ASSERT(p_init->has_fw_version);
-
-    if ((p_init->type == DFU_FW_TYPE_APPLICATION) ||
-        (p_init->type == DFU_FW_TYPE_SOFTDEVICE))
-    {
-        if (!NRF_DFU_APP_DOWNGRADE_PREVENTION)
-        {
-            return true;
-        }
-        else if ((p_init->fw_version > s_dfu_settings.app_version))
-        {
-            return true;
-        }
-        else if ((p_init->fw_version == s_dfu_settings.app_version))
-        {
-            return NRF_DFU_APP_ACCEPT_SAME_VERSION;
-        }
-        else
-        {
-            return false;
-        }
-    }
-#if NRF_DFU_SUPPORTS_EXTERNAL_APP
-#if NRF_DFU_EXTERNAL_APP_VERSIONING
-    else if (p_init->type == DFU_FW_TYPE_EXTERNAL_APPLICATION)
-    {
-        return (p_init->fw_version >= s_dfu_settings.app_version);
-    }
-#else
-    else if(p_init->type == DFU_FW_TYPE_EXTERNAL_APPLICATION)
-    {
-        return true;
-    }
-#endif // NRF_DFU_EXTERNAL_APP_VERSIONING
-#endif // NRF_DFU_SUPPORTS_EXTERNAL_APP
-    else
-    {
-        return  (p_init->fw_version > s_dfu_settings.bootloader_version);
-    }
-}
-
-
 nrf_dfu_result_t nrf_dfu_ver_validation_check(dfu_init_command_t const * p_init)
 {
     nrf_dfu_result_t ret_val = NRF_DFU_RES_CODE_SUCCESS;
@@ -292,21 +241,12 @@ nrf_dfu_result_t nrf_dfu_ver_validation_check(dfu_init_command_t const * p_init)
             NRF_LOG_WARNING("SD req not met.");
             ret_val = EXT_ERR(NRF_DFU_EXT_ERROR_SD_VERSION_FAILURE);
         }
-        else if (p_init->has_fw_version)
+        /* Accept any signed firmware version to allow restoring upstream ZIPs.
+         * The version field remains mandatory where required by Nordic DFU. */
+        else if (!p_init->has_fw_version && fw_version_required(p_init->type))
         {
-            if (!fw_version_ok(p_init))
-            {
-                NRF_LOG_WARNING("FW version too low.");
-                ret_val = EXT_ERR(NRF_DFU_EXT_ERROR_FW_VERSION_FAILURE);
-            }
-        }
-        else
-        {
-            if (fw_version_required(p_init->type))
-            {
-                NRF_LOG_ERROR("FW version missing.");
-                ret_val = EXT_ERR(NRF_DFU_EXT_ERROR_INIT_COMMAND_INVALID);
-            }
+            NRF_LOG_ERROR("FW version missing.");
+            ret_val = EXT_ERR(NRF_DFU_EXT_ERROR_INIT_COMMAND_INVALID);
         }
     }
     return ret_val;

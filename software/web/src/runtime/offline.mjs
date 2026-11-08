@@ -3,6 +3,7 @@ import { CORE_URL } from './runtime.mjs';
 import { HARDNESTED } from './hardnested-build.mjs';
 import { HARDNESTED_URL, supportsSimd } from './hardnested-runtime.mjs';
 import { getResource, resourceState, TABLE, TABLE_URL } from './assets.mjs';
+import { shellState, prepareShell } from './shell.mjs';
 
 function resources() {
   const entries = [
@@ -19,9 +20,10 @@ function resources() {
 }
 
 export async function offlineState(signal) {
-  return Promise.all(
+  const modules = await Promise.all(
     resources().map(async (entry) => ({ ...entry, ...(await resourceState(entry.asset, signal)) }))
   );
+  return [...(await shellState()), ...modules];
 }
 
 export async function prepareOffline(signal, onProgress) {
@@ -38,10 +40,14 @@ export async function prepareOffline(signal, onProgress) {
     }
 
     if (!entry.stored) {
-      await getResource(entry.asset, entry.url, signal, {
-        persistent: true,
-        onProgress: (loaded, phase) => onProgress({ loaded: completed + loaded, total, phase })
-      });
+      if (entry.shell) {
+        await prepareShell(signal);
+      } else {
+        await getResource(entry.asset, entry.url, signal, {
+          persistent: true,
+          onProgress: (loaded, phase) => onProgress({ loaded: completed + loaded, total, phase })
+        });
+      }
     }
     completed += entry.asset.size;
     onProgress({ loaded: completed, total, phase: 'save' });

@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-/* Reader commands and ST25TB emulation windows own this storage exclusively.
+/* Reader commands, ST25TB windows and the temporary NDEF link own this storage exclusively.
  * LF ADC banks coexist with decoded LF samples; HF operations reuse their
  * combined storage. Callers cannot retain contents after their operation ends. */
 #define RF_LF_CAPTURE_SAMPLES 12288

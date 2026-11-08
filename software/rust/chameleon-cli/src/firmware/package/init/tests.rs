@@ -34,7 +34,14 @@ fn signed(init: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn packet(kind: u8, size: usize) -> Vec<u8> {
+    versioned_packet(kind, size, None)
+}
+
+pub(crate) fn versioned_packet(kind: u8, size: usize, version: Option<u64>) -> Vec<u8> {
     let mut init = scalar(4, u64::from(kind));
+    if let Some(version) = version {
+        init.extend(scalar(1, version));
+    }
     match kind {
         0 => init.extend(scalar(7, size as u64)),
         1 => init.extend(scalar(5, size as u64)),
@@ -46,6 +53,30 @@ pub(crate) fn packet(kind: u8, size: usize) -> Vec<u8> {
         _ => unreachable!(),
     }
     signed(&init)
+}
+
+#[test]
+fn firmware_version_is_read_from_the_signed_metadata_and_must_fit_32_bits() {
+    assert_eq!(validate(&packet(2, 8), "bootloader", 8).unwrap(), None);
+    for version in [5, u32::from_be_bytes(*b"CU\0\x01"), u32::MAX] {
+        assert_eq!(
+            validate(
+                &versioned_packet(2, 8, Some(u64::from(version))),
+                "bootloader",
+                8
+            )
+            .unwrap(),
+            Some(version)
+        );
+    }
+    assert!(
+        validate(
+            &versioned_packet(2, 8, Some(u64::from(u32::MAX) + 1)),
+            "bootloader",
+            8
+        )
+        .is_err()
+    );
 }
 
 #[test]

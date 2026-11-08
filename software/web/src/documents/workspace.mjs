@@ -38,6 +38,19 @@ export function editBlock(document, block, bytes) {
     throw new Error('Invalid memory block');
   }
 
+  const sector = document.geometry?.sectors?.findIndex((sector) => sector.trailer === block);
+  const keys = classic ? document.recoveredKeys?.[sector] : null;
+  if (keys) {
+    for (const [name, start] of [
+      ['key_a', 0],
+      ['key_b', 10]
+    ]) {
+      const key = bytes.slice(start, start + 6);
+      if (bytesValid(key) && key.some((byte, index) => byte !== document.memory[block]?.[start + index])) {
+        keys[name] = key;
+      }
+    }
+  }
   document.memory[block] = [...bytes];
   if (block === 0 && classic && document.card.uid.length === 4 && bytesValid(bytes.slice(0, 4))) {
     document.card.uid = bytes.slice(0, 4);

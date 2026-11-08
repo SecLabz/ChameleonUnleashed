@@ -70,7 +70,7 @@ class CaptureContract(unittest.TestCase):
     def test_type2_restore_identification_authentication_and_one_shot_writes(self):
         source = (HF / 'nfca_commands.c').read_text()
         functions = '\n'.join(function(source, name) for name in [
-            'type2_model_check', 'type2_password_auth', 'type2_auth_read',
+            'classic_model_check', 'type2_model_check', 'type2_password_auth', 'type2_auth_read',
             'write_user_unit',
         ])
         fixture = (Path(__file__).parent / 'tests/type2_restore.c').read_text()
@@ -97,6 +97,16 @@ class CaptureContract(unittest.TestCase):
         fixture = fixture.replace('/* CAPTURE DECLARATIONS */', '\n'.join(declarations))
         fixture = fixture.replace('/* CAPTURE FUNCTIONS */', functions)
         run_fixture(fixture)
+
+    def test_selection_frame_lengths_and_cascade_bounds(self):
+        source = function((HF / 'rc522.c').read_text(), 'pcd_14a_reader_scan_once')
+        fixture = (Path(__file__).parent / 'tests/mifare_selection.c').read_text()
+        run_fixture(fixture.replace('/* SELECTION FUNCTION */', source))
+
+    def test_irq_wait_uses_transaction_time_and_keeps_completed_replies(self):
+        source = function((HF / 'rc522.c').read_text(), 'wait_for_irq')
+        fixture = (Path(__file__).parent / 'tests/mifare_irq_wait.c').read_text()
+        run_fixture(fixture.replace('/* WAIT FUNCTION */', source))
 
     def test_wakeup_deadlines_and_slow_fallback(self):
         source = (HF / 'rc522.c').read_text()

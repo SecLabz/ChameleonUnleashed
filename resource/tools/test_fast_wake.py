@@ -89,6 +89,7 @@ int main(void) {
     transition(DEVICE_MODE_READER, false, 60);
     transition(DEVICE_MODE_READER, true, 60);
     transition(DEVICE_MODE_NONE, true, 60);
+    transition(DEVICE_MODE_TAG, true, 60);
     return 0;
 }
 '''

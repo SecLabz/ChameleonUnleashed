@@ -1,3 +1,4 @@
+import { DEVELOPMENT, appUrl } from './runtime/environment.mjs';
 import { withRuntime } from './runtime/runtime.mjs';
 import { request, withDevice } from './device/transport.mjs';
 import { readDesfire } from './device/desfire-reader.mjs';
@@ -19,8 +20,10 @@ import {
   maintainTag
 } from './ui/tag-write.mjs';
 import { classicReadSnapshot } from './documents/classic-write.mjs';
-import { $, deviceViews } from './ui/device-view.mjs';
+import { classicDictionaryKeys } from './documents/classic-document-keys.mjs';
+import { $, BLE_PAUSED_TYPES, deviceViews } from './ui/device-view.mjs';
 import { offlineView } from './ui/offline.mjs';
+import { rememberedKeysView } from './ui/remembered-keys.mjs';
 import { decodeSlot } from './device/slots.mjs';
 import {
   blankClassic,
@@ -44,7 +47,6 @@ import { createView } from './ui/create.mjs';
 import { writeSt25tb } from './ui/st25tb-write.mjs';
 import {
   be32,
-  bytesValid,
   decodeSlotImage,
   encodeSlotImage,
   family,
@@ -52,12 +54,20 @@ import {
   typeName
 } from './documents/slot-image.mjs';
 
-const state = { document: null, controller: null, connected: false, deviceInfo: null, cleanDocument: null };
+const state = {
+  document: null,
+  controller: null,
+  connected: false,
+  deviceInfo: null,
+  transport: null,
+  cleanDocument: null
+};
 let toastTimer;
 let draftTimer;
 let activeView;
+const rememberedKeys = rememberedKeysView();
 const {
-  controls,
+  controls: studioControls,
   render,
   renderMemory,
   isDirty,
@@ -78,18 +88,68 @@ let scanTechnology = 'nfc';
 const DRAFT = 'chameleon-studio-v1';
 const DICTIONARY = 'chameleon-dictionary-v1';
 
-function notify(message, error = false) {
+function controls() {
+  studioControls();
+  rememberedKeys.setBusy(!!state.controller);
+}
+
+/** @param {{ label: string, run: () => unknown }} [action] One follow-up the message offers. */
+function notify(message, error = false, action) {
   clearTimeout(toastTimer);
-  $('toast').textContent = message;
-  $('toast').className = `toast visible${error ? ' error' : ''}`;
-  toastTimer = setTimeout(() => $('toast').classList.remove('visible'), 5000);
+  const toast = $('toast');
+  toast.replaceChildren(message);
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.onclick = () => {
+      hideToast();
+      action.run();
+    };
+    toast.append(button);
+  }
+  toast.className = `toast visible${error ? ' error' : ''}${action ? ' actionable' : ''}`;
+  toastTimer = setTimeout(hideToast, action ? 10000 : 5000);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('toast').classList.remove('visible');
+  // A hidden toast must not leave a focusable action behind.
+  $('toast').querySelector('.toast-action')?.remove();
 }
 
 const views = deviceViews({
   notify,
-  onConnection(value, info) {
+  canConnect: () => !state.controller,
+  async onFirmwareUpdate(transport, beforeDfu) {
+    let unverified = false;
+    await physicalTask(async (signal) => {
+      const { bleFirmwareUpdate } = await import(appUrl('ble-update.mjs'));
+      unverified = await bleFirmwareUpdate({
+        transport,
+        signal,
+        beforeDfu,
+        // The update owns the device until it closes: verification reconnects inside it.
+        reconnect: (signal) => views.connect(true, signal)
+      });
+    });
+    if (unverified) {
+      notify('Update transferred. Reconnect Bluetooth to verify the firmware.', false, {
+        label: 'Reconnect',
+        run: views.connect
+      });
+    }
+  },
+  open: () => view('device'),
+  onConnection(value, info, detail) {
     state.connected = value;
     state.deviceInfo = info;
+    state.transport = value ? detail : null;
+    if (!value && detail !== 'error') {
+      slots.disconnected();
+    }
     controls();
   }
 });
@@ -133,9 +193,11 @@ function view(name) {
   if (name === 'device') {
     views.refresh();
     offline.refresh();
+    rememberedKeys.refresh();
   }
   if (name === 'slots') {
-    slots.refresh().catch((error) => notify(error.message, true));
+    // Without a device, the Slots page explains how to connect instead.
+    slots.refresh().catch((error) => state.connected && notify(error.message, true));
   }
 }
 
@@ -541,10 +603,19 @@ async function saveToSlot(activate = false) {
       }
       render();
       saveDraft();
+      const paused = activate && views.bluetooth() && BLE_PAUSED_TYPES.includes(state.document.type);
       $('status').textContent = activate
         ? `Slot ${selected.slot + 1} saved and selected for emulation`
         : `Saved and verified on slot ${selected.slot + 1}`;
-      notify($('status').textContent);
+      if (paused) {
+        $('status').textContent =
+          `Slot ${selected.slot + 1} saved · emulation starts once Bluetooth disconnects`;
+      }
+      notify(
+        $('status').textContent,
+        false,
+        paused ? { label: 'Disconnect', run: () => views.disconnect() } : undefined
+      );
     });
   });
   await views.refresh();
@@ -677,9 +748,24 @@ async function scan() {
       await readDesfire(device, card, updateDesfire);
     }
     if (classic) {
-      const observation = await inspectClassic(device, card, (message) => {
-        $('status').textContent = message;
-      });
+      const observation = await inspectClassic(
+        device,
+        card,
+        (message) => {
+          $('status').textContent = message;
+        },
+        { modelEvidence: true }
+      );
+      if (observation.ats) {
+        card.ats = observation.ats;
+      }
+      if (observation.type === 1002) {
+        const geometry = await withRuntime(
+          (call) => call({ op: 'classic_geometry', sak: 16 }),
+          state.controller.signal
+        );
+        updateClassic({ card, geometry, memory: Array(geometry.blocks).fill(null) });
+      }
       state.document.classicObservation = observation;
       $('status').textContent = 'Tag identified · Memory not read';
       render();
@@ -769,15 +855,7 @@ async function recoverClassic(device, expectedUid, initialCard) {
   $('keys').replaceChildren();
   $('progress').value = 0;
   const document = state.document;
-  const candidates = document.recoveredKeys?.flatMap((keys) => [keys.key_a, keys.key_b]) || [];
-  for (const credential of document.classicObservation?.credentials || []) {
-    candidates.push(credential.key);
-  }
-  for (const sector of document.geometry?.sectors || []) {
-    const trailer = document.memory[sector.trailer];
-    candidates.push(trailer?.slice(0, 6), trailer?.slice(10, 16));
-  }
-  const knownKeys = candidates.filter((key) => key?.length === 6 && bytesValid(key)).map(hex);
+  const knownKeys = classicDictionaryKeys(document);
   delete document.classicRead;
   let reading;
   try {
@@ -787,6 +865,10 @@ async function recoverClassic(device, expectedUid, initialCard) {
       device,
       initialCard,
       expectedUid,
+      expectedModel:
+        document.kind === 'classic' && document.type
+          ? { type: document.type, card: document.card }
+          : undefined,
       onUpdate(next) {
         if (next.geometry) {
           reading = next;
@@ -798,6 +880,7 @@ async function recoverClassic(device, expectedUid, initialCard) {
       }
     });
   } finally {
+    rememberedKeys.refresh();
     if (reading) {
       // Physical observations belong to this document session, never to an exported draft.
       document.classicRead = classicReadSnapshot(reading);
@@ -1065,6 +1148,23 @@ $('export-mct').onclick = () =>
   workspaceTask(async (signal) => {
     download(await exportMct(state.document, signal), `${state.document.name}.mct`);
   });
+
+for (const id of ['export-keys', 'keys-export']) {
+  $(id).onclick = () => {
+    try {
+      const doc = state.document;
+      const name = doc.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim() || 'classic';
+      const uid = hex(doc.card.uid);
+      const filename = name.toUpperCase().endsWith(uid) ? name : `${name}-${uid}`;
+      download(classicDictionaryKeys(doc).join('\n') + '\n', `${filename}.dic`);
+      if (id === 'export-keys') {
+        $('export-menu').querySelector('summary').focus();
+      }
+    } catch (error) {
+      notify(error.message, true);
+    }
+  };
+}
 
 $('save-slot').onclick = () => saveToSlot(false);
 
@@ -1583,6 +1683,16 @@ $('refresh-slots').onclick = () =>
 document.querySelectorAll('[data-view-target]').forEach((button) => {
   button.onclick = () => view(button.dataset.viewTarget);
 });
+
+// The development packager supplies the source commit in the shell metadata.
+if (DEVELOPMENT) {
+  document.documentElement.dataset.channel = 'development';
+  for (const channel of document.querySelectorAll('.brand-channel')) {
+    channel.querySelector('.brand-revision').textContent = DEVELOPMENT.slice(0, 7);
+    channel.closest('.brand').title = `Development build ${DEVELOPMENT}`;
+    channel.hidden = false;
+  }
+}
 
 window.addEventListener('hashchange', () => view(location.hash.slice(1)));
 render();

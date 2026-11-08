@@ -8,6 +8,8 @@ import { CORE_URL, createRuntime } from '../../../.cache/web/assets/modules/runt
 import { TABLE, TABLE_URL } from '../src/runtime/assets.mjs';
 import { runAutoPwn } from '../../../.cache/web/assets/modules/recovery/autopwn.mjs';
 import { createEngine } from '../../../.cache/web/assets/modules/runtime/nfc-wasm/engine.mjs';
+import { createClassicKeyCache } from '../src/recovery/classic-key-cache.mjs';
+import { classicFixture } from './hardware/classic-fixture.mjs';
 
 const wasm = await readFile(
   new URL('../../../.cache/web/wasm/wasm32-unknown-unknown/release/nfc_wasm.wasm', import.meta.url)
@@ -50,6 +52,7 @@ class Card {
     this.missing = missing;
     this.ended = false;
     this.reads = 0;
+    this.sectorReads = 0;
     this.card = { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4] };
   }
 
@@ -94,6 +97,10 @@ class Card {
   }
 
   async readSector(sector, key, isKeyB, geometry) {
+    this.sectorReads++;
+    if (!key.every((byte) => byte === 255)) {
+      throw Object.assign(new Error('Authentication rejected'), { status: 6 });
+    }
     const { first, count } = geometry.sectors[sector];
     const blocks = Array(count).fill(null);
     for (let i = 0; i < count; i++) {
@@ -366,6 +373,8 @@ test('actual shared WASM recovers keys, reads and exports without magic inspecti
     assert.match(result.dump, /Filetype: Flipper NFC device/);
     assert.equal(finalPhase, 'Read complete');
     assert.equal(device.ended, true);
+    assert.equal(device.sectorReads, 16);
+    assert.equal(device.reads, 64, 'verified sector data must not be read again for trailer extraction');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -390,6 +399,170 @@ test('AutoPwn continues a scan-owned Classic reservation without reacquiring the
   }
 });
 
+for (const [sak, sectors, blocks, missing, rejectedRead = false] of [
+  [8, 16, 64, -1],
+  [0x18, 40, 256, -1],
+  [8, 16, 64, 6],
+  [0x18, 40, 256, -1, true]
+]) {
+  test(`Key A reuse selects bounded read batches only after successful checks (sak=${sak}, missing=${missing}, rejectedRead=${rejectedRead})`, async () => {
+    globalThis.fetch = async () => new Response(wasm);
+    const device = new Card(missing);
+    device.card.sak = sak;
+    const geometry = {
+      sectors: Array.from({ length: sectors }, (_, sector) => ({
+        first: sector < 32 ? sector * 4 : 128 + (sector - 32) * 16,
+        count: sector < 32 ? 4 : 16
+      }))
+    };
+    const findKey = device.findKey.bind(device);
+    let initialSearches = 0;
+    device.findKey = async (sector, isKeyB, keys, ...args) => {
+      assert.equal(sector, 0, 'Only the initial dictionary search needs separate key checks');
+      assert.equal(isKeyB, false);
+      initialSearches++;
+      return findKey(sector, isKeyB, keys, ...args);
+    };
+    const readSector = device.readSector.bind(device);
+    let singleReads = 0;
+    device.readSector = async (...args) => {
+      singleReads++;
+      return readSector(...args);
+    };
+    device.classicBatchesSupported = true;
+    let batches = 0;
+    let rejection = false;
+    const checked = new Set([0]);
+    device.classicBatch = async (kind, entries) => {
+      assert([0, 1].includes(kind));
+      assert(entries.length <= 8);
+      assert(
+        3 + entries.reduce((n, entry) => n + (kind ? 6 + geometry.sectors[entry[0]].count * 16 : 11), 0) <=
+          512
+      );
+      batches++;
+      return Promise.all(
+        entries.map(async ([sector, type, ...key]) => {
+          assert.equal(type, 0x60);
+          if (kind === 0) {
+            const index = geometry.sectors.findIndex((s) => s.first === sector);
+            assert(index >= 0);
+            checked.add(index);
+            assert(key.every((b) => b === 255));
+            return { status: 0, data: Uint8Array.from([1, ...key]) };
+          }
+          if (rejectedRead) {
+            assert(
+              checked.has(sector),
+              'After a rejected prefetch, future reads must follow successful checks'
+            );
+            if (!rejection && sector === 1) {
+              rejection = true;
+              return { status: 6, data: new Uint8Array() };
+            }
+          }
+          const observed = await readSector(sector, key, false, geometry);
+          const mask = observed.reduce((mask, block, i) => mask | (block ? 1 << i : 0), 0);
+          return {
+            status: 0,
+            data: Uint8Array.from([
+              mask >> 8,
+              mask & 255,
+              ...observed.flatMap((block) => block || Array(16).fill(0))
+            ])
+          };
+        })
+      );
+    };
+    try {
+      const result = await runAutoPwn({ device, workerFactory });
+      assert.equal(result.summary.resolved_keys, sectors * 2);
+      assert.equal(result.complete, missing === -1);
+      assert.equal(result.memory.length, blocks);
+      assert.equal(device.sectorReads, sectors);
+      assert.equal(
+        singleReads,
+        rejectedRead ? 2 : 1,
+        'Only the anchor and a rejected prefetch need individual reads'
+      );
+      assert.equal(rejection, rejectedRead);
+      assert.equal(initialSearches, 1);
+      if (sectors === 16) {
+        assert.equal(batches, 4);
+      }
+      if (missing !== -1) {
+        assert.equal(result.memory[missing], null);
+        assert(result.memory[4] && result.memory[5] && result.memory[7]);
+        assert.equal(result.dump, null);
+      }
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('rejected reuse keeps lightweight checks and does not prefetch sector reads', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  const controller = new AbortController();
+  const device = new Card();
+  device.classicBatchesSupported = true;
+  let checks = 0;
+  device.classicBatch = async (kind, entries) => {
+    assert.equal(kind, 0);
+    checks += entries.length;
+    return entries.map(() => ({ status: 6, data: new Uint8Array(7) }));
+  };
+  device.collectNonces = async () => {
+    controller.abort();
+    throw new Error('Operation cancelled');
+  };
+  try {
+    const result = await runAutoPwn({ device, workerFactory, signal: controller.signal });
+    assert(checks > 0);
+    assert.equal(device.sectorReads, 1, 'Only the anchor was authenticated successfully');
+    assert.equal(result.complete, false);
+    assert.equal(result.memory.filter(Boolean).length, 4);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Stop after a checked read batch retains its data without dispatching the next batch', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  const controller = new AbortController();
+  const device = new Card();
+  const geometry = { sectors: Array.from({ length: 16 }, (_, i) => ({ first: i * 4, count: 4 })) };
+  device.classicBatchesSupported = true;
+  let readBatches = 0;
+  device.classicBatch = async (kind, entries) => {
+    assert.equal(controller.signal.aborted, false);
+    if (!kind) {
+      return entries.map(([, , ...key]) => ({ status: 0, data: Uint8Array.from([1, ...key]) }));
+    }
+    readBatches++;
+    const replies = await Promise.all(
+      entries.map(async ([sector, , ...key]) => {
+        const blocks = await device.readSector(sector, key, false, geometry);
+        return { status: 0, data: Uint8Array.from([0, 15, ...blocks.flat()]) };
+      })
+    );
+    controller.abort();
+    return replies;
+  };
+  try {
+    const result = await runAutoPwn({ device, workerFactory, signal: controller.signal });
+    assert.equal(readBatches, 1);
+    assert.equal(result.memory.filter(Boolean).length, 32);
+    assert.equal(result.complete, false);
+    assert.equal(result.dump, null);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Classic retry rejects a changed UID before key or memory operations', async () => {
   globalThis.fetch = async () => new Response(wasm);
 
@@ -399,6 +572,72 @@ test('Classic retry rejects a changed UID before key or memory operations', asyn
   try {
     await assert.rejects(runAutoPwn({ device, expectedUid: 'AABBCCDD', workerFactory }), /UID changed/);
     assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+for (const missing of [-1, 126]) {
+  test(`a known 2K document keeps 128 blocks with an observed SAK 08 (missing=${missing})`, async () => {
+    globalThis.fetch = async () => new Response(wasm);
+    const device = new Card(missing);
+    const ats = [12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6];
+    try {
+      const result = await runAutoPwn({
+        device,
+        workerFactory,
+        expectedUid: '01020304',
+        expectedModel: { type: 1002, card: { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4], ats } }
+      });
+      assert.equal(result.card.sak, 8, 'the model selector must not rewrite the observed RF identity');
+      assert.deepEqual(result.card.ats, ats, 'selection alone must not erase the known ATS');
+      assert.equal(result.geometry.blocks, 128);
+      assert.equal(result.geometry.sectors.length, 32);
+      assert.equal(result.memory.length, 128);
+      assert.equal(result.summary.resolved_keys, 64);
+      if (missing < 0) {
+        assert.equal(result.complete, true);
+        assert.match(result.dump, /Mifare Classic type: 2K/);
+        assert.match(result.dump, /SAK: 08/);
+        assert.match(result.dump, /Block 127:/);
+      } else {
+        assert.equal(result.memory[126], null);
+        assert(result.memory[127]);
+        assert.equal(result.complete, false);
+        assert.equal(result.dump, null);
+      }
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('an existing Classic model hint requires the same UID and a compatible observed identity', async () => {
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const known = { uid: [1, 2, 3, 4], sak: 8, atqa: [0, 4] };
+    for (const options of [
+      { expectedModel: { type: 1002, card: known } },
+      { expectedModel: { type: 1003, card: { ...known, sak: 24 } }, expectedUid: '01020304' },
+      { expectedModel: { type: 1002, card: known }, expectedUid: 'AABBCCDD' },
+      { expectedModel: { type: 9999, card: known }, expectedUid: '01020304' },
+      { expectedModel: { type: 1002, card: { ...known, atqa: [0, 2] } }, expectedUid: '01020304' }
+    ]) {
+      const device = new Card();
+      device.findKey = async () => assert.fail('An incompatible model must not start recovery');
+      const updates = [];
+      await assert.rejects(
+        runAutoPwn({ device, workerFactory, ...options, onUpdate: (next) => updates.push(next) }),
+        /UID changed|model|same UID/
+      );
+      assert(
+        updates.every((next) => !next.geometry),
+        'existing memory must not be replaced'
+      );
+      assert.equal(device.reads, 0);
+      assert(device.ended);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -563,6 +802,317 @@ test('cancellation terminates a stalled Worker before device ownership', async (
     assert(terminated);
     assert(!begun);
     assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function keyCacheFixture() {
+  let text = null;
+  const storage = {
+    writes: 0,
+    getItem: () => text,
+    setItem(_id, value) {
+      storage.writes++;
+      text = value;
+    },
+    removeItem() {
+      storage.writes++;
+      text = null;
+    }
+  };
+  return { keyCache: createClassicKeyCache(() => storage), storage };
+}
+
+test('remembered keys survive a new read session and avoid searches without reusing memory', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const first = await runAutoPwn({ device: new Card(), workerFactory, keyCache });
+    assert(first.complete);
+    assert.equal(storage.writes, 1, 'discoveries are saved once at the end');
+    const device = new Card();
+    device.findKey = async () => assert.fail('Known sectors need no dictionary search');
+    device.command = async () => assert.fail('A complete cache needs no PRNG probe');
+    const read = device.readBlock.bind(device);
+    device.readBlock = async (block) => {
+      const bytes = await read(block);
+      if (block === 1) {
+        bytes[0] = 42;
+      }
+      return bytes;
+    };
+    const result = await runAutoPwn({ device, workerFactory, keyCache });
+    assert(result.complete);
+    assert.equal(result.memory[1][0], 42, 'every read fetches fresh tag memory');
+    assert.equal(device.reads, 64, 'readable Key B must not be used for authentication');
+    assert.equal(storage.writes, 1, 'an unchanged cache is not rewritten');
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('rejected cached keys fall back to recovery and are replaced after the read', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const geometry = { blocks: 64, sectors: Array(16).fill(null) };
+  const old = Array.from({ length: 16 }, () => ({ key_a: Array(6).fill(42), key_b: null }));
+  const device = new Card();
+  keyCache.save(device.card, geometry, old);
+  storage.writes = 0;
+  let searches = 0;
+  const find = device.findKey.bind(device);
+  device.findKey = (...args) => {
+    searches++;
+    assert.equal(args[2].length, new Set(args[2].map((key) => key.join(','))).size);
+    return find(...args);
+  };
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({ device, workerFactory, keyCache, dictionary: 'FFFFFFFFFFFF' });
+    assert(result.complete);
+    assert(searches > 0);
+    assert.equal(storage.writes, 1);
+    assert(keyCache.load(device.card, geometry).every((keys) => keys.key_a.every((b) => b === 255)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('stopping recovery preserves discoveries with a single cache write', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const controller = new AbortController();
+  const device = new Card();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({
+      device,
+      workerFactory,
+      keyCache,
+      signal: controller.signal,
+      onUpdate(next) {
+        assert.equal(storage.writes, 0, 'storage is never written during recovery');
+        if (next.summary?.resolved_keys) {
+          controller.abort();
+        }
+      }
+    });
+    assert.equal(result.complete, false);
+    assert.equal(storage.writes, 1);
+    assert(keyCache.load(device.card, { blocks: 64, sectors: Array(16) })[0].key_a);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+for (const batchFailure of [null, 0x67, 0x69, 404, 1]) {
+  test(`remembered sector reads handle batch support and card loss (${batchFailure})`, async () => {
+    const { keyCache, storage } = keyCacheFixture();
+    const device = new Card();
+    const geometry = {
+      blocks: 64,
+      sectors: Array.from({ length: 16 }, (_, sector) => ({
+        first: sector * 4,
+        count: 4,
+        trailer: sector * 4 + 3
+      }))
+    };
+    keyCache.save(
+      device.card,
+      geometry,
+      geometry.sectors.map(() => ({
+        key_a: Array(6).fill(255),
+        key_b: Array(6).fill(255),
+        origin_b: 'Trailer'
+      }))
+    );
+    const before = storage.getItem();
+    storage.writes = 0;
+    let batches = 0;
+    device.classicBatchesSupported = true;
+    device.classicBatch = async (kind, entries) => {
+      batches++;
+      assert.equal(kind, 1);
+      assert(entries.length <= 7);
+      if (batchFailure) {
+        throw Object.assign(
+          new Error('Batch unavailable'),
+          batchFailure === 404 ? { httpStatus: 404 } : { status: batchFailure }
+        );
+      }
+      return Promise.all(
+        entries.map(async ([sector, type, ...key]) => {
+          assert.equal(type, 0x60, 'readable B is never an authentication source');
+          const blocks = await device.readSector(sector, key, false, geometry);
+          return { status: 0, data: Uint8Array.from([0, 15, ...blocks.flat()]) };
+        })
+      );
+    };
+    device.findKey = async () => assert.fail('Cached keys need no search');
+    globalThis.fetch = async () => new Response(wasm);
+    try {
+      if (batchFailure === 1) {
+        await assert.rejects(runAutoPwn({ device, workerFactory, keyCache }), /Batch unavailable/);
+        assert.equal(storage.getItem(), before, 'card loss must not invalidate remembered keys');
+      } else {
+        const result = await runAutoPwn({ device, workerFactory, keyCache });
+        assert(result.complete);
+        assert.equal(batches, batchFailure ? 1 : 3);
+        assert.equal(device.reads, 64);
+      }
+      assert.equal(storage.writes, 0);
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+for (const [size, sak, type] of [
+  ['2k', 8, 1002],
+  ['4k', 24, 1003]
+]) {
+  test(`cached A/B keys read the entire ${size} geometry in bounded batches`, async () => {
+    const fixture = classicFixture(size);
+    const card = { ...fixture.model, uid: fixture.blocks[0].slice(0, 4), sak };
+    const device = new Card();
+    device.card = card;
+    const checked = new Set();
+    let blocksRead = 0;
+    device.classicBatchesSupported = true;
+    device.findKey = async () => assert.fail('Every cached key is verified by its read');
+    device.command = device.findKey;
+    device.classicBatch = async (kind, entries) => {
+      assert(entries.length <= 8);
+      assert(
+        3 +
+          entries.reduce(
+            (size, [sector]) => size + (kind ? 6 + fixture.sectors[sector].count * 16 : 11),
+            0
+          ) <=
+          512
+      );
+      return entries.map(([address, keyType, ...key]) => {
+        const sector = kind ? address : fixture.sectors.findIndex((group) => group.first === address);
+        const { first, count, trailer } = fixture.sectors[sector];
+        const offset = keyType === 0x61 ? 10 : 0;
+        assert.deepEqual(key, fixture.blocks[trailer].slice(offset, offset + 6));
+        checked.add(`${sector}:${keyType}`);
+        if (!kind) {
+          return { status: 0, data: Uint8Array.from([1, ...key]) };
+        }
+        blocksRead += count;
+        const blocks = fixture.blocks.slice(first, first + count).map((block) => [...block]);
+        blocks[count - 1].fill(0, 0, 6);
+        blocks[count - 1].fill(0, 10, 16);
+        return {
+          status: 0,
+          data: Uint8Array.from([count === 16 ? 255 : 0, count === 16 ? 255 : 15, ...blocks.flat()])
+        };
+      });
+    };
+    const geometry = {
+      blocks: fixture.sectors.reduce((sum, s) => sum + s.count, 0),
+      sectors: fixture.sectors
+    };
+    const keys = fixture.sectors.map(({ trailer }) => ({
+      key_a: fixture.blocks[trailer].slice(0, 6),
+      key_b: fixture.blocks[trailer].slice(10, 16)
+    }));
+    const { keyCache } = keyCacheFixture();
+    keyCache.save(card, geometry, keys);
+    globalThis.fetch = async () => new Response(wasm);
+    try {
+      const result = await runAutoPwn({
+        device,
+        workerFactory,
+        keyCache,
+        expectedUid: card.uid
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('')
+          .toUpperCase(),
+        expectedModel: { type, card }
+      });
+      assert(result.complete);
+      assert.equal(result.memory.length, geometry.blocks);
+      assert.equal(checked.size, keys.length * 2);
+      assert.equal(blocksRead, geometry.blocks, 'Key B checks must not reread complete sectors');
+      assert.deepEqual(result.memory.at(-1), fixture.blocks[fixture.sectors.at(-1).trailer]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('cancelling a cached read exposes only freshly verified keys and preserves the rest of the cache', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const device = new Card();
+  const geometry = { blocks: 64, sectors: Array(16).fill(null) };
+  keyCache.save(
+    device.card,
+    geometry,
+    Array.from({ length: 16 }, () => ({
+      key_a: Array(6).fill(255),
+      key_b: null
+    }))
+  );
+  const before = storage.getItem();
+  const controller = new AbortController();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({
+      device,
+      workerFactory,
+      keyCache,
+      signal: controller.signal,
+      onUpdate(next) {
+        if (next.memory?.some(Boolean)) {
+          controller.abort();
+        }
+      }
+    });
+    assert.equal(result.summary.resolved_keys, 1);
+    assert.equal(result.memory.filter(Boolean).length, 4);
+    assert.equal(result.memory[3][0], 255, 'RF-masked bytes are restored only from the verified key');
+    assert.equal(result.summary.mapping[1].key_a, null);
+    assert.equal(
+      storage.getItem(),
+      before,
+      'untried cached sectors are retained without being treated as verified'
+    );
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('cached B checks without batch support do not read memory twice', async () => {
+  const device = new Card();
+  const block = device.readBlock.bind(device);
+  device.readBlock = async (index) => {
+    const bytes = await block(index);
+    if (index % 4 === 3) {
+      bytes.splice(6, 4, 0x7f, 7, 0x88, 0x69);
+    }
+    return bytes;
+  };
+  const { keyCache } = keyCacheFixture();
+  keyCache.save(
+    device.card,
+    { blocks: 64, sectors: Array(16) },
+    Array.from({ length: 16 }, () => ({
+      key_a: Array(6).fill(255),
+      key_b: Array(6).fill(255)
+    }))
+  );
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({ device, workerFactory, keyCache });
+    assert(result.complete);
+    assert.equal(device.reads, 64);
+    assert.equal(device.sectorReads, 16);
+    assert.equal(result.summary.resolved_keys, 32);
   } finally {
     globalThis.fetch = originalFetch;
   }

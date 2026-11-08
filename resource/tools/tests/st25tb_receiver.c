@@ -98,7 +98,8 @@ static void receive(const uint8_t *payload, unsigned size, int polarity, unsigne
     for (unsigned n = 0; n < 40; n++) {
         bits[count++] = 1;
     }
-    bool expected = low == 10 && high == 2 && eof_bits == 10 && !bad_crc && !bad_stop_byte;
+    bool expected = low >= 10 && low <= 13 && high >= 2 && high <= 4 &&
+                    eof_bits == 10 && !bad_crc && !bad_stop_byte;
     double baseline = 1;
     uint8_t samples[3000];
     uint8_t previous[2] = {0, 0};
@@ -244,10 +245,18 @@ static void run(bool weak_edges) {
         }
     }
     uint8_t read[] = {8, 8};
+    /* Cover the measured SOF clusters and the widened 64/20-tick limits.
+     * Four high ETUs now fit; five high or sixteen low ETUs still do not. */
+    for (unsigned low = 10; low <= 13; low++) {
+        for (unsigned high = 2; high <= 4; high++) {
+            receive(read, 2, 1, 5, low, high, false, false);
+        }
+    }
     receive(read, 2, 1, 5, 6, 2, false, false);
-    receive(read, 2, 1, 5, 14, 2, false, false);
+    receive(read, 2, 1, 5, 16, 2, false, false);
     receive(read, 2, 1, 5, 10, 1, false, false);
     receive(read, 2, 1, 5, 10, 4, false, false);
+    receive(read, 2, 1, 5, 10, 5, false, false);
     receive(read, 2, 1, 5, 10, 2, true, false);
     receive(read, 2, 1, 5, 10, 2, false, true);
 }

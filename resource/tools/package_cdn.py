@@ -10,6 +10,7 @@ import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from project_version import read_version
+from hosted_web import FILES, shell
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,10 +53,29 @@ def prepare(shared_source, output):
         raise ValueError('Table pin changed; rebuild the matching Hardnested bundle')
     if set(hardnested['modules']) != {'scalar', 'simd'}:
         raise ValueError('Build both Hardnested variants before packaging CDN resources')
+    site = cache / 'assets/site'
+    site_build = json.loads((cache / 'assets/site-build.json').read_text())
+    expected = {'build': build, 'core': core, 'hardnested': hardnested['modules'], 'tables': table}
+    if any(site_build.get(key) != value for key, value in expected.items()):
+        raise ValueError('Frontend differs from the resource build; rebuild the complete web app')
+    for name in FILES:
+        data = (site / name).read_bytes()
+        pin = site_build['files'].get('/' + name, {})
+        if pin.get('raw') != len(data) or pin.get('sha256') != hashlib.sha256(data).hexdigest():
+            raise ValueError('Frontend differs from its build manifest: ' + name)
+    timestamp = build.get('source', {}).get('committedAt')
+    if type(timestamp) is not int or timestamp <= 0:
+        raise ValueError('Rebuild the web app with a source commit timestamp')
+    web_version, web_files = shell(site)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent, prefix='.cdn-') as temporary:
         staging = Path(temporary) / 'cdn'
+        web_path = f'web/{web_version}/'
+        web = staging / web_path
+        web.mkdir(parents=True)
+        for name, data in web_files.items():
+            (web / name).write_bytes(data)
         core_file = copy_asset(cache / 'cdn/core', staging / 'core', core)
         copy_shared_notices(shared_source, core_file.parent)
         write_manifest(core_file.parent, {'version': 1, 'module': core})
@@ -89,7 +109,8 @@ def prepare(shared_source, output):
                     'sha256': hashlib.sha256(data).hexdigest(),
                 })
 
-        release = {'version': 1, **build, 'resources': resources}
+        release = {'version': 1, **build, 'resources': resources,
+                   'webApp': {'version': web_version, 'path': web_path}}
         data = (json.dumps(release, indent=2) + '\n').encode()
         identity = hashlib.sha256(data).hexdigest()
         # Content addressing also distinguishes edited builds of the same source revision.

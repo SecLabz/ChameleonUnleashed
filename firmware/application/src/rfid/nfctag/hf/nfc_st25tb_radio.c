@@ -5,6 +5,7 @@
 #include "rc522.h"
 #include "rf_timeslot.h"
 #include "nrfx_power.h"
+#include "usb_main.h"
 #include "nrfx_ppi.h"
 #include "nrfx_timer.h"
 #include "../../reader/rf_workspace.h"
@@ -47,7 +48,8 @@ enum {
     STB_FIELD_ABSENT_PROBE_CYCLES = 15000 * STB_CPU_CYCLES_PER_US,
     STB_ACTIVE_WINDOW_US = 2000000,
     STB_IDLE_WINDOW_US = 500000,
-    STB_CONNECTED_WINDOW_US = 25000,
+    STB_SERVICE_WINDOW_US = 25000,
+    STB_USB_WINDOW_US = 500000,
     STB_TX_BYTE_BUDGET_US = 100,
     STB_TX_GUARD_US = 2500,
     STB_POWER_SETTLE_MS = 1,
@@ -727,10 +729,15 @@ bool nfc_st25tb_radio_poll(bool *field_present, bool active) {
         bsp_wdt_feed();
     }
     stb_responded = false;
-    uint32_t window_us = STB_CONNECTED_WINDOW_US;
-    /* Keep uninterrupted RF windows in standalone mode; USB needs regular service. */
-    if (paused && nrfx_power_usbstatus_get() == NRFX_POWER_USB_STATE_DISCONNECTED) {
-        window_us = active ? STB_ACTIVE_WINDOW_US : STB_IDLE_WINDOW_US;
+    uint32_t window_us = STB_SERVICE_WINDOW_US;
+    /* Keep short windows for BLE and USB enumeration or suspension. Mounted,
+     * active USB permits longer gaps; standalone RF retains its longest windows. */
+    if (paused) {
+        if (nrfx_power_usbstatus_get() == NRFX_POWER_USB_STATE_DISCONNECTED) {
+            window_us = active ? STB_ACTIVE_WINDOW_US : STB_IDLE_WINDOW_US;
+        } else if (usb_hfclk_active()) {
+            window_us = STB_USB_WINDOW_US;
+        }
     }
     bool granted = ready && rf_timeslot_run(window_us, true, paused, stb_window);
     if (resume) {

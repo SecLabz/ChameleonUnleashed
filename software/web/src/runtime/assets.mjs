@@ -4,7 +4,9 @@ import TABLE from './tables.json' with { type: 'json' };
 
 export { TABLE };
 
-export const RESOURCE_BASE = CONFIG.baseUrl;
+export const RESOURCE_BASE =
+  globalThis.document?.querySelector('meta[name="chameleon-resources"]')?.getAttribute('content') ||
+  CONFIG.baseUrl;
 
 export const TABLE_URL = resourceUrl('tables/' + TABLE.sha256 + '/' + TABLE.path);
 

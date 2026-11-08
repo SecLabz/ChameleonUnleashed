@@ -26,12 +26,14 @@ static unsigned writes, fail_at, loads;
 static bool senses[3], shadow_hf;
 static unsigned hf_sense_changes;
 static bool slot_sense_held, slot_sense_requested[3];
+static bool web_link_active;
 static unsigned critical_depth;
 #define CRITICAL_REGION_ENTER() do { critical_depth++; } while (0)
 #define CRITICAL_REGION_EXIT() do { assert(critical_depth); critical_depth--; } while (0)
 #define APP_ERROR_CHECK(error) assert((error)==0)
 #define NRF_ERROR_INVALID_PARAM 1
 #define TAG_FIELD_LED_OFF() ((void)0)
+static bool web_link_end(bool resume) { (void)resume; return false; }
 bool g_is_tag_emulating;
 static int mode = DEVICE_MODE_TAG;
 static unsigned index_of(uint16_t id, uint16_t key) {
@@ -131,7 +133,15 @@ void tag_emulation_load_data(void) {
 static uint8_t output[512], encoded[4500];
 static uint32_t image_words[1125], decoded_words[1125];
 static api_response_t raw_call(const char *op,const uint8_t *data,size_t size) {
-    return web_slots_request(op,data,size,output,sizeof(output));
+    static const struct { const char *name; api_operation_t operation; } routes[] = {
+        {"open", API_SLOT_OPEN}, {"read", API_SLOT_READ}, {"begin", API_SLOT_BEGIN},
+        {"write", API_SLOT_WRITE}, {"commit", API_SLOT_COMMIT}, {"activate", API_SLOT_ACTIVATE},
+        {"nick", API_SLOT_NICK}, {"enable", API_SLOT_ENABLE}, {"clear", API_SLOT_CLEAR}
+    };
+    api_operation_t operation = API_UNKNOWN_WRITE;
+    for (unsigned i = 0; i < sizeof(routes) / sizeof(routes[0]); i++)
+        if (!strcmp(op, routes[i].name)) operation = routes[i].operation;
+    return web_slots_request(operation,data,size,output,sizeof(output));
 }
 static void revision_bytes(uint8_t *bytes,uint8_t slot,tag_sense_type_t sense) {
     uint32_t revision=tag_emulation_place_revision(slot,sense);
@@ -258,6 +268,14 @@ int main(void) {
     uint32_t initial_revision=tag_emulation_place_revision(0,TAG_SENSE_HF);
     st25[8]^=0x5a;
     assert(st25tb_load(st25));
+    // Metadata must use the frozen image while the shortcut owns RF storage.
+    web_link_active = true;
+    slot_sense_requested[TAG_SENSE_HF] = true;
+    unsigned before_shortcut_poll = hf_sense_changes;
+    assert(tag_emulation_place_revision(0, TAG_SENSE_HF) == initial_revision);
+    assert(hf_sense_changes == before_shortcut_poll && slot_sense_requested[TAG_SENSE_HF]);
+    web_link_active = false;
+    slot_sense_requested[TAG_SENSE_HF] = false;
     uint32_t changed_revision=tag_emulation_place_revision(0,TAG_SENSE_HF);
     assert(initial_revision!=changed_revision);
     assert(!slot_sense_requested[TAG_SENSE_HF]);
@@ -269,6 +287,20 @@ int main(void) {
     seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_1024,1);seed(0,TAG_SENSE_LF,TAG_TYPE_EM410X,2);
     seed(1,TAG_SENSE_HF,TAG_TYPE_MIFARE_Mini,3);seed(1,TAG_SENSE_LF,TAG_TYPE_VIKING,4);
     tag_emulation_load_data();tag_emulation_sense_run();
+    /* Re-selecting the same small image after a larger slot must not hash
+     * unused bytes left by the other card in the shared HF buffer. */
+    assert(tag_emulation_select_checked(1,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    uint32_t mini_revision=tag_emulation_place_revision(1,TAG_SENSE_HF);
+    uint32_t viking_revision=tag_emulation_place_revision(1,TAG_SENSE_LF);
+    seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_4096,1);
+    seed(0,TAG_SENSE_LF,TAG_TYPE_IOPROX,2);
+    assert(tag_emulation_select_checked(0,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    assert(tag_emulation_select_checked(1,(uint8_t *)decoded_words,sizeof(decoded_words)));
+    assert(tag_emulation_place_revision(1,TAG_SENSE_HF)==mini_revision);
+    assert(tag_emulation_place_revision(1,TAG_SENSE_LF)==viking_revision);
+    seed(0,TAG_SENSE_HF,TAG_TYPE_MIFARE_1024,1);
+    seed(0,TAG_SENSE_LF,TAG_TYPE_EM410X,2);
+    assert(tag_emulation_select_checked(0,(uint8_t *)decoded_words,sizeof(decoded_words)));
     unsigned unchanged_hf=hf_sense_changes;
     tag_emulation_place_revision(0,TAG_SENSE_HF);
     assert(hf_sense_changes==unchanged_hf);

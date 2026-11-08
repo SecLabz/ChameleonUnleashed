@@ -6,7 +6,7 @@ export function renderLfChip(container, blocks) {
   fact.className = 'tag-fact tag-capability';
   const label = document.createElement('span');
   label.className = 'tag-fact-label';
-  label.textContent = 'Physical tag';
+  label.textContent = 'Target';
   const capability = document.createElement('span');
   capability.className = 'tag-fact-value';
   fact.append(label, capability);

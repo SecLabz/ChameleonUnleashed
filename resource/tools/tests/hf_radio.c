@@ -6,6 +6,7 @@
 #include "nfcv_reader_codec.h"
 #include "iso15693/frame.h"
 #include "rf_timeslot.h"
+#include "hfclk.h"
 #include "app_status.h"
 #include "nrf.h"
 #include <assert.h>
@@ -20,6 +21,24 @@ volatile uint32_t hf_radio_tearoff_last_off_cycles;
 static uint8_t samples[11265], last_frame[64];
 static bool ready, open_ok = true, tx_ok = true, usb_clock = true, frontend_clock = true;
 static bool vicinity, drop_clock, bad_crc, skip_slot;
+static bool short_slots_only, inside_slot, dma_active;
+static uint8_t clock_owners;
+static unsigned clock_acquires, clock_releases;
+static uint32_t acquire_error, wait_error, release_error;
+uint8_t app_hfclk_owners(void) { return clock_owners; }
+uint32_t app_hfclk_acquire(uint8_t owner) {
+    assert(owner == HFCLK_READER && !inside_slot);
+    clock_acquires++;
+    if (!acquire_error) clock_owners |= owner;
+    return acquire_error;
+}
+uint32_t app_hfclk_release(uint8_t owner) {
+    assert(owner == HFCLK_READER && !inside_slot && !dma_active);
+    clock_releases++;
+    if (!release_error) clock_owners &= ~owner;
+    return release_error;
+}
+uint32_t app_hfclk_wait(void) { assert(!inside_slot); return wait_error; }
 static bool last_hardware_tx, depth, live_fail, last_stop, drop_live_clock;
 static unsigned live_decodes, finishes;
 static unsigned opens, closes, acquisitions, recoveries, invalidations;
@@ -50,9 +69,12 @@ void rc522_raw_depth(bool deeper) { depth = deeper; }
 
 bool rf_timeslot_run(uint32_t microseconds, bool high, bool extend, void (*work)(void)) {
     slots++;
-    assert(microseconds == expected_slot && high == !g_is_ble_connected && !extend);
+    assert((!expected_slot || microseconds == expected_slot) && high == !g_is_ble_connected && !extend);
+    if (short_slots_only && microseconds > 10000) return false;
     if (skip_slot) return false;
+    inside_slot = true;
     work();
+    inside_slot = false;
     return true;
 }
 
@@ -93,7 +115,7 @@ size_t nfcv_reader_encode(const uint8_t *data, size_t size, uint8_t *levels, siz
 static void capture(const rc522_raw_transfer_t *transfer) {
     assert(transfer->samples == samples && transfer->sample_count == expected_samples);
     assert(transfer->length <= sizeof(last_frame));
-    assert(transfer->live == transfer->hardware_tx);
+    assert(transfer->live == (transfer->hardware_tx || vicinity));
     last_hardware_tx = transfer->hardware_tx;
     last_length = transfer->length;
     memcpy(last_frame, transfer->data, last_length);
@@ -101,6 +123,10 @@ static void capture(const rc522_raw_transfer_t *transfer) {
 
 void rc522_raw_exchange(const rc522_raw_transfer_t *transfer) {
     capture(transfer);
+    if (vicinity) {
+        assert(inside_slot && (clock_owners & HFCLK_READER));
+        dma_active = true;
+    }
     exchanges++;
     if (drop_clock) frontend_clock = false;
     if (transfer->dma_cycles) *transfer->dma_cycles += 32000; /* 500 us. */
@@ -143,7 +169,12 @@ bool nfcb_decode_iq_checked(const uint8_t *data, size_t count, size_t expected,
 }
 
 unsigned rc522_raw_available(void) { return expected_samples; }
-void rc522_raw_finish(bool stop) { finishes++; last_stop = stop; }
+void rc522_raw_finish(bool stop) {
+    assert(!inside_slot);
+    if (vicinity) assert(!stop && dma_active && (clock_owners & HFCLK_READER));
+    dma_active = false;
+    finishes++; last_stop = stop;
+}
 
 bool nfcb_decode_iq_live(const uint8_t *data, size_t count, size_t expected,
         uint8_t *output, unsigned *offset, unsigned (*available)(void)) {
@@ -160,6 +191,7 @@ bool nfcb_decode_iq_live(const uint8_t *data, size_t count, size_t expected,
 size_t nfcv_reader_decode_iq_checked(const uint8_t *data, size_t count, uint8_t *output,
         size_t capacity, unsigned *offset, bool *crc_error) {
     assert(data == samples + 1 && count == 11264 && capacity == 24);
+    assert(!inside_slot && !dma_active && (clock_owners & HFCLK_READER));
     decodes++;
     *offset = 0; *crc_error = bad_crc;
     if (bad_crc) return 0;
@@ -233,14 +265,16 @@ static void without_usb(void) {
 
 static void type_v(void) {
     assert(hf_radio_open(true) && !acquisitions);
-    assert(exchange(0, 11264, 25000) == STATUS_HF_TAG_OK);
+    assert(exchange(0, 11264, 4000) == STATUS_HF_TAG_OK);
     const uint8_t levels[] = {1,0,1};
     assert(last_length == sizeof(levels) && !memcmp(last_frame, levels, sizeof(levels)));
     uint8_t long_frame[23];
     memset(long_frame, 0x42, sizeof(long_frame));
     uint8_t reply[24];
     size_t received;
+    expected_slot = 8000;
     assert(hf_radio_exchange(long_frame, 15, 0, reply, sizeof(reply), &received) == 0);
+    expected_slot = 10000;
     assert(hf_radio_exchange(long_frame, 22, 0, reply, sizeof(reply), &received) == 0);
     assert(hf_radio_exchange(long_frame, 23, 0, reply, sizeof(reply), &received) == STATUS_PAR_ERR);
     assert(received == 0 && !last_hardware_tx && slots == 3 && hf_radio_close());
@@ -338,7 +372,7 @@ static void retained_field(void) {
     hf_radio_keep();
     test_dwt.CYCCNT += HF_READER_DEADLINE_CYCLES + 1;
     assert(hf_radio_open(true) && opens == 1 && closes == 0);
-    assert(exchange(0, 11264, 25000) == STATUS_HF_TAG_OK);
+    assert(exchange(0, 11264, 4000) == STATUS_HF_TAG_OK);
     hf_radio_keep();
     assert(hf_radio_release() && closes == 1);
     assert(hf_radio_release() && closes == 1);
@@ -348,6 +382,44 @@ static void retained_field(void) {
     assert(hf_radio_close() && closes == 3);
 }
 
+static void vicinity_ble(void) {
+    usb_clock = false;
+    g_is_ble_connected = true;
+    short_slots_only = true;
+    assert(hf_radio_open(true));
+    /* The normal-priority scheduler refuses long continuous grants. */
+    assert(exchange(0, 11264, 0) == STATUS_HF_TAG_OK);
+    assert(finishes == 1 && decodes == 1 && slots == 1);
+    assert(clock_acquires == 1 && !clock_releases && !last_hardware_tx);
+    hf_radio_keep();
+    assert(hf_radio_open(true) && clock_acquires == 1);
+    assert(exchange(0, 11264, 0) == STATUS_HF_TAG_OK);
+    assert(hf_radio_close() && clock_releases == 1 && !clock_owners);
+    /* Reader ownership must not release the NFCT startup clock request. */
+    clock_owners = HFCLK_NFC;
+    assert(hf_radio_open(true));
+    assert(clock_owners == (HFCLK_NFC | HFCLK_READER));
+    assert(hf_radio_close() && clock_owners == HFCLK_NFC);
+}
+
+static void vicinity_clock_failures(void) {
+    acquire_error = 1;
+    assert(!hf_radio_open(true) && !clock_owners);
+    assert(hf_radio_close() && !clock_releases);
+    acquire_error = 0; wait_error = 1;
+    assert(!hf_radio_open(true) && clock_owners == HFCLK_READER);
+    assert(hf_radio_close() && !clock_owners);
+    wait_error = 0;
+    assert(hf_radio_open(true));
+    drop_clock = true;
+    assert(exchange(0, 11264, 0) == STATUS_HF_ERR_STAT);
+    assert(finishes == 1 && !decodes && invalidations == 1);
+    release_error = 1;
+    assert(!hf_radio_close() && clock_owners == HFCLK_READER);
+    release_error = 0;
+    assert(hf_radio_close() && !clock_owners);
+}
+
 int main(int argc, char **argv) {
     assert(argc == 2);
     if (!strcmp(argv[1], "profiles")) profiles();
@@ -355,6 +427,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "without_usb")) without_usb();
     else if (!strcmp(argv[1], "retained")) retained_field();
     else if (!strcmp(argv[1], "vicinity")) type_v();
+    else if (!strcmp(argv[1], "vicinity_ble")) vicinity_ble();
+    else if (!strcmp(argv[1], "vicinity_clock_failures")) vicinity_clock_failures();
     else if (!strcmp(argv[1], "clock_fallback")) clock_fallback();
     else if (!strcmp(argv[1], "clock_invalidate")) clock_invalidate();
     else if (!strcmp(argv[1], "live_clock_invalidate")) live_clock_invalidate();

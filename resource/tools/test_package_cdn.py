@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 from zipfile import ZipFile
+from hosted_web import FILES, BUNDLE_FILES
 
 import package_cdn
 
@@ -51,7 +52,7 @@ class CdnArchiveTests(unittest.TestCase):
         self.write(self.root / 'software/Cargo.toml', b'[workspace.package]\nversion = "1.0.0"\n')
         self.build = {
             'projectVersion': '1.0.0',
-            'source': {'revision': 'a' * 40, 'dirty': False},
+            'source': {'revision': 'a' * 40, 'dirty': False, 'committedAt': 1700000000},
             'shared': {'revision': 'b' * 40, 'dirty': False, 'sha256': 'c' * 64},
             'resourceBase': 'https://alice.github.io/ChameleonUnleashed/',
         }
@@ -61,6 +62,18 @@ class CdnArchiveTests(unittest.TestCase):
         )
         self.write(self.cache / 'cdn/core/1/old/nfc_wasm.wasm', b'old build')
         self.write(self.cache / 'cdn/core/current/obsolete.wasm', b'obsolete file')
+        self.site = self.cache / 'assets/site'
+        sizes = {}
+        for name in FILES:
+            data = b'<!doctype html><head></head><body></body>' if name == 'index.html' else name.encode()
+            self.write(self.site / name, data)
+            sizes['/' + name] = {'raw': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        self.site_build = {'build': self.build, 'core': self.core, 'hardnested': self.hardnested['modules'],
+                           'tables': self.table, 'files': sizes}
+        self.save_site_build()
+
+    def save_site_build(self):
+        self.write(self.cache / 'assets/site-build.json', json.dumps(self.site_build).encode())
 
     def write(self, path, data):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +127,8 @@ class CdnArchiveTests(unittest.TestCase):
             data = archive.read(manifests[0])
             self.assertEqual(manifests[0], 'releases/' + hashlib.sha256(data).hexdigest() + '.json')
             release = json.loads(data)
+            web = release['webApp']['path']
+            expected.update(web + name for name in BUNDLE_FILES)
             self.assertEqual({key: release[key] for key in self.build}, self.build)
             self.assertEqual(release['version'], 1)
             self.assertEqual(
@@ -155,6 +170,7 @@ class CdnArchiveTests(unittest.TestCase):
 
         self.build['source']['dirty'] = True
         self.write(self.cache / 'cdn-build.json', json.dumps(self.build).encode())
+        self.save_site_build()
         package_cdn.prepare(self.shared, self.output)
         self.assertEqual(len(list(releases.iterdir())), 2)
         self.assertEqual(original.read_bytes(), data)
@@ -180,6 +196,8 @@ class CdnArchiveTests(unittest.TestCase):
         self.hardnested['tablePack'] = table
         self.write(self.cache / 'hardnested.json', json.dumps(self.hardnested).encode())
         self.write(self.root / 'software/web/src/runtime/tables.json', json.dumps(table).encode())
+        self.site_build['tables'] = table
+        self.save_site_build()
 
         package_cdn.prepare(self.shared, self.output)
 
@@ -220,10 +238,25 @@ class CdnArchiveTests(unittest.TestCase):
         for name in ['../outside.wasm', '/outside.wasm', 'C:/outside.wasm', 'dir\\outside.wasm']:
             with self.subTest(name=name):
                 self.write(self.cache / 'core.json', json.dumps({**self.core, 'path': name}).encode())
+                self.site_build['core'] = {**self.core, 'path': name}
+                self.save_site_build()
                 with self.assertRaisesRegex(ValueError, 'Invalid resource path'):
                     package_cdn.prepare(self.shared, self.output)
 
                 self.assertFalse(self.output.exists())
+
+    def test_stale_frontend_or_modified_shell_never_replaces_a_complete_archive(self):
+        self.write(self.output, b'previous complete archive')
+        self.build['frontendSha256'] = 'new frontend source fingerprint'
+        self.write(self.cache / 'cdn-build.json', json.dumps(self.build).encode())
+        with self.assertRaisesRegex(ValueError, 'Frontend differs from the resource build'):
+            package_cdn.prepare(self.shared, self.output)
+        self.assertEqual(self.output.read_bytes(), b'previous complete archive')
+        self.save_site_build()
+        (self.site / 'worker.mjs').write_bytes(b'changed after build')
+        with self.assertRaisesRegex(ValueError, 'Frontend differs from its build manifest'):
+            package_cdn.prepare(self.shared, self.output)
+        self.assertEqual(self.output.read_bytes(), b'previous complete archive')
 
 
 if __name__ == '__main__':

@@ -72,8 +72,9 @@ chameleon flash firmware.zip --yes
 chameleon flash firmware/system.zip --yes
 ```
 
-The platform archive includes `firmware.zip`. The optional firmware/resources
-archive contains `firmware/application.zip` and `firmware/system.zip`.
+Use the release archive's `firmware.zip` for installation, reinstallation and updates.
+You can also use **Device → Firmware update** in the USB or Bluetooth web interface.
+[Packages](../../docs/releases.md) · [Updates and recovery](../../docs/web-updates.md).
 
 **Export slots before flashing a full/system package:** the stock bootloader can
 overwrite slot storage. Application-only updates leave the bootloader unchanged.
@@ -93,23 +94,9 @@ should blink. Automatic DFU entry allows 30 seconds.
 
 - An interrupted **application-only** transfer can restart from the same ZIP
   after reconnecting in DFU. Errors/Ctrl-C report completed images.
-- A partial **system** update may advance the bootloader counter and reject the
-  same ZIP. Bootloader versions must strictly increase.
-- Application success requires the same device to return over USB and answer
-  firmware queries within 30 seconds. Accepted images alone do not confirm startup.
-- On macOS, the CLI waits for the original serial handle to disconnect before
-  closing it, including after errors/Ctrl-C, to mitigate a CDC driver reset panic.
-  This mitigation still needs hardware validation on affected macOS versions.
-
-<details>
-<summary>Hardware validation limits</summary>
-
-Tested on Ultra HW v1/macOS (2026-11-01): application updates from application/DFU
-modes, interrupted transfer and restart preserved slots. A full-package test
-required DFU recovery and storage repair before startup. Full-package startup
-without recovery and other hosts remain unqualified.
-
-</details>
+- After a partial **system** update, resume with the application ZIP if the
+  bootloader step completed. Our v5 bootloader allows signed downgrades; stock
+  bootloaders retain their own version policy.
 
 ## Slots and emulation
 

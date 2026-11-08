@@ -1,0 +1,80 @@
+name: Deploy web resources and firmware catalogue
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  release:
+    types: [published]
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Select the shared Pages publisher
+        id: publisher
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+          ref = 'develop'
+          request = Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/ref/heads/develop',
+                            headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'User-Agent': 'ChameleonUnleashed'})
+          try:
+              with urlopen(request, timeout=30):
+                  pass
+          except HTTPError as error:
+              if error.code != 404:
+                  raise
+              ref = os.environ['DEFAULT_BRANCH']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ref=' + ref + '\n')
+          PY
+      - uses: actions/checkout@v7
+        with:
+          # Use one publisher for both channels throughout development. After
+          # develop is merged and removed, the default branch owns publication.
+          ref: ${{ steps.publisher.outputs.ref }}
+          persist-credentials: false
+      - name: Read existing resources without changing gh-pages
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: .cache/baseline
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install signature verifier
+        run: python -m pip install cryptography==43.0.3
+      - name: Assemble stable releases and the latest development build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python resource/tools/prepare_pages.py --output .cache/site --baseline .cache/baseline
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: .cache/site
+          retention-days: 1
+      - name: Deploy resources and firmware catalogue
+        id: deployment
+        uses: actions/deploy-pages@v4

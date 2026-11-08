@@ -49,6 +49,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
         'long_ms': 1000,
         'pairing': False,
     }
+    initial_settings = deepcopy(settings)
     bank = [dict(hf=None, lf=None) for _ in range(8)]
     bank[0]['hf'] = dict(
         name='Test Classic',
@@ -181,6 +182,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
             self.respond(b'')
             return
         if path == '/test/reset':
+            cls.settings = deepcopy(cls.initial_settings)
             cls.classic_memory = [block_bytes(block) for block in range(256)]
             cls.lf_memory = [0x00148041, 0xFF800000, 0x0034A800, 0, 0, 0, 0]
             cls.bank = deepcopy(cls.initial_bank)
@@ -266,7 +268,7 @@ class SimulatedCard(BaseHTTPRequestHandler):
             else:
                 response = bytes([4]) + cls.classic_memory[0][:4] + bytes([4, 0, 8, 0])
         elif command == 2039:
-            if len(data) not in (19, 51):
+            if len(data) not in (19, 20, 51, 52):
                 status = 0x60
             else:
                 operation, method, model, uid_length = data[:4]
@@ -283,21 +285,27 @@ class SimulatedCard(BaseHTTPRequestHandler):
                 if method == 3 and block == trailer:
                     before_matches = old[6:10] == data[25:29]
                     observed = bytes(6) + old[6:]
-                if data[4:4 + uid_length] not in (cls.classic_memory[0][:uid_length], bytes(uid_length)):
+                checked = len(data) in (20, 52) and data[-1] == 1
+                if checked and model == 6 and cls.tag_kind != 'classic2k':
+                    status = 1
+                elif data[4:4 + uid_length] not in (cls.classic_memory[0][:uid_length], bytes(uid_length)):
                     status = 1
                 elif method == 3 and (data[13:19] != key or (data[12] == 2 and key_b_readable)):
                     status = 6
                 elif operation == 2 and block == 0 and cls.tag_kind == 'fixed-classic':
                     status = 0x75
                 elif operation in (0, 3):
-                    response = bytes([4]) + cls.classic_memory[0][:4] + bytes(3) + bytes([4, 0, 8]) + observed
+                    response = bytes([4]) + cls.classic_memory[0][:4] + bytes(3) + bytes([4, 0, cls.classic_memory[0][5]]) + observed
                 elif not before_matches:
                     status = 0x75
                 elif operation == 2:
                     cls.classic_memory[block] = data[35:51]
         elif command == 2040:
-            flags = 0 if cls.tag_kind == 'fixed-classic' else 1
+            flags = 0 if cls.tag_kind in ('fixed-classic', 'classic2k') else 1
             response = bytes([0, flags, 0, 1, 0]) + bytes(6)
+            if len(data) == 16 + 6 * data[14] and data[-1] == 1:
+                ats = bytes.fromhex('0c75778002c1052f2f01bcd660d3') if cls.tag_kind == 'classic2k' else b''
+                response += bytes([1, len(ats)]) + ats
         elif command == 2032:
             response = bytes([0, 1, 0])
         elif command == 2002:
@@ -309,7 +317,8 @@ class SimulatedCard(BaseHTTPRequestHandler):
             keys = [data[i : i + 6] for i in range(3, len(data), 6)]
             trailer = cls.classic_memory[data[0] // 4 * 4 + 3]
             expected_key = trailer[10:] if data[1] == 0x61 else trailer[:6]
-            if expected_key in keys:
+            readable_b = data[1] == 0x61 and trailer[6:9] == bytes([255, 7, 128])
+            if expected_key in keys and not readable_b:
                 response = b'\x01' + expected_key
             else:
                 status = 6
@@ -396,12 +405,14 @@ class SimulatedCard(BaseHTTPRequestHandler):
                 cls.classic_memory[0] = data[43:59]
                 response = cls.classic_memory[0]
         elif command == 2030:
+            model = 6 if cls.tag_kind == 'classic2k' else 1
+            blocks = 128 if model == 6 else 64
             if (
-                cls.tag_kind != 'classic'
+                cls.tag_kind not in ('classic', 'fixed-classic', 'classic2k')
                 or len(data) != 59
-                or data[:9] != bytes([1, 4]) + cls.classic_memory[0][:4] + bytes(3)
+                or data[:9] != bytes([model, 4]) + cls.classic_memory[0][:4] + bytes(3)
                 or data[9] == 0
-                or data[9] >= 64
+                or data[9] >= blocks
                 or data[9] % 4 == 3
             ):
                 status = 0x60
@@ -414,25 +425,65 @@ class SimulatedCard(BaseHTTPRequestHandler):
             if len(data) != 13 or data[8:] != bytes([4, 1, 2, 3, 4]) or data[1] >= 40:
                 status = 0x60
             else:
-                sector = data[1]
-                first = sector * 4 if sector < 32 else 128 + (sector - 32) * 16
-                count = 4 if sector < 32 else 16
-                trailer = cls.classic_memory[first + count - 1]
-                key_offset = 0
-                if data[0] == 0x61:
-                    key_offset = 10
-                key_b_readable = trailer[6:9] == bytes([255, 7, 128])
-                if data[2:8] != trailer[key_offset:key_offset + 6] or (data[0] == 0x61 and key_b_readable):
-                    status = 6
-                else:
-                    response = ((1 << count) - 1).to_bytes(2, 'big')
-                    blocks = list(cls.classic_memory[first:first + count])
-                    blocks[-1] = bytes(6) + blocks[-1][6:]
-                    response += b''.join(blocks)
+                status, response = self.classic_sector(data[1], data[0], data[2:8])
+        elif command == 2042:
+            status, response = self.classic_batch(data)
         else:
             status = 0x60
 
         self.respond(status.to_bytes(2, 'big') + response)
+
+    def classic_sector(self, sector, key_type, key):
+        cls = type(self)
+        first = sector * 4 if sector < 32 else 128 + (sector - 32) * 16
+        count = 4 if sector < 32 else 16
+        trailer = cls.classic_memory[first + count - 1]
+        key_offset = 10 if key_type == 0x61 else 0
+        key_b_readable = trailer[6:9] == bytes([255, 7, 128])
+        if key != trailer[key_offset:key_offset + 6] or (key_type == 0x61 and key_b_readable):
+            return 6, b''
+        blocks = list(cls.classic_memory[first:first + count])
+        blocks[-1] = bytes(6) + blocks[-1][6:]
+        return 0, ((1 << count) - 1).to_bytes(2, 'big') + b''.join(blocks)
+
+    def classic_batch(self, data):
+        """Follow firmware/application/src/rfid/reader/hf/classic_batch.c: kind 0 checks one
+        key per block, kind 1 reads sectors; records stop at a lost target."""
+        cls = type(self)
+        if len(data) < 8 or data[0] != 1 or data[1] > 1 or data[2] not in (4, 7, 10):
+            return 0x60, b''
+        kind, size = data[1], data[2]
+        head = 4 + size
+        count = data[head - 1] if len(data) >= head else 0
+        entries = [data[head + 8 * i:head + 8 * i + 8] for i in range(count)]
+        if (not 1 <= count <= 8 or len(data) != head + 8 * count
+                or any(entry[1] not in (0x60, 0x61) or (kind and entry[0] >= 40) for entry in entries)):
+            return 0x60, b''
+        required = 3 + sum(4 + (2 + (4 if entry[0] < 32 else 16) * 16 if kind else 7)
+                           for entry in entries)
+        # The HTTP reply buffer reserves two bytes for the command status.
+        if required > 510:
+            return 0x60, b''
+        present = (cls.tag_kind in ('classic', 'fixed-classic', 'classic2k')
+                   and data[3:head - 1] == cls.classic_memory[0][:4])
+        if kind == 0 and not present:
+            return 1, b''
+        output = bytearray([1, kind, count])
+        for index, entry in enumerate(entries):
+            block, key_type, key = entry[0], entry[1], bytes(entry[2:8])
+            if kind == 1:
+                status, result = self.classic_sector(block, key_type, key) if present else (1, b'')
+            else:
+                trailer = cls.classic_memory[block // 4 * 4 + 3 if block < 128 else block // 16 * 16 + 15]
+                expected = trailer[10:] if key_type == 0x61 else trailer[:6]
+                key_b_readable = trailer[6:9] == bytes([255, 7, 128])
+                authenticated = key == expected and not (key_type == 0x61 and key_b_readable)
+                status, result = (0, b'\x01' + key) if authenticated else (6, bytes(7))
+            output += status.to_bytes(2, 'big') + len(result).to_bytes(2, 'big') + result
+            if status not in (0, 6):
+                output[2] = index + 1
+                break
+        return 0, bytes(output)
 
     def slot_action(self, operation, data):
         cls = type(self)

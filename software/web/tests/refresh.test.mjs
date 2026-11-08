@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deviceViews } from '../src/ui/device-view.mjs';
 import { slotView } from '../src/ui/slots.mjs';
+import { BluetoothTransport } from '../src/device/bluetooth.mjs';
+import { request, setDeviceTransport } from '../src/device/transport.mjs';
 
 function dom(t) {
   const previous = globalThis.document;
@@ -22,7 +24,8 @@ function dom(t) {
       this.children = children;
     },
 
-    insertAdjacentHTML() {}
+    insertAdjacentHTML() {},
+    querySelectorAll: () => []
   });
   const get = (id) => {
     if (!elements.has(id)) {
@@ -105,6 +108,103 @@ test('a manual device refresh can await an existing refresh and errors do not pr
   assert.equal((await views.refresh()).ok, true);
   assert.deepEqual(connections, [true, false, true]);
   assert.deepEqual(notices, [], 'background refresh stays silent');
+});
+
+test('the connection card, pill and Scan prompt share one USB connection state', async (t) => {
+  const get = dom(t);
+  let fail = true;
+  t.mock.method(globalThis, 'fetch', async (path) => {
+    if (fail) {
+      throw new Error('Failed to fetch');
+    }
+    return response(path);
+  });
+
+  const views = deviceViews({ notify() {}, onConnection() {} });
+  assert.equal(get('connection-title').textContent, 'Connecting…');
+  assert.equal(get('connection').dataset.state, 'pending');
+  assert.equal(get('scan-connect').hidden, true, 'Scan waits for the first check');
+
+  await views.refresh();
+  assert.equal(get('connection-title').textContent, 'Ultra not reachable');
+  assert.equal(get('connection').textContent, 'Not connected');
+  assert.equal(get('connection').dataset.state, 'offline');
+  assert.equal(get('scan-connect').hidden, false);
+  assert.equal(get('scanner').hidden, true);
+  assert.equal(get('scan-connect-button').textContent, 'Retry');
+  assert.equal(get('device-settings').hidden, true, 'stale settings are not editable');
+  assert.equal(get('emulation-state').hidden, true);
+  assert.equal(get('connect-bluetooth').hidden, true, 'the USB-served app has no Web Bluetooth');
+
+  fail = false;
+  await views.refresh();
+  assert.equal(get('connection-title').textContent, 'Chameleon Ultra');
+  assert.equal(get('connection-help').textContent, 'Connected over USB');
+  assert.equal(get('connection').dataset.state, 'connected');
+  assert.equal(get('scan-connect').hidden, true);
+  assert.equal(get('scanner').hidden, false);
+  assert.equal(get('device-settings').hidden, false);
+  assert.equal(get('connection-actions').hidden, true, 'USB alone offers no transport actions');
+  assert.equal(get('connection-tools').hidden, true, 'nor controls beside the connection status');
+  assert.equal(get('firmware-update-note').hidden, true, 'firmware updates are available over USB');
+});
+
+test('an aborted firmware reconnect disconnects a late transport without replacing the backend', async (t) => {
+  dom(t);
+  const original = new Map(
+    ['navigator', 'isSecureContext'].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)])
+  );
+  const peripheral = new EventTarget();
+  const characteristic = new EventTarget();
+  let disconnects = 0;
+  peripheral.gatt = {
+    connected: true,
+    connect: async function () {
+      return this;
+    },
+    getPrimaryService: async () => ({ getCharacteristic: async () => characteristic }),
+    disconnect() {
+      this.connected = false;
+      disconnects++;
+      peripheral.dispatchEvent(new Event('gattserverdisconnected'));
+    }
+  };
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { bluetooth: { requestDevice: async () => peripheral } }
+  });
+  Object.defineProperty(globalThis, 'isSecureContext', { configurable: true, value: true });
+  setDeviceTransport({ request: async () => 'original backend' });
+  t.after(() => {
+    setDeviceTransport(null);
+    for (const [name, descriptor] of original) {
+      if (descriptor) {
+        Object.defineProperty(globalThis, name, descriptor);
+      } else {
+        delete globalThis[name];
+      }
+    }
+  });
+  let release;
+  let reached;
+  const waiting = new Promise((resolve) => (release = resolve));
+  const initializing = new Promise((resolve) => (reached = resolve));
+  t.mock.method(BluetoothTransport.prototype, 'initialize', async function () {
+    reached();
+    await waiting;
+    return this;
+  });
+  const views = deviceViews({ notify() {}, onConnection() {}, canConnect: () => false });
+  const controller = new AbortController();
+  const cancelled = new Error('Update closed');
+  const connecting = views.connect(true, controller.signal);
+  const rejected = assert.rejects(connecting, (error) => error === cancelled);
+  await initializing;
+  controller.abort(cancelled);
+  release();
+  await rejected;
+  assert.equal(disconnects, 1);
+  assert.equal(await request('/api/status'), 'original backend');
 });
 
 test('concurrent slot refreshes wait for all eight slots instead of returning premature success', async (t) => {

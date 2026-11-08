@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       run-tests:
-        description: Run automated test suites for development builds
+        description: Run the automated test suites for this build
         type: boolean
         default: false
 
@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: push-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' }}
 
 jobs:
   pages:
@@ -41,25 +41,72 @@ jobs:
     with:
       publish-builder: false
       asset-base: ${{ needs.pages.outputs.url }}
-      browser-tests: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+      run-tests: ${{ github.ref != 'refs/heads/develop' || inputs.run-tests == true }}
+      browser-tests: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run-tests == true) }}
   client_pipeline:
     name: Build and test clients
     permissions:
       contents: read
     uses: ./.github/workflows/build_client.yml
-  publish_resources:
-    name: Publish stable and development resources
-    needs: [firmware_pipeline, client_pipeline, create_release]
-    if: >-
-      always() && needs.firmware_pipeline.result == 'success' &&
-      needs.client_pipeline.result == 'success' &&
-      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
-       needs.create_release.result == 'success')
+    with:
+      run-tests: ${{ github.ref != 'refs/heads/develop' || inputs.run-tests == true }}
+  create_dev_release:
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: SecLabz/ChameleonUnleashed/.github/workflows/mirror_firmware.yml@develop
+      contents: write
+    name: Create dev pre-release with artifacts
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    needs:
+      - pages
+      - firmware_pipeline
+      - client_pipeline
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-artifacts-*
+          merge-multiple: true
+          path: release-artifacts
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install signature verifier
+        run: python -m pip install cryptography==43.0.3
+      - name: Package versioned downloads
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 resource/tools/development.py --artifacts release-artifacts --output release-packages --commit "$GITHUB_SHA"
+      - name: Upload to dev release
+        uses: softprops/action-gh-release@v3
+        with:
+          body: |
+            Latest development build from `develop`. This version may be unstable.
+
+            Download the archive for your computer and follow `INSTALL.txt` to install or update.
+
+            [Bluetooth app](${{ needs.pages.outputs.url }}dev/)
+
+            Choose Development in the USB firmware update page to install this build.
+
+            **Firmware & resources:** standalone firmware, HEX images and web resources.
+          tag_name: dev
+          name: Development release
+          draft: false
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          files: release-packages/*
+      - name: Verify uploads and remove superseded downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 resource/tools/sync_release_assets.py --tag dev --archives release-packages --development
+      - name: Fix up release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/dev" -f sha="$GITHUB_SHA" -F force=true
   create_release:
     permissions:
       contents: write
@@ -97,3 +144,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: python3 resource/tools/sync_release_assets.py --tag "$RELEASE_TAG" --archives release-packages
+
+  deploy_pages:
+    name: Deploy matching resources and firmware catalogue
+    needs: [create_dev_release, create_release]
+    if: always() && (needs.create_dev_release.result == 'success' || needs.create_release.result == 'success')
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/mirror_firmware.yml

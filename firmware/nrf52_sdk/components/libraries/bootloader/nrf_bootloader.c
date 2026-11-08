@@ -54,6 +54,7 @@
 #include "nrf_bootloader_wdt.h"
 #include "nrf_bootloader_info.h"
 #include "nrf_bootloader_app_start.h"
+#include "web_update.h"
 #include "nrf_bootloader_fw_activation.h"
 #include "nrf_bootloader_dfu_timers.h"
 #include "app_scheduler.h"
@@ -262,6 +263,12 @@ void dfu_enter_button_init(void)
 static bool crc_on_valid_app_required(void)
 {
     bool ret = true;
+    uint32_t reason = NRF_POWER->RESETREAS;
+    if ((reason & (POWER_RESETREAS_NFC_Msk | POWER_RESETREAS_LPCOMP_Msk)) &&
+        !(reason & (POWER_RESETREAS_DOG_Msk | POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_SREQ_Msk)) &&
+        /* Commit is written only after the signed image and cache are stored.
+         * The flash dispatcher checks its CRC and vectors once before RF entry. */
+        web_update_cache_committed()) return false;
     if (NRF_BL_APP_CRC_CHECK_SKIPPED_ON_SYSTEMOFF_RESET &&
         (nrf_power_resetreas_get() & NRF_POWER_RESETREAS_OFF_MASK))
     {
@@ -288,6 +295,12 @@ static bool crc_on_valid_app_required(void)
 
 static bool boot_validate(boot_validation_t const * p_validation, uint32_t data_addr, uint32_t data_len, bool do_crc)
 {
+    /* The signed Nordic installation authenticates the supervisor and initial app.
+     * Subsequent web updates authenticate the mutable app in the supervisor. */
+    extern bool web_recovery_present(void);
+    extern bool web_recovery_boot_valid(void);
+    if (data_addr == WEB_RECOVERY_START)
+        return web_recovery_present() && (!do_crc || web_recovery_boot_valid());
     if (!do_crc && (p_validation->type == VALIDATE_CRC))
     {
         return true;
@@ -471,12 +484,21 @@ ret_code_t nrf_bootloader_init(nrf_dfu_observer_t observer)
     dfu_enter_button_init();
 #endif
 
+    extern void web_recovery_pending_capture(void);
+    extern void web_recovery_pending_apply(void);
+    if (web_update_startup_pending(NRF_POWER->GPREGRET2) &&
+        (NRF_POWER->RESETREAS & (POWER_RESETREAS_DOG_Msk | POWER_RESETREAS_LOCKUP_Msk | POWER_RESETREAS_SREQ_Msk))) {
+        NRF_POWER->GPREGRET2 &= WEB_RECOVERY_APP_STATE_MASK;
+        NRF_POWER->GPREGRET = BOOTLOADER_DFU_START;
+    }
+    web_recovery_pending_capture();
     ret_val = nrf_dfu_settings_init(false);
     if (ret_val != NRF_SUCCESS)
     {
         return NRF_ERROR_INTERNAL;
     }
 
+    web_recovery_pending_apply();
     #if NRF_BL_DFU_ALLOW_UPDATE_FROM_APP
     // Postvalidate if DFU has signaled that update is ready.
     if (s_dfu_settings.bank_current == NRF_DFU_CURRENT_BANK_1)

@@ -427,7 +427,9 @@ __WEAK ret_code_t nrf_dfu_settings_additional_erase(void)
 
 void nrf_dfu_settings_progress_reset(void)
 {
-    memset(s_dfu_settings.init_command, 0xFF, INIT_COMMAND_MAX_SIZE); // Remove the last init command
+    /* The layout-2 supervisor authenticates the completed installation from this
+     * original packet on its first boot. Zero command_size still invalidates the
+     * DFU transfer; a new command overwrites the packet before prevalidation. */
     memset(&s_dfu_settings.progress, 0, sizeof(dfu_progress_t));
     s_dfu_settings.write_offset = 0;
 }

@@ -1,7 +1,11 @@
 #include "network.h"
 #include "http.h"
 #include "dhcp.h"
+#ifdef WEB_RECOVERY
+#include "recovery.h"
+#else
 #include "app_timer.h"
+#endif
 #include "tusb.h"
 #include "lwip/init.h"
 #include "lwip/netif.h"
@@ -15,7 +19,10 @@ extern uint8_t tud_network_mac_address[6];
 static struct netif net;
 static struct pbuf *incoming;
 static volatile bool disconnected;
-void network_disconnect(void) { disconnected = true; }
+void network_disconnect(void) {
+    disconnected = true;
+    web_session_disconnect(API_SOURCE_HTTP);
+}
 typedef struct {
     struct tcp_pcb *pcb;
     uint8_t buffer[HTTP_REQUEST_MAX_BYTES];
@@ -33,12 +40,16 @@ static bool dispatching;
 _Static_assert(HTTP_RESPONSE_MAX_BYTES <= HTTP_REQUEST_MAX_BYTES,
                "Response must fit the released request buffer");
 u32_t sys_now(void) {
+#ifdef WEB_RECOVERY
+    return recovery_millis();
+#else
     static uint32_t previous;
     static uint64_t ticks;
     uint32_t now = app_timer_cnt_get();
     ticks += app_timer_cnt_diff_compute(now, previous);
     previous = now;
     return (uint32_t)(ticks * 1000u * (APP_TIMER_CONFIG_RTC_FREQUENCY + 1u) / APP_TIMER_CLOCK_FREQ);
+#endif
 }
 
 static void release(connection_t *c) {
@@ -236,10 +247,24 @@ bool network_init(void) {
     return true;
 }
 
+bool network_work_pending(void) {
+    if (disconnected || incoming)
+        return true;
+    for (unsigned i = 0; i < HTTP_CONNECTIONS; i++) {
+        const connection_t *c = &connections[i];
+        if (c->pcb && (c->pending || (c->responding &&
+                c->sent < c->response.header_size + c->response.size)))
+            return true;
+    }
+    for (const struct tcp_pcb *pcb = tcp_active_pcbs; pcb; pcb = pcb->next)
+        if (pcb->unsent || pcb->unacked || (pcb->flags & TF_ACK_NOW))
+            return true;
+    return false;
+}
+
 void network_poll(void) {
     if (disconnected) {
         disconnected = false;
-        web_session_end();
         /* Include handshakes and closing PCBs no longer owned by HTTP. */
         while (tcp_active_pcbs)
             tcp_abort(tcp_active_pcbs);

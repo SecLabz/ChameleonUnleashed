@@ -10,6 +10,9 @@
     "check": "biome check . && tsc -p jsconfig.json",
     "format": "biome format --write .",
     "test": "cd ../.. && node --test software/web/tests/*.test.mjs",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:hardware:ble": "playwright test --config playwright.hardware.config.mjs",
+    "test:hosted": "playwright test --config playwright.hosted.config.mjs",
+    "test:mobile": "playwright test --config playwright.mobile.config.mjs"
   }
 }

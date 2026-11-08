@@ -74,7 +74,7 @@ fn integer(input: &[u8], number: u64) -> Result<u64> {
     }
 }
 
-pub(super) fn validate(packet: &[u8], name: &str, firmware_bytes: usize) -> Result<()> {
+pub(super) fn validate(packet: &[u8], name: &str, firmware_bytes: usize) -> Result<Option<u32>> {
     if field(packet, 1)?.is_some() {
         return Err("DFU init packet must contain only a signed command".into());
     }
@@ -112,7 +112,11 @@ pub(super) fn validate(packet: &[u8], name: &str, firmware_bytes: usize) -> Resu
     if !valid {
         return Err(format!("DFU {name} size disagrees with the signed init packet").into());
     }
-    Ok(())
+    match field(init, 1)? {
+        Some(Value::Integer(version)) => Ok(Some(u32::try_from(version)?)),
+        None => Ok(None),
+        _ => Err("Invalid DFU firmware version".into()),
+    }
 }
 
 #[cfg(test)]

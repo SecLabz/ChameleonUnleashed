@@ -7,9 +7,11 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from package_release import PLATFORMS, prepare
+import package_release
 from sync_release_assets import superseded
 
 
@@ -25,6 +27,8 @@ class ReleaseDownloadTests(unittest.TestCase):
             binary = 'chameleon.exe' if platform.startswith('windows') else 'chameleon'
             self.archive(f'chameleon-{platform}.zip', {binary: platform.encode()})
         self.archive('chameleon-unleashed-app.zip', {'application.bin': b'original signed application'})
+        self.archive('chameleon-unleashed-install.zip', {'application.bin': b'original signed application', 'bootloader.bin': b'web bootloader'})
+        self.archive('chameleon-unleashed-bootloader.zip', {'bootloader.bin': b'web bootloader'})
         self.archive('chameleon-unleashed-full.zip', {'system.bin': b'original signed system'})
         self.archive('chameleon-unleashed-binaries.zip', {'application.hex': b'original hex', 'THIRD_PARTY.txt': b'notices'})
         module = b'original wasm'
@@ -45,17 +49,22 @@ class ReleaseDownloadTests(unittest.TestCase):
 
     def test_downloads_preserve_original_payloads_and_unix_permissions(self):
         names = prepare(self.inputs, self.output, '1.0.0', 'v1.0.0')
-        self.assertEqual(len(names), 5)
+        self.assertEqual(set(names), {
+            *(f'ChameleonUnleashed-v1.0.0-{platform}.zip' for platform in PLATFORMS),
+            'ChameleonUnleashed-v1.0.0-firmware-resources.zip',
+        })
         app = (self.inputs / 'chameleon-unleashed-app.zip').read_bytes()
+        installation = (self.inputs / 'chameleon-unleashed-install.zip').read_bytes()
         for platform in PLATFORMS:
             with ZipFile(self.output / f'ChameleonUnleashed-v1.0.0-{platform}.zip') as archive:
                 binary = 'chameleon.exe' if platform.startswith('windows') else 'chameleon'
                 self.assertEqual(set(archive.namelist()), {binary, 'firmware.zip', 'INSTALL.txt'})
                 self.assertEqual(archive.read(binary), platform.encode())
-                self.assertEqual(archive.read('firmware.zip'), app)
+                self.assertEqual(archive.read('firmware.zip'), installation)
                 with ZipFile(io.BytesIO(archive.read('firmware.zip'))) as inner:
                     self.assertEqual(inner.read('application.bin'), b'original signed application')
                 instructions = archive.read('INSTALL.txt').decode()
+                self.assertIn('Before the first bootloader migration, export your saved tags', instructions)
                 self.assertIn('v1.0.0', instructions)
                 self.assertNotIn('kit', instructions.lower())
                 if platform.startswith('windows'):
@@ -66,6 +75,7 @@ class ReleaseDownloadTests(unittest.TestCase):
                     self.assertIn('./chameleon flash firmware.zip', instructions)
                     self.assertEqual(stat.S_IMODE(archive.getinfo(binary).external_attr >> 16), 0o755)
         with ZipFile(self.output / 'ChameleonUnleashed-v1.0.0-firmware-resources.zip') as archive:
+            self.assertEqual(archive.read('firmware/install.zip'), installation)
             self.assertEqual(archive.read('firmware/application.zip'), app)
             self.assertEqual(archive.read('firmware/system.zip'),
                              (self.inputs / 'chameleon-unleashed-full.zip').read_bytes())
@@ -96,7 +106,7 @@ class ReleaseDownloadTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_superseded_downloads_are_removed_only_after_every_new_archive_matches(self):
-        archives = {f'archive-{i}.zip': str(i).encode() for i in range(5)}
+        archives = {f'archive-{i}.zip': str(i).encode() for i in range(len(PLATFORMS) + 1)}
         assets = [{'id': i, 'name': name, 'size': len(data), 'state': 'uploaded',
                    'digest': 'sha256:' + hashlib.sha256(data).hexdigest()}
                   for i, (name, data) in enumerate(archives.items())]
@@ -107,6 +117,14 @@ class ReleaseDownloadTests(unittest.TestCase):
                 superseded(invalid + [old], archives)
         with self.assertRaises(ValueError):
             superseded(assets, {})
+
+    def test_repackaging_verified_older_artifacts_does_not_use_the_current_workspace_version(self):
+        arguments = ['package_release.py', '--artifacts', str(self.inputs), '--output', str(self.output),
+                     '--tag', 'v1.0.0', '--version', '1.0.0']
+        with patch('sys.argv', arguments), patch.object(package_release, 'read_version',
+                side_effect=AssertionError('Current workspace may already have a newer version')):
+            package_release.main()
+        self.assertEqual(len(list(self.output.glob('ChameleonUnleashed-v1.0.0-*.zip'))), 5)
 
 
 if __name__ == '__main__':

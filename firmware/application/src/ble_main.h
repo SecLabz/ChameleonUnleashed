@@ -9,6 +9,7 @@
 extern uint16_t batt_lvl_in_milli_volts;
 extern uint8_t percentage_batt_lvl;
 extern volatile bool g_is_low_battery_shutdown;
+extern volatile bool g_is_ble_connected;
 
 typedef void (*lf_adc_callback_t)(nrf_saadc_value_t *, size_t);
 
@@ -22,6 +23,14 @@ bool advertising_stop_checked(void);
 bool advertising_pause(bool *resume);
 void delete_bonds_all(void);
 void nus_data_response(uint8_t *p_data, uint16_t length);
+uint16_t ble_nus_payload_limit(void);
+/* Experimental link profiles: zero queries without changing the link.
+ * version, connected, payload/interval/latency/timeout BE16, TX/RX PHY,
+ * requested min/max BE16, GAP result BE32, PHY result BE32. */
+#define BLE_LINK_INFO_BYTES 24u
+void ble_link_profile(uint8_t profile, uint8_t phy, uint8_t output[BLE_LINK_INFO_BYTES]);
+/* Queue one complete unsolicited job frame without interleaving API replies. */
+bool ble_stream_response(uint8_t *data, uint16_t length);
 bool is_nus_working(void);
 void set_ble_connect_key(uint8_t *key);
 

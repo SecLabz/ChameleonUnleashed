@@ -1,54 +1,36 @@
-# Release packages
+# Release downloads
 
-For step-by-step flashing instructions, see [Quick installation](../README.md#quick-installation).
+Download from [GitHub Releases](https://github.com/SecLabz/ChameleonUnleashed/releases).
 
-Download archives from [GitHub Releases](https://github.com/SecLabz/ChameleonUnleashed/releases).
+Choose the archive for your computer. It contains the CLI, `firmware.zip` and
+`INSTALL.txt` for installation, reinstallation and updates.
 
-Choose the archive matching your OS and architecture. Each contains the native
-CLI, application firmware (`firmware.zip`) and platform-specific `INSTALL.txt`.
-
-| Archive (v1.0.0 examples) | Platform |
+| Archive | Computer |
 | --- | --- |
-| `ChameleonUnleashed-v1.0.0-macos-arm64.zip` | macOS, Apple Silicon |
-| `ChameleonUnleashed-v1.0.0-macos-x64.zip` | macOS, Intel |
-| `ChameleonUnleashed-v1.0.0-windows-x64.zip` | Windows x64 |
-| `ChameleonUnleashed-v1.0.0-linux-x64.zip` | Linux x64 |
+| `ChameleonUnleashed-v<version>-macos-arm64.zip` | Mac with Apple Silicon |
+| `ChameleonUnleashed-v<version>-macos-x64.zip` | Mac with Intel processor |
+| `ChameleonUnleashed-v<version>-windows-x64.zip` | Windows x64 |
+| `ChameleonUnleashed-v<version>-linux-x64.zip` | Linux x64 |
 
-Extract the downloaded archive, keep the included `firmware.zip` intact, and
-follow `INSTALL.txt`. The executable is `chameleon` (`chameleon.exe` on Windows).
-The Python CLI remains available from source.
+Extract the archive, keep `firmware.zip` intact and follow `INSTALL.txt`.
+[Step-by-step instructions](../README.md#quick-installation).
 
-`ChameleonUnleashed-v1.0.0-firmware-resources.zip` provides standalone packages:
+You can also update from **Device → Firmware update** in the USB or Bluetooth web interface.
+[Browser updates and recovery](web-updates.md).
 
-| Path | Contents |
+For standalone firmware, HEX images or web resources, use
+`ChameleonUnleashed-v<version>-firmware-resources.zip`:
+
+| File or folder | Purpose |
 | --- | --- |
-| `firmware/application.zip` | Application-only USB DFU update. |
-| `firmware/system.zip` | Application, bootloader and SoftDevice USB DFU update. |
-| `images/` | HEX images for direct programming, with notices. |
-| `cdn/` | Matching web modules, tables, manifests and license notices. |
+| `firmware/install.zip` | Same firmware package as the platform archives. |
+| `firmware/application.zip` | Update a device that already has web recovery. |
+| `firmware/bootloader.zip` | Separate bootloader for DFU clients that need it. |
+| `firmware/system.zip` | Firmware with bootloader and SoftDevice. |
+| `images/` | HEX images for direct programming. |
+| `cdn/` | Matching web resources for self-hosting. Keep older resources available. |
 
-Web resources are published automatically to GitHub Pages. For manual hosting,
-publish the contents of `cdn/` at the firmware's configured resource URL and keep
-older versions available. Use firmware and resources from the same build.
-
-Development archives include both the version and source commit in their names,
-for example `ChameleonUnleashed-v1.0.0-dev.abcdef0-macos-arm64.zip`.
-
-The `dev` pre-release tracks the default branch. The project version is defined
-in `software/Cargo.toml` under `[workspace.package]`; the native CLI, firmware,
-web interface and CDN release manifest use that same version. Release tags must
-match it exactly, for example `v1.0.0` for version `1.0.0`.
-
-CDN resource paths remain content-addressed. Manifest schemas, protocol versions
-and shared NFC libraries have their own version numbers.
-
-Every push runs builds, Rust/Python/JavaScript tests and code checks. The complete
-Chromium/WebKit suite also runs for `v*` tags and manual **Push handler** runs;
-it is skipped for ordinary branch pushes and pull requests.
-
-To regenerate downloads for an existing tag, run **Repackage tagged release**
-with the tag and the ID of its original successful build. The workflow verifies
-that the build belongs to the tagged commit, downloads its GitHub Actions
-artifacts, then runs the same packaging and publication steps as a new release.
-It leaves the tag and compiled payloads unchanged. The original build artifacts
-must still be available; this workflow does not rebuild firmware or deploy Pages.
+The `dev` pre-release uses the same archives, with a `-dev.<commit>` version.
+It contains the latest build from `develop`; it may be unstable.
+Use the [stable Bluetooth app](https://seclabz.github.io/ChameleonUnleashed/app/)
+or the matching [development app](https://seclabz.github.io/ChameleonUnleashed/dev/).

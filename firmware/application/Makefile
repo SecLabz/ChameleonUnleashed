@@ -199,15 +199,16 @@ WEB_INPUTS := $(TINYUSB)/src/tusb.c $(LWIP)/src/core/init.c $(WEB_BUILD)/web_ass
 ifneq ($(words $(wildcard $(WEB_INPUTS))),$(words $(WEB_INPUTS)))
 $(error Prepare USB dependencies and web assets first; see software/web/README.md)
 endif
-SRC_FILES += $(wildcard $(PROJ_DIR)/net/*.c) \
+SRC_FILES += $(SRC_COMMON)/web_update.c $(SRC_COMMON)/nordic_update.c $(wildcard $(PROJ_DIR)/net/*.c) $(wildcard $(PROJ_DIR)/services/*.c) \
+  $(PROJ_DIR)/rfid/reader/hf/classic_batch.c $(PROJ_DIR)/rfid/reader/hf/classic_job.c \
   $(TINYUSB)/src/tusb.c $(TINYUSB)/src/common/tusb_fifo.c \
   $(TINYUSB)/src/device/usbd.c $(TINYUSB)/src/device/usbd_control.c \
   $(TINYUSB)/src/class/cdc/cdc_device.c $(TINYUSB)/src/class/net/ecm_rndis_device.c \
   $(wildcard $(LWIP)/src/core/*.c) $(filter-out $(LWIP)/src/core/ipv4/dhcp.c,$(wildcard $(LWIP)/src/core/ipv4/*.c)) \
   $(LWIP)/src/netif/ethernet.c
-INC_FOLDERS += $(SDK_ROOT)/modules/nrfx/drivers/src $(PROJ_DIR)/net $(TINYUSB)/src $(TINYUSB)/lib/networking $(LWIP)/src/include $(WEB_BUILD)
-# Keep web dispatch and serialization small; retain default optimization for RF kernels.
-$(addprefix $(OUTPUT_DIRECTORY)/application/,http.c.o api.c.o hf_reader.c.o st25tb_reader.c.o st25tb_tearoff_command.c.o web_tearoff.c.o): CFLAGS += -Os
+INC_FOLDERS += $(SDK_ROOT)/modules/nrfx/drivers/src $(PROJ_DIR)/net $(PROJ_DIR)/services $(TINYUSB)/src $(TINYUSB)/lib/networking $(LWIP)/src/include $(WEB_BUILD)
+# Keep web transport, dispatch and serialization small; retain default optimization for RF kernels.
+$(addprefix $(OUTPUT_DIRECTORY)/application/,http.c.o tcp.c.o tcp_in.c.o tcp_out.c.o api.c.o control.c.o device_api.c.o slot_api.c.o ble_api.c.o classic_batch.c.o classic_job.c.o hf_reader.c.o st25tb_reader.c.o st25tb_tearoff_command.c.o web_tearoff.c.o): CFLAGS += -Os
 
 # Include folders common to all targets
 INC_FOLDERS += \
@@ -565,7 +566,7 @@ $(VERSION_FILE): version-force | $(OUTPUT_DIRECTORY)
 	@printf '%s\n' '$(GIT_VERSION)' '$(APP_FW_SEMVER)' > $@.tmp
 	@# macOS Make 3.81 compares second-resolution modification times.
 	@if cmp -s $@.tmp $@; then rm $@.tmp; else sleep 1 && touch $@.tmp && mv $@.tmp $@; fi
-$(addprefix $(OUTPUT_DIRECTORY)/application/,app_cmd.c.o api.c.o device_api.c.o): $(VERSION_FILE)
+$(addprefix $(OUTPUT_DIRECTORY)/application/,app_cmd.c.o control.c.o device_api.c.o): $(VERSION_FILE)
 $(OUTPUT_DIRECTORY)/application/ble_clock.c.o: $(SDK_ROOT)/components/softdevice/common/nrf_sdh.c
 
 .PHONY: flash flash_softdevice erase config

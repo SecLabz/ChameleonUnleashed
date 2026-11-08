@@ -14,6 +14,7 @@ typedef struct {
     picc_14a_tag_t expected;
     uint16_t flags;
     uint8_t gen2;
+    uint8_t *ats, *ats_length;
 } magic_probe_t;
 
 static void reset_field(void) {
@@ -78,6 +79,63 @@ static bool valid_crc(uint8_t *response, uint16_t bits, uint16_t bytes) {
     uint8_t crc[2];
     crc_14a_calculate(response, bytes - 2, crc);
     return memcmp(crc, response + bytes - 2, sizeof(crc)) == 0;
+}
+
+static bool plus_sl1_2k_ats(uint8_t *response, uint16_t bits) {
+    if (bits < 32 || bits > DEF_FIFO_LENGTH * 8u || (bits & 7u)) return false;
+    uint16_t bytes = bits / 8u;
+    if (response[0] != bytes - 2u || !valid_crc(response, bits, bytes)) return false;
+    uint8_t t0 = response[1];
+    if ((t0 & 0x80) || (t0 & 15) > 8) return false;
+    uint8_t history = 2;
+    for (uint8_t flag = 0x10; flag <= 0x40; flag <<= 1) {
+        if (t0 & flag) history++;
+    }
+    static const uint8_t histories[][7] = {
+        {0xc1, 5, 0x2f, 0x2f, 0, 0x35, 0xc7},
+        {0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6}
+    };
+    if (bytes != history + 7u + 2u) return false;
+    return !memcmp(response + history, histories[0], 7) ||
+           !memcmp(response + history, histories[1], 7);
+}
+
+uint16_t mf1_classic_2k_sl1_check(uint8_t uid_length, const uint8_t *uid,
+                                 const uint8_t *atqa, uint8_t sak) {
+    if ((uid_length != 4 && uid_length != 7) || sak != 8 ||
+            atqa[0] != (uid_length == 4 ? 4 : 0x44) || atqa[1] != 0) {
+        pcd_14a_reader_antenna_off();
+        pcd_14a_reader_mf1_unauth();
+        return STATUS_HF_TAG_NO;
+    }
+    magic_probe_t probe = {0};
+    probe.expected.uid_len = uid_length;
+    memcpy(probe.expected.uid, uid, uid_length);
+    memcpy(probe.expected.atqa, atqa, 2);
+    probe.expected.sak = sak;
+    uint16_t saved_timeout = pcd_14a_reader_timeout_get();
+    hf14a_config_t saved = *get_hf14a_config();
+    hf14a_config_t selection = saved;
+    selection.forcerats = 2;
+    set_hf14a_config(&selection);
+    uint16_t status = restart(&probe, false);
+    if (status == STATUS_HF_TAG_OK) {
+        const uint8_t rats[] = {0xe0, 0x20};
+        uint8_t response[DEF_FIFO_LENGTH];
+        uint16_t bits;
+        status = exchange(rats, sizeof(rats), response, &bits);
+        if (status == STATUS_HF_TAG_OK && !plus_sl1_2k_ats(response, bits)) {
+            status = STATUS_HF_TAG_NO;
+        }
+    }
+    if (status == STATUS_HF_TAG_OK) status = restart(&probe, false);
+    if (status != STATUS_HF_TAG_OK) {
+        pcd_14a_reader_antenna_off();
+        pcd_14a_reader_mf1_unauth();
+    }
+    pcd_14a_reader_timeout_set(saved_timeout);
+    set_hf14a_config(&saved);
+    return status;
 }
 
 static uint16_t gen1_restart(magic_probe_t *probe, bool cold) {
@@ -167,6 +225,14 @@ static uint16_t gen2(magic_probe_t *probe, uint8_t credential, uint8_t *key) {
     uint8_t response[DEF_FIFO_LENGTH];
     uint16_t bits;
     status = exchange(rats, sizeof(rats), response, &bits);
+    /* Reuse this existing read-only probe for optional model evidence. Keep
+     * the raw CRC so the browser can validate framing independently. */
+    if (probe->ats && status == STATUS_HF_TAG_OK && bits >= 32 &&
+            bits <= sizeof(response) * 8u && !(bits & 7u) &&
+            response[0] == bits / 8u - 2u && valid_crc(response, bits, bits / 8u)) {
+        *probe->ats_length = bits / 8u;
+        memcpy(probe->ats, response, *probe->ats_length);
+    }
     if (status == STATUS_HF_TAG_OK &&
         ((valid_crc(response, bits, sizeof(ats4) + 2) && !memcmp(response, ats4, sizeof(ats4))) ||
          (valid_crc(response, bits, sizeof(ats7) + 2) && !memcmp(response, ats7, sizeof(ats7))))) {
@@ -247,9 +313,10 @@ static uint16_t signatures(magic_probe_t *probe) {
     return restart(probe, false);
 }
 
-uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
-                         uint8_t *output, uint16_t *output_length) {
+static uint16_t magic_probe_request(uint16_t length, const uint8_t *data,
+        uint8_t *output, uint16_t *output_length, uint8_t *ats, uint8_t *ats_length) {
     *output_length = 0;
+    if (ats_length) *ats_length = 0;
     if ((length != 15 && length != 21) || (data[0] != 4 && data[0] != 7 && data[0] != 10) ||
         data[14] > 2 || length != (data[14] ? 21 : 15)) {
         return STATUS_PAR_ERR;
@@ -263,7 +330,7 @@ uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
     if (sak != 8 && sak != 9 && sak != 0x10 && sak != 0x18) {
         return STATUS_PAR_ERR;
     }
-    magic_probe_t probe = {0};
+    magic_probe_t probe = {.ats = ats, .ats_length = ats_length};
     probe.expected.uid_len = data[0];
     memcpy(probe.expected.uid, data + 1, data[0]);
     memcpy(probe.expected.atqa, data + 11, 2);
@@ -302,19 +369,27 @@ uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
     return status;
 }
 
+uint16_t mf1_magic_probe(uint16_t length, const uint8_t *data,
+                         uint8_t *output, uint16_t *output_length) {
+    return magic_probe_request(length, data, output, output_length, NULL, NULL);
+}
+
 uint16_t mf1_classic_inspect(uint16_t length, const uint8_t *data,
                              uint8_t *output, uint16_t *output_length) {
     *output_length = 0;
-    if (length < 21 || data[14] == 0 || data[14] > 64 || length != 15 + 6 * data[14]) {
-        return STATUS_PAR_ERR;
-    }
+    if (length < 21 || data[14] == 0 || data[14] > 64) return STATUS_PAR_ERR;
+    uint16_t base_length = 15u + 6u * data[14];
+    bool extended = length == base_length + 1u && data[base_length] == 1;
+    if (length != base_length && !extended) return STATUS_PAR_ERR;
+    uint8_t ats[DEF_FIFO_LENGTH], ats_length = 0;
     uint8_t request[21];
     memcpy(request, data, 14);
     request[14] = 1;
     memcpy(request + 15, data + 15, 6);
     uint8_t magic[3];
     uint16_t magic_length;
-    uint16_t status = mf1_magic_probe(sizeof(request), request, magic, &magic_length);
+    uint16_t status = magic_probe_request(sizeof(request), request, magic, &magic_length,
+        extended ? ats : NULL, extended ? &ats_length : NULL);
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
@@ -405,6 +480,12 @@ uint16_t mf1_classic_inspect(uint16_t length, const uint8_t *data,
             memcpy(output + 5, key, sizeof(key));
         }
         *output_length = 11;
+        if (extended) {
+            output[11] = 1; /* Optional evidence format, not a card model. */
+            output[12] = ats_length;
+            memcpy(output + 13, ats, ats_length);
+            *output_length = 13u + ats_length;
+        }
     }
     return status;
 }

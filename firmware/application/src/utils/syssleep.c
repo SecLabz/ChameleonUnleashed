@@ -1,6 +1,7 @@
 #include "nrfx_power.h"
 #include "app_timer.h"
 #include "syssleep.h"
+#include "tag_emulation.h"
 
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
@@ -11,7 +12,7 @@
 APP_TIMER_DEF(m_app_sleep_timer);       //The timer for equipment sleep
 static volatile bool m_system_off_enter = false;
 
-extern bool g_is_ble_connected; //Link to log in BLE
+extern volatile bool g_is_ble_connected; //Link to log in BLE
 extern bool g_is_tag_emulating; //The status of the logo emulation card
 extern volatile bool m_is_field_on; //NFC field generator state from app_main.c
 
@@ -51,7 +52,8 @@ void sleep_timer_start(uint32_t time_ms) {
     // Non -USB power supply status
     if (nrfx_power_usbstatus_get() == NRFX_POWER_USB_STATE_DISCONNECTED) {
         // If Bluetooth is still connected, or is still in the state of emulation card, or field generator is on, you don't need to start sleep
-        if (g_is_ble_connected == false && g_is_tag_emulating == false && m_is_field_on == false) {
+        if (g_is_ble_connected == false && g_is_tag_emulating == false && m_is_field_on == false &&
+                !tag_emulation_web_link_active()) {
             // Start the timer
             ret_code_t err_code = app_timer_start(m_app_sleep_timer, APP_TIMER_TICKS(time_ms), NULL);
             APP_ERROR_CHECK(err_code);

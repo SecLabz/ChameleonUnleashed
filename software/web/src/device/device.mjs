@@ -1,9 +1,11 @@
 import { COMMAND } from './commands.mjs';
 import { decodeClassicMagic } from '../documents/classic-magic.mjs';
+import { encodeClassicBatch, decodeClassicBatch } from './classic-batch.mjs';
 import { scanNfc, scanNfcA } from './hf-reader.mjs';
 import { ST25TB, encodeSt25tbTearoff, decodeSt25tbTearoff } from './st25tb-protocol.mjs';
 
-import { DeviceSession, hex, post } from './transport.mjs';
+import { DeviceSession, hex, post, nativeClassicJobRunner } from './transport.mjs';
+import { createNonceStream } from './nonce-stream.mjs';
 
 export { hex } from './transport.mjs';
 
@@ -13,6 +15,7 @@ export class Device extends DeviceSession {
     this.nfcvPassword = null;
     this.keySessionAt = 0;
     this.keySessionsSupported = true;
+    this.classicBatchesSupported = true;
   }
 
   async begin(onFamily) {
@@ -61,6 +64,7 @@ export class Device extends DeviceSession {
         COMMAND.MAGIC_PROBE,
         COMMAND.CLASSIC_READ,
         COMMAND.CLASSIC_READ_SECTOR,
+        COMMAND.CLASSIC_BATCH,
         COMMAND.TYPE2_READ,
         COMMAND.DESFIRE,
         COMMAND.LF_T55XX
@@ -139,6 +143,9 @@ export class Device extends DeviceSession {
     ];
     if (change) {
       request.push(...change.before, ...change.after);
+    }
+    if (options.capacityCheck) {
+      request.push(1);
     }
     const bytes =
       change && !check
@@ -281,6 +288,12 @@ export class Device extends DeviceSession {
     return null;
   }
 
+  async classicBatch(kind, entries) {
+    const payload = encodeClassicBatch(kind, this.card.uid, entries);
+    const bytes = await this.command(COMMAND.CLASSIC_BATCH, payload);
+    return decodeClassicBatch(bytes, kind, entries);
+  }
+
   async readBlock(block, key, isKeyB) {
     const bytes = await this.command(COMMAND.CLASSIC_READ, [isKeyB ? 0x61 : 0x60, block, ...key]);
 
@@ -346,6 +359,41 @@ export class Device extends DeviceSession {
       }
 
       return { nt1: view.getUint32(offset), ciphertext: view.getUint32(offset + 4), parity };
+    });
+  }
+
+  startNonceStream(source, target, count, geometry, onProgress) {
+    const run = nativeClassicJobRunner();
+    if (!run) {
+      return null;
+    }
+    this.check();
+    if (!this.session || !Number.isInteger(count) || count < 1 || count > 4096) {
+      throw new Error('Device is not ready for nonce acquisition');
+    }
+    this.keySessionAt = 0;
+    const body = [
+      1,
+      2,
+      this.card.uid.length,
+      ...this.card.uid,
+      source.is_key_b ? 0x61 : 0x60,
+      geometry.sectors[source.sector].first,
+      ...source.key,
+      target.is_key_b ? 0x61 : 0x60,
+      geometry.sectors[target.sector].first,
+      0,
+      16,
+      count >> 8,
+      count & 255
+    ];
+    return createNonceStream({
+      run,
+      lease: this.session,
+      body,
+      budget: count,
+      signal: this.signal,
+      onProgress
     });
   }
 

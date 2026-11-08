@@ -1,4 +1,4 @@
-"""Serve local web resources and relay the Ultra's HTTP API."""
+"""Serve live web sources over USB or Bluetooth with local resources."""
 
 from functools import partial
 from http.client import HTTPConnection, HTTPException
@@ -44,9 +44,9 @@ def bundle(name, web, cache, shared, bundler):
     core = json.loads((cache / 'core.json').read_text())
     hardnested = json.loads((cache / 'hardnested.json').read_text())
     package_modules, worker = wasm_package(shared, verify=False)
-    sources = frontend_sources(web, shared, core, hardnested['modules'], package_modules)
     config = json.loads((web / 'config.json').read_text())
     config['baseUrl'] = '/'
+    sources = frontend_sources(web, shared, core, hardnested['modules'], package_modules, config['baseUrl'])
     # Each request owns its staging directory, including concurrent app/worker loads.
     with tempfile.TemporaryDirectory(prefix='chameleon-web-') as temporary:
         out = Path(temporary)
@@ -58,6 +58,8 @@ def bundle(name, web, cache, shared, bundler):
                 target.write_bytes(data)
 
         entry = 'app.mjs'
+        if name == '/ble-update.mjs':
+            entry = 'ui/ble-firmware.mjs'
         if name == '/worker.mjs':
             entry = 'runtime/nfc-wasm/' + worker
 
@@ -84,7 +86,7 @@ class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         name = unquote(urlsplit(path).path).lstrip('/')
         directory = Path(self.directory)
-        if name.startswith(('core/', 'hardnested/', 'tables/', 'releases/')):
+        if name.startswith(('core/', 'hardnested/', 'tables/', 'releases/', 'updates/')):
             directory = self.resources
 
         target = (directory / name).resolve()
@@ -104,7 +106,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         name = urlsplit(self.path).path
-        if self.bundle is None or name not in {'/app.mjs', '/worker.mjs'}:
+        from build_recovery import assets
+        files = assets('/')
+        if self.device is None and name in {'/', '/index.html'}:
+            files['index.html'] = (Path(self.directory) / 'index.html').read_bytes().replace(
+                b'</head>', b'<meta name="chameleon-hosted" content="1">\n'
+                b'<meta name="chameleon-resources" content="/">\n</head>')
+        asset = 'update.html' if name == '/update' else name.removeprefix('/') or 'index.html'
+        if asset in files:
+            body = files[asset]
+            self.send_response(200)
+            content = 'text/javascript' if asset.endswith('.mjs') else self.guess_type(asset)
+            self.send_header('Content-Type', content)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            return BytesIO(body)
+        if self.bundle is None or name not in {'/app.mjs', '/worker.mjs', '/ble-update.mjs'}:
             return super().send_head()
 
         try:
@@ -131,6 +148,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def relay(self):
+        if self.device is None:
+            self.send_error(404)
+            return
         port = self.server.server_port
         host = self.headers.get('Host')
         origin = self.headers.get('Origin')
@@ -195,8 +215,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def server(site, resources, device, port, bundle=None):
-    address = urlsplit(device)
-    if (
+    address = urlsplit(device) if device is not None else None
+    if address is not None and (
         address.scheme != 'http' or not address.hostname or address.username or address.password
         or address.path not in {'', '/'} or address.query or address.fragment
     ):
@@ -209,6 +229,7 @@ def server(site, resources, device, port, bundle=None):
 def serve(web, cache, shared, device, port):
     build = partial(bundle, web=web, cache=cache, shared=shared, bundler=ensure_esbuild())
     with server(web / 'public', cache / 'cdn', device, port, bundle=build) as http:
-        print(f'Local interface: http://127.0.0.1:{http.server_port} (device: {device})', flush=True)
+        mode = f'USB device: {device}' if device is not None else 'Bluetooth'
+        print(f'Local interface: http://127.0.0.1:{http.server_port} ({mode})', flush=True)
         print('Refresh after web edits. After Rust changes, run ./dev cdn with the same --shared-source.', flush=True)
         http.serve_forever()

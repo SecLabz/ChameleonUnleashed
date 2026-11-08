@@ -5,6 +5,7 @@
 
 #include "nordic_common.h"
 #include "nrf.h"
+#include "nrf_sdm.h"
 
 #include "app_timer.h"
 #include "app_util_platform.h"
@@ -30,6 +31,8 @@ NRF_LOG_MODULE_REGISTER();
 #include "app_buttons.h"
 #include "app_status.h"
 #include "ble_main.h"
+#include "classic_job.h"
+#include "net/ble_api.h"
 #include "bsp_delay.h"
 #include "bsp_time.h"
 #include "bsp_wdt.h"
@@ -44,8 +47,10 @@ NRF_LOG_MODULE_REGISTER();
 #include "syssleep.h"
 #include "tag_emulation.h"
 #include "usb_main.h"
-#include "net/api.h"
+#include "services/control.h"
 #include "net/web_tearoff.h"
+#include "net/update_api.h"
+#include "web_update.h"
 #include "rgb_marquee.h"
 #include "tag_persistence.h"
 #include "settings.h"
@@ -63,6 +68,7 @@ APP_TIMER_DEF(m_button_check_timer); // Timer for button debounce
 static uint32_t m_last_btn_press = 0;
 
 static volatile bool m_is_btn_long_press = false;
+static volatile bool m_is_btn_web_link_exit;
 
 static volatile bool m_is_b_btn_press = false;
 static volatile bool m_is_a_btn_press = false;
@@ -234,16 +240,22 @@ static void timer_button_event_handle(void *arg) {
     if (nrf_gpio_pin_read(pin) == 1) {
         if (pin == BUTTON_1) {
             // RF-only boots always allow a physical handoff to full controls.
-            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || tag_emulation_web_link_active() ||
+                    settings_get_button_press_config('b') != SettingsButtonDisable ||
+                    settings_get_long_button_press_config('b') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_B_PRESS");
                 m_is_b_btn_press = true;
+                m_is_btn_web_link_exit |= tag_emulation_web_link_active();
                 m_last_btn_press = app_timer_cnt_get();
             }
         }
         if (pin == BUTTON_2) {
-            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
+            if (ble_slave_rf_only() || tag_emulation_web_link_active() ||
+                    settings_get_button_press_config('a') != SettingsButtonDisable ||
+                    settings_get_long_button_press_config('a') != SettingsButtonDisable) {
                 NRF_LOG_INFO("BUTTON_A_PRESS");
                 m_is_a_btn_press = true;
+                m_is_btn_web_link_exit |= tag_emulation_web_link_active();
                 m_last_btn_press = app_timer_cnt_get();
             }
         }
@@ -256,29 +268,24 @@ static void timer_button_event_handle(void *arg) {
         bool is_long_press = ticks > APP_TIMER_TICKS(settings_get_long_press_threshold());
 
         if (pin == BUTTON_1 && m_is_b_btn_press == true) {
-            // RF-only boots always allow a physical handoff to full controls.
-            if (ble_slave_rf_only() || settings_get_button_press_config('b') != SettingsButtonDisable) {
-                m_is_b_btn_release = true;
-                m_is_b_btn_press = false;
-                if (!is_long_press) {
-                    NRF_LOG_INFO("BUTTON_B_RELEASE_SHORT");
-                } else {
-                    NRF_LOG_INFO("BUTTON_B_RELEASE_LONG");
-                }
-                m_is_btn_long_press = is_long_press;
+            m_is_b_btn_release = true;
+            m_is_b_btn_press = false;
+            if (!is_long_press) {
+                NRF_LOG_INFO("BUTTON_B_RELEASE_SHORT");
+            } else {
+                NRF_LOG_INFO("BUTTON_B_RELEASE_LONG");
             }
+            m_is_btn_long_press = is_long_press;
         }
         if (pin == BUTTON_2 && m_is_a_btn_press == true) {
-            if (ble_slave_rf_only() || settings_get_button_press_config('a') != SettingsButtonDisable) {
-                m_is_a_btn_release = true;
-                m_is_a_btn_press = false;
-                if (!is_long_press) {
-                    NRF_LOG_INFO("BUTTON_A_RELEASE_SHORT");
-                } else {
-                    NRF_LOG_INFO("BUTTON_A_RELEASE_LONG");
-                }
-                m_is_btn_long_press = is_long_press;
+            m_is_a_btn_release = true;
+            m_is_a_btn_press = false;
+            if (!is_long_press) {
+                NRF_LOG_INFO("BUTTON_A_RELEASE_SHORT");
+            } else {
+                NRF_LOG_INFO("BUTTON_A_RELEASE_LONG");
             }
+            m_is_btn_long_press = is_long_press;
         }
     }
 }
@@ -859,6 +866,11 @@ static void btn_fn_copy_ic_uid(void) {
 static void run_button_function_by_settings(settings_button_function_t sbf) {
     if (sbf != SettingsButtonShowBattery && sbf != SettingsButtonDisable) web_session_end();
     switch (sbf) {
+        case SettingsButtonDisable:
+            break;
+        case SettingsButtonOpenBle:
+            if (!web_session_active()) tag_emulation_web_link_start();
+            break;
         case SettingsButtonCycleSlot:
             cycle_slot(false);
             break;
@@ -961,6 +973,16 @@ static void button_press_process(void) {
             restart_full_boot();
             return;
         }
+        // A press begun in the shortcut is consumed even if BLE/timeout won
+        // the race before its release. Neither configured action runs.
+        if (tag_emulation_web_link_stop() || m_is_btn_web_link_exit) {
+            m_is_a_btn_press = false;
+            m_is_b_btn_press = false;
+            m_is_a_btn_release = false;
+            m_is_b_btn_release = false;
+            m_is_btn_web_link_exit = false;
+            return;
+        }
         hf_sniff_stop();
         if (m_is_a_btn_release) {
             if (!m_is_btn_long_press) {
@@ -989,6 +1011,7 @@ static void button_press_process(void) {
 
 extern bool g_usb_port_opened;
 static void blink_usb_led_status(void) {
+    if (tag_emulation_web_link_active()) return;
     uint8_t slot = tag_emulation_get_slot();
     uint8_t color = get_color_by_slot(slot);
     uint8_t dir = slot > 3 ? 1 : 0;
@@ -1065,6 +1088,7 @@ static void usb_start_when_ready(void) {
 /**@brief Application main function.
  */
 int main(void) {
+    APP_ERROR_CHECK(sd_softdevice_vector_table_base_set(WEB_UPDATE_START));
     NRF_NVMC->ICACHECNF = NVMC_ICACHECNF_CACHEEN_Msk;
     hw_connect_init();        // Remember to initialize the pins first
 
@@ -1111,6 +1135,9 @@ int main(void) {
         lesc_event_process();
         // Button event process
         button_press_process();
+        tag_emulation_web_link_poll();
+        // Leases must expire on battery too, independently of USB network polling.
+        web_session_poll();
 
 #if defined(PROJECT_CHAMELEON_ULTRA)
         // Field generator rainbow animation
@@ -1126,9 +1153,12 @@ int main(void) {
 
         // USB event process
         if (m_usb_started) usb_poll();
+        web_update_poll();
         web_tearoff_poll();
         // Data pack process
         data_frame_process();
+        ble_api_poll();
+        classic_job_poll();
         // Log print process
         while (NRF_LOG_PROCESS());
         // WDT refresh
@@ -1145,6 +1175,10 @@ int main(void) {
         // If system idle sometime, we can enter deep sleep state.
         // Some task process done, we can enter cpu sleep state.
 #if defined(PROJECT_CHAMELEON_ULTRA)
+        /* A queued job event needs another main-loop turn even when no
+         * application interrupt is scheduled. SoftDevice radio events alone
+         * do not guarantee a wake after an RF step. */
+        if (classic_job_active()) continue;
         if (hf_sniff_active()) {
             hf_sniff_poll();
         } else if (!st25tb_field_active) {

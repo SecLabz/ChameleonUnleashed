@@ -25,7 +25,7 @@ class FrontendTests(unittest.TestCase):
                              'dma_success', 'live_complete', 'live_stop',
                              'live_timeout', 'live_stop_failure',
                              'software_b', 'software_b_masked',
-                             'software_v', 'software_v_masked',
+                             'software_v', 'software_v_masked', 'software_v_deferred',
                              'dma_timeout', 'dma_stop_failure', 'tx_failure',
                              'recover', 'clock', 'read_write_read'):
                 with self.subTest(scenario=scenario):

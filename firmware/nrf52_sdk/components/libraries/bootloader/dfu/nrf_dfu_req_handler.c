@@ -533,7 +533,7 @@ static void on_data_obj_crc_request(nrf_dfu_request_t * p_req, nrf_dfu_response_
 }
 
 
-static void on_data_obj_execute_request_sched(void * p_evt, uint16_t event_length)
+static void on_data_obj_response_sched(void * p_evt, uint16_t event_length)
 {
     UNUSED_PARAMETER(event_length);
 
@@ -543,18 +543,26 @@ static void on_data_obj_execute_request_sched(void * p_evt, uint16_t event_lengt
     /* Wait for all buffers to be written in flash. */
     if (nrf_fstorage_is_busy(NULL))
     {
-        ret = app_sched_event_put(p_req, sizeof(nrf_dfu_request_t), on_data_obj_execute_request_sched);
+        ret = app_sched_event_put(p_req, sizeof(nrf_dfu_request_t), on_data_obj_response_sched);
         if (ret != NRF_SUCCESS)
         {
-            NRF_LOG_ERROR("Failed to schedule object execute: 0x%x.", ret);
+            nrf_dfu_response_t error = {.request = p_req->request, .result = NRF_DFU_RES_CODE_OPERATION_FAILED};
+            p_req->callback.response(&error, p_req->p_context);
         }
         return;
     }
 
     nrf_dfu_response_t res =
     {
-        .request = NRF_DFU_OP_OBJECT_EXECUTE,
+        .request = p_req->request,
     };
+
+    if (p_req->request == NRF_DFU_OP_OBJECT_CREATE)
+    {
+        res.result = NRF_DFU_RES_CODE_SUCCESS;
+        p_req->callback.response(&res, p_req->p_context);
+        return;
+    }
 
     if (s_dfu_settings.progress.firmware_image_offset == m_firmware_size_req)
     {
@@ -616,7 +624,7 @@ static bool on_data_obj_execute_request(nrf_dfu_request_t * p_req, nrf_dfu_respo
     s_dfu_settings.progress.firmware_image_crc_last    = s_dfu_settings.progress.firmware_image_crc;
     s_dfu_settings.progress.firmware_image_offset_last = s_dfu_settings.progress.firmware_image_offset;
 
-    on_data_obj_execute_request_sched(p_req, 0);
+    on_data_obj_response_sched(p_req, 0);
 
     m_observer(NRF_DFU_EVT_OBJECT_RECEIVED);
 
@@ -636,6 +644,12 @@ static bool nrf_dfu_data_req(nrf_dfu_request_t * p_req, nrf_dfu_response_t * p_r
         case NRF_DFU_OP_OBJECT_CREATE:
         {
             on_data_obj_create_request(p_req, p_res);
+            if (p_res->result == NRF_DFU_RES_CODE_SUCCESS)
+            {
+                /* CREATE means the page is ready, not just queued for erasure. */
+                on_data_obj_response_sched(p_req, 0);
+                response_ready = false;
+            }
         } break;
 
         case NRF_DFU_OP_OBJECT_WRITE:

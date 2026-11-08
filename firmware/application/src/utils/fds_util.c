@@ -1,5 +1,9 @@
 #include "fds_util.h"
+#include "fds_internal_defs.h"
 #include "bsp_wdt.h"
+#include "app_util.h"
+#include "nrf_sdh.h"
+#include "nrf_soc.h"
 
 #define NRF_LOG_MODULE_NAME fds_sync
 #include "nrf_log.h"
@@ -275,9 +279,50 @@ static void fds_evt_handler(fds_evt_t const *p_evt) {
     }
 }
 
-/**
- *Initialize the FDS library of NRF52
- */
+static bool fds_recover_empty_swap(void) {
+    /* Promoting an empty page to swap must leave at least one data page. */
+    enum { MIN_DATA_PAGES_FOR_REPAIR = 2 };
+    /* A legacy DFU bootloader can stage its replacement over the old swap.
+     * Reuse only a data page with no records at all. Never erase a record or
+     * an unrecognized page, and never issue synchronous writes with SD on. */
+    if (nrf_sdh_is_enabled()) return false;
+    uintptr_t end = BOOTLOADER_ADDRESS;
+    size_t page_bytes = FDS_VIRTUAL_PAGE_SIZE * sizeof(uint32_t);
+    size_t physical_bytes = NRF_FICR->CODEPAGESIZE;
+    size_t reserved = FDS_VIRTUAL_PAGES_RESERVED * page_bytes;
+    if (!physical_bytes || page_bytes % physical_bytes ||
+        end == FDS_ERASED_WORD || end < reserved + FDS_VIRTUAL_PAGES * page_bytes)
+        return false;
+    uintptr_t start = end - reserved - FDS_VIRTUAL_PAGES * page_bytes;
+    uint32_t *empty = NULL;
+    unsigned data_pages = 0;
+    for (unsigned i = 0; i < FDS_VIRTUAL_PAGES; i++) {
+        uint32_t *page = (uint32_t *)(start + i * page_bytes);
+        if (page[FDS_PAGE_TAG_WORD_0] == FDS_ERASED_WORD || page[FDS_PAGE_TAG_WORD_0] == FDS_PAGE_TAG_MAGIC) {
+            unsigned word = FDS_PAGE_TAG_WORD_1;
+            while (word < FDS_VIRTUAL_PAGE_SIZE && page[word] == FDS_ERASED_WORD) word++;
+            /* FDS already knows how to use an erased or partially tagged page. */
+            if (word == FDS_VIRTUAL_PAGE_SIZE) return false;
+        }
+        if (page[FDS_PAGE_TAG_WORD_0] != FDS_PAGE_TAG_MAGIC) continue;
+        if (page[FDS_PAGE_TAG_WORD_1] == FDS_PAGE_TAG_SWAP) return false;
+        if (page[FDS_PAGE_TAG_WORD_1] != FDS_PAGE_TAG_DATA) continue;
+        data_pages++;
+        unsigned word = FDS_PAGE_TAG_SIZE;
+        while (word < FDS_VIRTUAL_PAGE_SIZE && page[word] == FDS_ERASED_WORD) word++;
+        if (word == FDS_VIRTUAL_PAGE_SIZE) empty = page;
+    }
+    if (data_pages < MIN_DATA_PAGES_FOR_REPAIR || !empty) return false;
+    /* Only the first physical page holds the tag; the rest is already erased.
+     * A reset after this erase leaves a blank page FDS can tag on its own. */
+    if (sd_flash_page_erase((uintptr_t)empty / physical_bytes) != NRF_SUCCESS)
+        return false;
+    uint32_t tag[FDS_PAGE_TAG_SIZE] = {FDS_PAGE_TAG_MAGIC, FDS_PAGE_TAG_SWAP};
+    if (sd_flash_write(empty, tag, FDS_PAGE_TAG_SIZE) != NRF_SUCCESS) return false;
+    return memcmp(empty, tag, sizeof(tag)) == 0;
+}
+
+/** Initialize FDS after recovering a missing swap when an empty data page exists. */
 void fds_util_init() {
     fds_operation_info.ignore_pm = true;
     // reset waiting flag
@@ -285,6 +330,9 @@ void fds_util_init() {
     //Register the incident first
     ret_code_t err_code = fds_register(fds_evt_handler);
     APP_ERROR_CHECK(err_code);
+    /* Scan before fds_init(): SDK pages_init() assumes one swap exists and can
+     * otherwise index past its FDS_VIRTUAL_PAGES - 1 data-page array. */
+    (void)fds_recover_empty_swap();
     //Start the initialization FDS library
     err_code = fds_init();
     APP_ERROR_CHECK(err_code);

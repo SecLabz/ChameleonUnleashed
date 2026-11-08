@@ -8,6 +8,8 @@
 // ******************************************************************
 //
 #define DATA_CMD_GET_APP_VERSION                (1000)
+#define DATA_CMD_WEB_API                        (1090)
+#define DATA_CMD_WEB_EVENT                      (1091)
 #define DATA_CMD_CHANGE_DEVICE_MODE             (1001)
 #define DATA_CMD_GET_DEVICE_MODE                (1002)
 #define DATA_CMD_SET_ACTIVE_SLOT                (1003)
@@ -90,6 +92,7 @@
 #define DATA_CMD_MF1_MAINTENANCE                 (2039)
 #define DATA_CMD_MF1_UID_SPECIAL                (2041)
 #define DATA_CMD_MF1_INSPECT                     (2040)
+#define DATA_CMD_MF1_BATCH                       (2042)
 #define DATA_CMD_DESFIRE_GET_IMAGE              (4320)
 #define DATA_CMD_DESFIRE_SET_IMAGE              (4321)
 #define DATA_CMD_TYPE2_READ                     (2028)

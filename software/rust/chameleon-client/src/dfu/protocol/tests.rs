@@ -257,3 +257,88 @@ fn invalid_mtu_and_init_size_are_rejected_before_creating_objects() {
         assert_eq!(port.sent.len(), 3);
     }
 }
+
+#[test]
+fn bootloader_version_uses_the_standard_read_only_firmware_request() {
+    let version = u32::from_be_bytes(*b"CU\0\x01");
+    let reply = [
+        vec![BOOTLOADER_TYPE],
+        version.to_le_bytes().to_vec(),
+        0xf3000u32.to_le_bytes().to_vec(),
+        0xb000u32.to_le_bytes().to_vec(),
+    ]
+    .concat();
+    let mut port = Port::new(vec![
+        step(SET_PRN, &[1, 0], &[]),
+        step(MTU, &[], &[11, 0]),
+        step(FIRMWARE_VERSION, &[BOOTLOADER_IMAGE], &reply),
+    ]);
+    let cancelled = AtomicBool::new(false);
+    let actual = Session::open(&mut port, &cancelled)
+        .unwrap()
+        .bootloader_version()
+        .unwrap();
+    assert_eq!(actual, Some(version));
+    assert!(port.steps.is_empty());
+    assert_eq!(port.sent.len(), 3);
+}
+
+#[test]
+fn unsupported_version_is_unknown_but_corrupt_or_denied_replies_are_errors() {
+    for status in [NOT_SUPPORTED, 0x08, 0x0b] {
+        let mut query = step(FIRMWARE_VERSION, &[BOOTLOADER_IMAGE], &[]);
+        query.response = encode(RESPONSE, &[FIRMWARE_VERSION, status]);
+        let mut port = Port::new(vec![
+            step(SET_PRN, &[1, 0], &[]),
+            step(MTU, &[], &[11, 0]),
+            query,
+        ]);
+        let cancelled = AtomicBool::new(false);
+        let result = Session::open(&mut port, &cancelled)
+            .unwrap()
+            .bootloader_version();
+        if status == NOT_SUPPORTED {
+            assert_eq!(result.unwrap(), None);
+        } else {
+            assert!(result.is_err());
+        }
+        assert!(port.steps.is_empty());
+    }
+    for mut reply in [vec![BOOTLOADER_TYPE; 12], vec![1; 13], vec![0; 13]] {
+        if reply.len() == 13 && reply[0] == 0 {
+            reply[0] = BOOTLOADER_TYPE;
+        }
+        let mut port = Port::new(vec![
+            step(SET_PRN, &[1, 0], &[]),
+            step(MTU, &[], &[11, 0]),
+            step(FIRMWARE_VERSION, &[BOOTLOADER_IMAGE], &reply),
+        ]);
+        let cancelled = AtomicBool::new(false);
+        assert!(
+            Session::open(&mut port, &cancelled)
+                .unwrap()
+                .bootloader_version()
+                .is_err()
+        );
+        assert!(port.steps.is_empty());
+    }
+}
+
+#[test]
+fn unchanged_bootloader_can_exit_without_creating_an_image_or_waiting_for_a_reset_reply() {
+    let mut port = Port::new(vec![
+        step(SET_PRN, &[1, 0], &[]),
+        step(MTU, &[], &[11, 0]),
+        Step {
+            request: encode(ABORT, &[]),
+            response: vec![],
+        },
+    ]);
+    let cancelled = AtomicBool::new(false);
+    Session::open(&mut port, &cancelled)
+        .unwrap()
+        .leave()
+        .unwrap();
+    assert!(port.steps.is_empty());
+    assert_eq!(port.sent.last(), Some(&encode(ABORT, &[])));
+}

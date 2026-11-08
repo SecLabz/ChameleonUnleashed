@@ -9,6 +9,7 @@
 #include "nfcv_reader_codec.h"
 #include "iso15693/frame.h"
 #include "rf_timeslot.h"
+#include "hfclk.h"
 #include "usb_main.h"
 #include "app_status.h"
 #include "nrf.h"
@@ -30,7 +31,7 @@ typedef enum { TX_TIMESLOT, TX_USB_HARDWARE } radio_execution_t;
 static radio_profile_t profile;
 static radio_execution_t execution;
 static bool crc_error;
-static bool retained;
+static bool retained, vicinity_clock;
 static uint8_t tx_frame[NFCV_READER_MAX_FRAME];
 static rc522_raw_transfer_t transfer = {.data = tx_frame};
 static uint32_t tearoff_delay_us;
@@ -89,8 +90,14 @@ typedef struct {
 } receive_window_t;
 
 static receive_window_t receive_window(size_t expected, bool hardware_tx) {
-    if (profile == RADIO_NFCV)
-        return (receive_window_t){NFCV_READER_IQ_SAMPLES, READER_EXCHANGE_SLOT_US};
+    if (profile == RADIO_NFCV) {
+        /* Reserve only ASK emission plus frontend/setup margin. The complete
+         * ADC capture continues in DMA after the radio grant is returned. */
+        uint32_t ticks = 12u + 32u * transfer.length;
+        uint32_t tx_us = (ticks * 12800u + 1355u) / 1356u;
+        uint32_t slot_us = ((tx_us + 2000u + 999u) / 1000u) * 1000u;
+        return (receive_window_t){NFCV_READER_IQ_SAMPLES, slot_us};
+    }
     if (expected == NFCB_ATQB_BYTES) {
         return (receive_window_t){NFCB_ATQB_IQ_SAMPLES, READER_EXCHANGE_SLOT_US};
     }
@@ -104,8 +111,9 @@ static size_t exchange_frame(const uint8_t *frame, size_t length, size_t expecte
     receive_window_t window = receive_window(expected, direct);
     transfer.sample_count = window.samples;
     transfer.hardware_tx = direct;
-    /* Direct NFC-B captures decode while the ADC DMA runs and stop at a valid frame. */
-    transfer.live = direct;
+    /* NFC-B can stop at a valid live frame. NFC-V keeps the entire capture,
+     * but must not hold a continuous radio grant throughout its reception. */
+    transfer.live = direct || profile == RADIO_NFCV;
     transfer.dma_cycles = timing_enabled ? &timing.dma_cycles : NULL;
     unsigned offset;
     size_t received = 0;
@@ -122,6 +130,10 @@ static size_t exchange_frame(const uint8_t *frame, size_t length, size_t expecte
         if (!usb_clock_ready()) rc522_raw_invalidate();
     } else {
         exchange_timeslot_failed = !rf_timeslot_run(window.slot_us, !g_is_ble_connected, false, exchange_window);
+        if (profile == RADIO_NFCV && !exchange_timeslot_failed) {
+            rc522_raw_finish(false);
+            if (!rc522_raw_clock_ready()) rc522_raw_invalidate();
+        }
     }
     if (timing_enabled) {
         timing.exchanges++;
@@ -139,7 +151,8 @@ static size_t exchange_frame(const uint8_t *frame, size_t length, size_t expecte
 }
 
 bool hf_radio_open(bool vicinity) {
-    bool resume = retained && vicinity && profile == RADIO_NFCV && rc522_raw_ready();
+    bool resume = retained && vicinity && profile == RADIO_NFCV &&
+        vicinity_clock && rc522_raw_clock_ready() && rc522_raw_ready();
     if (retained && !resume && !hf_radio_close()) {
         return false;
     }
@@ -156,6 +169,13 @@ bool hf_radio_open(bool vicinity) {
     }
     transfer.samples = hf_iq_prepare(vicinity);
     bool ready = rc522_raw_open(vicinity ? RC522_RAW_NFCV : RC522_RAW_NFCB);
+    if (ready && vicinity) {
+        /* A timeslot guarantees HFXO only until END. Hold the shared clock
+         * across the deferred capture, including when USB is unplugged. */
+        uint32_t result = app_hfclk_acquire(HFCLK_READER);
+        vicinity_clock = (app_hfclk_owners() & HFCLK_READER) != 0;
+        ready = !result && vicinity_clock && !app_hfclk_wait();
+    }
     select_execution(ready);
     return ready;
 }
@@ -163,7 +183,13 @@ bool hf_radio_open(bool vicinity) {
 bool hf_radio_close(void) {
     retained = false;
     execution = TX_TIMESLOT;
-    return rc522_raw_close();
+    bool closed = rc522_raw_close();
+    if (vicinity_clock) {
+        uint32_t result = app_hfclk_release(HFCLK_READER);
+        vicinity_clock = (app_hfclk_owners() & HFCLK_READER) != 0;
+        if (result || vicinity_clock) return false;
+    }
+    return closed;
 }
 
 void hf_radio_keep(void) {

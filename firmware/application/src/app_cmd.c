@@ -14,8 +14,9 @@
 #include "settings.h"
 #include "delayed_reset.h"
 #include "netdata.h"
-#include "net/api.h"
-#include "net/slot_api.h"
+#include "services/control.h"
+#include "services/slot_api.h"
+#include "net/ble_api.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
 #include "lf_reader_generic.h"
@@ -3249,6 +3250,7 @@ static data_frame_tx_t *cmd_processor_hf14a_4_debug_counters(uint16_t cmd, uint1
 }
 #endif
 static cmd_data_map_t m_data_cmd_map[] = {
+    {    DATA_CMD_WEB_API,                      NULL,                        NULL,                                        NULL                   },
     {    DATA_CMD_GET_APP_VERSION,              NULL,                        cmd_processor_get_app_version,               NULL                   },
     {    DATA_CMD_CHANGE_DEVICE_MODE,           NULL,                        cmd_processor_change_device_mode,            NULL                   },
     {    DATA_CMD_GET_DEVICE_MODE,              NULL,                        cmd_processor_get_device_mode,               NULL                   },
@@ -3516,6 +3518,18 @@ static bool rf_only_command_allowed(uint16_t cmd) {
 }
 
 void on_data_frame_received(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    tag_emulation_web_link_stop();
+    /* The web service owns RF/session policy. Do not run legacy pre-hooks on
+     * its envelope: metadata/keepalives must not close retained RF sessions. */
+    if (cmd == DATA_CMD_WEB_API) {
+        uint8_t output[BLE_API_RESPONSE_MAX];
+        uint16_t size = 0;
+        uint16_t result = data_frame_source() == DATA_SOURCE_BLE
+            ? ble_api_request(data, length, output, sizeof(output), &size)
+            : STATUS_NOT_IMPLEMENTED;
+        auto_response_data(data_frame_make(cmd, result, size, output));
+        return;
+    }
     if (ble_slave_rf_only() && !rf_only_command_allowed(cmd)) {
         auto_response_data(data_frame_make(cmd, STATUS_BUSY, 0, NULL));
         return;

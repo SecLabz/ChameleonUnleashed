@@ -54,6 +54,8 @@
 #include "nrf_sdh.h"
 #include "nrf_sdh_ble.h"
 #include "nrf_balloc.h"
+#include "app_scheduler.h"
+#include "nrf_fstorage.h"
 #include "nrf_delay.h"
 #include "nrf_dfu_settings.h"
 #include "nrf_dfu_ble.h"
@@ -116,6 +118,7 @@ static nrf_dfu_adv_name_t  m_adv_name;
 #endif
 
 static uint32_t           m_flags;
+static uint32_t           m_connection_id;
 static ble_dfu_t          m_dfu;                                                                    /**< Structure used to identify the Device Firmware Update service. */
 static uint16_t           m_pkt_notif_target;                                                       /**< Number of packets of firmware data to be received before transmitting the next Packet Receipt Notification to the DFU Controller. */
 static uint16_t           m_pkt_notif_target_cnt;                                                   /**< Number of packets of firmware data received after sending last Packet Receipt Notification or since the receipt of a @ref BLE_DFU_PKT_RCPT_NOTIF_ENABLED event from the DFU service, which ever occurs later.*/
@@ -310,6 +313,32 @@ static ret_code_t response_send(uint8_t * p_buf, uint16_t len)
 }
 
 
+/* A receipt releases the next batch only after its flash buffers are free. */
+typedef struct
+{
+    uint32_t connection_id;
+    uint8_t response[RESPONSE_HEADER_LEN + 2 * sizeof(uint32_t)];
+} dfu_receipt_t;
+
+static void receipt_send(void * p_event, uint16_t event_size)
+{
+    UNUSED_PARAMETER(event_size);
+    dfu_receipt_t * receipt = p_event;
+    if (receipt->connection_id != m_connection_id || m_conn_handle == BLE_CONN_HANDLE_INVALID)
+    {
+        return;
+    }
+    if (nrf_fstorage_is_busy(NULL))
+    {
+        if (app_sched_event_put(receipt, sizeof(*receipt), receipt_send) == NRF_SUCCESS)
+        {
+            return;
+        }
+        receipt->response[2] = NRF_DFU_RES_CODE_OPERATION_FAILED;
+    }
+    (void) response_send(receipt->response, sizeof(receipt->response));
+}
+
 #if (NRF_DFU_BLE_REQUIRES_BONDS)
 static uint32_t service_changed_send(void)
 {
@@ -429,6 +458,7 @@ static void ble_dfu_req_handler_callback(nrf_dfu_response_t * p_res, void * p_co
 
     uint8_t len = 0;
     uint8_t buffer[MAX_RESPONSE_LEN] = {0};
+    bool const receipt = p_res->request == NRF_DFU_OP_OBJECT_WRITE;
 
     if (p_res->request == NRF_DFU_OP_OBJECT_WRITE)
     {
@@ -483,13 +513,31 @@ static void ble_dfu_req_handler_callback(nrf_dfu_response_t * p_res, void * p_co
             len += response_crc_add(buffer, p_res->crc.offset, p_res->crc.crc);
         } break;
 
+        case NRF_DFU_OP_FIRMWARE_VERSION:
+        {
+            buffer[len++] = p_res->firmware.type;
+            len += uint32_encode(p_res->firmware.version, &buffer[len]);
+            len += uint32_encode(p_res->firmware.addr, &buffer[len]);
+            len += uint32_encode(p_res->firmware.len, &buffer[len]);
+        } break;
+
         default:
         {
             // No action.
         } break;
     }
 
-    (void) response_send(buffer, len);
+    if (receipt)
+    {
+        dfu_receipt_t event = {.connection_id = m_connection_id};
+        ASSERT(len == sizeof(event.response));
+        memcpy(event.response, buffer, sizeof(event.response));
+        receipt_send(&event, sizeof(event));
+    }
+    else
+    {
+        (void) response_send(buffer, len);
+    }
 }
 
 
@@ -512,6 +560,15 @@ static uint32_t on_ctrl_pt_write(ble_dfu_t * p_dfu, ble_gatts_evt_write_t const 
 
     switch (request.request)
     {
+        case NRF_DFU_OP_FIRMWARE_VERSION:
+        {
+            if (p_ble_write_evt->len != 2)
+            {
+                return NRF_ERROR_INVALID_LENGTH;
+            }
+            request.firmware.image_number = p_ble_write_evt->data[1];
+        } break;
+
         case NRF_DFU_OP_OBJECT_SELECT:
         {
             /* Set object type to read info about */
@@ -680,6 +737,7 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
         {
             NRF_LOG_DEBUG("Connected");
 
+            m_connection_id++;
             m_conn_handle = p_gap->conn_handle;
 
             if (m_observer)

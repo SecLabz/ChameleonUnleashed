@@ -53,11 +53,12 @@ def source_version(directory):
     revision = subprocess.run(['git', '-C', str(directory), 'rev-parse', '--verify', 'HEAD'],
                               capture_output=True, text=True)
     if revision.returncode:
-        return {'revision': None, 'dirty': None}
+        return {'revision': None, 'dirty': None, 'committedAt': None}
 
     status = subprocess.check_output([
         'git', '-C', str(directory), 'status', '--porcelain', '--untracked-files=normal'])
-    return {'revision': revision.stdout.strip(), 'dirty': bool(status)}
+    timestamp = subprocess.check_output(['git', '-C', str(directory), 'show', '-s', '--format=%ct', 'HEAD'])
+    return {'revision': revision.stdout.strip(), 'dirty': bool(status), 'committedAt': int(timestamp)}
 
 
 def fingerprint(directory, shared=False):
@@ -96,7 +97,11 @@ def wasm_package(shared, verify=True):
     return modules, worker
 
 
-def frontend_sources(web, shared, core_asset, modules, package_modules):
+def update_config(base):
+    return ('export const RESOURCE_BASE = ' + json.dumps(base) + ';\n').encode()
+
+
+def frontend_sources(web, shared, core_asset, modules, package_modules, base):
     sources = {}
     for path in sorted((web / 'src').rglob('*')):
         if path.is_file() and path.suffix in ('.mjs', '.json'):
@@ -106,6 +111,8 @@ def frontend_sources(web, shared, core_asset, modules, package_modules):
             sources['/' + path.name] = path.read_bytes()
     for name, data in package_modules.items():
         sources['/runtime/nfc-wasm/' + name] = data
+    # The update form reads its release base from the module the recovery also generates.
+    sources['/ui/update-config.mjs'] = update_config(base)
     sources['/runtime/core-build.mjs'] = ('export const CORE = ' + json.dumps(core_asset) + ';\n').encode()
     sources['/runtime/hardnested-build.mjs'] = ('export const HARDNESTED = ' + json.dumps(modules) + ';\n').encode()
     # Use the shared essentials prefix without loading the recovery WASM during discovery.
@@ -221,8 +228,11 @@ def main():
     manifest = {'version': 2, 'abi': 1, 'tablePack': table, 'modules': modules}
     (cdn / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (ROOT / '.cache/web/hardnested.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    frontend = hashlib.sha256(''.join(fingerprint(WEB / name)
+                             for name in ('src', 'public', 'hosted')).encode()
+                             + (ROOT / 'software/rust/chameleon-client/src/lf_hid.rs').read_bytes()).hexdigest()
     build = {'projectVersion': config['projectVersion'], 'source': source,
-             'shared': shared_version, 'resourceBase': config['baseUrl']}
+             'shared': shared_version, 'resourceBase': config['baseUrl'], 'frontendSha256': frontend}
     if args.resources_only:
         from package_cdn import copy_asset
 
@@ -232,7 +242,7 @@ def main():
         return
 
     (out / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
-    sources = frontend_sources(WEB, shared, core_asset, modules, package_modules)
+    sources = frontend_sources(WEB, shared, core_asset, modules, package_modules, config['baseUrl'])
     # Keep generated source modules for unit tests, separate from shipped assets.
     source_dir = out / 'modules'
     site = out / 'site'
@@ -244,11 +254,15 @@ def main():
         path = (source_dir if name.endswith(('.mjs', '.json')) else site) / name.lstrip('/')
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    for entry, filename in [('app.mjs', 'app.mjs'), ('runtime/nfc-wasm/' + package_worker, 'worker.mjs')]:
+    for entry, filename in [('app.mjs', 'app.mjs'), ('runtime/nfc-wasm/' + package_worker, 'worker.mjs'), ('ui/ble-firmware.mjs', 'ble-update.mjs')]:
         # The application owns the served Worker URL and passes its factory to the client.
         run(bundler, source_dir / entry, '--bundle', '--format=esm', '--target=es2022',
             '--minify', '--legal-comments=inline', f'--outfile={site / filename}',
             f'--metafile={out / (filename + ".json")}')
+    from build_recovery import assets as recovery_assets, prepare as prepare_recovery
+    for name, data in recovery_assets(config['baseUrl']).items():
+        (site / name).write_bytes(data)
+    prepare_recovery(config['baseUrl'], ROOT / '.cache/web/recovery')
     types = {'.html': 'text/html; charset=utf-8', '.css': 'text/css', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8'}
     header = ['#pragma once', '#include <stdint.h>', '#include <string.h>',
               '#define WEB_RESOURCE_CONNECT ' + json.dumps("'self'" + (' ' + origin if origin else '')),
@@ -264,10 +278,12 @@ def main():
                 raise SystemExit(f'Zopfli verification failed: {name}')
             if len(optimized) < len(packed):
                 packed = optimized
+        sizes[name] = {'raw': len(data), 'gzip': len(packed), 'sha256': hashlib.sha256(data).hexdigest()}
+        if raw_path.name == 'ble-update.mjs':
+            continue  # Loaded on demand by the hosted BLE app, never stored in firmware.
         (out / (str(i) + '.gz')).write_bytes(packed)
         header.append(f'static const uint8_t web_bytes_{i}[] = {{' + ','.join(map(str, packed)) + '};')
         rows.append('{' + json.dumps(name) + ',' + json.dumps(types[Path(name).suffix]) + f',web_bytes_{i},sizeof(web_bytes_{i})' + '}')
-        sizes[name] = {'raw': len(data), 'gzip': len(packed), 'sha256': hashlib.sha256(data).hexdigest()}
     header += ['static const web_asset_t web_assets[] = {' + ','.join(rows) + '};',
                'static const web_asset_t *web_asset_find(const char *path) {',
                ' if (!strcmp(path,"/")) path="/index.html";',
@@ -276,6 +292,11 @@ def main():
                ' return NULL;', '}']
     (out / 'web_assets.h').write_text('\n'.join(header) + '\n')
     (out / 'sizes.json').write_text(json.dumps(sizes, indent=2) + '\n')
+    # The resource-only command must never silently package an older frontend
+    # with newer modules. Capture the frontend's exact pins and file hashes.
+    site_build = {'build': build, 'core': core_asset, 'hardnested': modules,
+                  'tables': table, 'files': sizes}
+    (out / 'site-build.json').write_text(json.dumps(site_build, indent=2) + '\n')
     # Capture provenance with the built modules, not with a later packaging checkout.
     (ROOT / '.cache/web/cdn-build.json').write_text(json.dumps(build, indent=2) + '\n')
     print(f'Embedded assets: {sum(v["gzip"] for v in sizes.values())} gzip bytes')

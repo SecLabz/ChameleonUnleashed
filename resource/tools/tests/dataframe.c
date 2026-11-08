@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <string.h>
 #include "dataframe.h"
+#include "data_cmd.h"
 static unsigned calls;
 static bool disconnect_in_callback;
 static bool ready=true, reset_after_ready;
@@ -16,7 +17,11 @@ bool usb_cdc_tx_ready(void) {
 static void received(uint16_t command,uint16_t status,uint16_t length,uint8_t *data) {
     assert(status==0 && length==2);
     if (data_frame_source()==DATA_SOURCE_USB) { assert(command==1000 && data[0]==0xaa && data[1]==0xbb); }
-    else { assert(command==1033 && data[0]==0xcc && data[1]==0xdd); }
+    else { assert((command==1033 || command==DATA_CMD_WEB_API) && data[0]==0xcc && data[1]==0xdd); }
+    /* A control service pass from inside a callback must never re-enter it. */
+    unsigned before = calls;
+    data_frame_process_ble_control();
+    assert(calls == before);
     if (disconnect_in_callback) {
         uint8_t before[2];memcpy(before,data,2);
         data_frame_disconnect(data_frame_source());
@@ -51,5 +56,15 @@ int main(void) {
     data_frame_process();assert(calls==6);
     data_frame_disconnect(DATA_SOURCE_USB);ready=true;data_frame_process();assert(calls==6);
     assert(!data_frame_make(1000,0,4097,usb));
+    data_frame_receive_from(DATA_SOURCE_USB,usb,12);
+    data_frame_receive_from(DATA_SOURCE_BLE,ble,12);
+    data_frame_process_ble_control(); assert(calls==6);
+    data_frame_process(); assert(calls==8);
+    frame=data_frame_make(DATA_CMD_WEB_API,0,2,(uint8_t[]){0xcc,0xdd});
+    memcpy(ble,frame->buffer,12);
+    data_frame_receive_from(DATA_SOURCE_USB,usb,12);
+    data_frame_receive_from(DATA_SOURCE_BLE,ble,12);
+    data_frame_process_ble_control(); assert(calls==9 && data_frame_source()==DATA_SOURCE_BLE);
+    data_frame_process(); assert(calls==10 && data_frame_source()==DATA_SOURCE_USB);
     return 0;
 }

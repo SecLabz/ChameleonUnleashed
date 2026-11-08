@@ -183,11 +183,11 @@ static api_response_t commit_upload(const uint8_t *body, size_t size, uint8_t *o
     return outcome(saved, output);
 }
 
-static api_response_t slot_request(const char *operation, const uint8_t *body,
+static api_response_t slot_request(api_operation_t operation, const uint8_t *body,
     size_t size, uint8_t *output, size_t capacity) {
     if (capacity < 6) return response(500, 0);
-    if (!strcmp(operation, "open")) return open_snapshot(body, size, output);
-    if (!strcmp(operation, "read")) {
+    if (operation == API_SLOT_OPEN) return open_snapshot(body, size, output);
+    if (operation == API_SLOT_READ) {
         if (state != SNAPSHOT) return response(409, 0);
         if (size != 4) return response(400, 0);
         unsigned offset = read16(body), count = read16(body + 2);
@@ -195,7 +195,7 @@ static api_response_t slot_request(const char *operation, const uint8_t *body,
         memcpy(output, wire + offset, count);
         return response(200, count);
     }
-    if (!strcmp(operation, "begin")) {
+    if (operation == API_SLOT_BEGIN) {
         if (size != 8 || !valid_target(body, size)) return response(400, 0);
         uint32_t revision = read32(body + 4);
         if (revision != tag_emulation_place_revision(body[0], body[1])) return response(409, 0);
@@ -205,16 +205,16 @@ static api_response_t slot_request(const char *operation, const uint8_t *body,
         target = body[0]; target_sense = body[1]; total = length; expected_revision = revision; state = UPLOAD;
         return response(200, 0);
     }
-    if (!strcmp(operation, "write")) {
+    if (operation == API_SLOT_WRITE) {
         if (state != UPLOAD) return response(409, 0);
         if (size <= 2 || size > 1024 || read16(body) != received || received + size - 2 > total) return response(400, 0);
         memcpy(wire + received, body + 2, size - 2); received += size - 2;
         write16(output, received);
         return response(200, 2);
     }
-    if (!strcmp(operation, "commit")) return commit_upload(body, size, output);
+    if (operation == API_SLOT_COMMIT) return commit_upload(body, size, output);
     if (state == UPLOAD) return response(409, 0);
-    if (!strcmp(operation, "activate")) {
+    if (operation == API_SLOT_ACTIVATE) {
         if (size != 9 || body[0] >= TAG_MAX_SLOT_NUM) return response(400, 0);
         if (read32(body + 1) != tag_emulation_place_revision(body[0], TAG_SENSE_HF) ||
             read32(body + 5) != tag_emulation_place_revision(body[0], TAG_SENSE_LF)) return response(409, 0);
@@ -230,12 +230,12 @@ static api_response_t slot_request(const char *operation, const uint8_t *body,
         web_slots_reset();
         return outcome(saved, output);
     }
-    if (!strcmp(operation, "nick")) {
+    if (operation == API_SLOT_NICK) {
         if (size < 7 || !valid_target(body, size) || !valid_name(body + 6, size - 6)) return response(400, 0);
         if (read32(body + 2) != tag_emulation_place_revision(body[0], body[1])) return response(409, 0);
         return outcome(save_name(body[0], body[1], body + 6, size - 6), output);
     }
-    if (!strcmp(operation, "enable")) {
+    if (operation == API_SLOT_ENABLE) {
         if (size != 7 || !valid_target(body, size) || body[6] > 1) return response(400, 0);
         if (read32(body + 2) != tag_emulation_place_revision(body[0], body[1])) return response(409, 0);
         tag_slot_specific_type_t types;
@@ -250,7 +250,7 @@ static api_response_t slot_request(const char *operation, const uint8_t *body,
         web_slots_reset();
         return outcome(saved, output);
     }
-    if (!strcmp(operation, "clear")) {
+    if (operation == API_SLOT_CLEAR) {
         if (size != 6 || !valid_target(body, size)) return response(400, 0);
         if (read32(body + 2) != tag_emulation_place_revision(body[0], body[1])) return response(409, 0);
         web_slots_reset();
@@ -268,7 +268,7 @@ static api_response_t slot_request(const char *operation, const uint8_t *body,
     return response(404, 0);
 }
 
-api_response_t web_slots_request(const char *operation, const uint8_t *body,
+api_response_t web_slots_request(api_operation_t operation, const uint8_t *body,
     size_t size, uint8_t *output, size_t capacity) {
     tag_emulation_sense_hold(true);
     api_response_t result = slot_request(operation, body, size, output, capacity);

@@ -23,6 +23,7 @@ const ORDER: [&str; 4] = [
 
 pub(super) struct Image {
     pub name: &'static str,
+    pub version: Option<u32>,
     pub init: Vec<u8>,
     pub firmware: Vec<u8>,
 }
@@ -85,9 +86,10 @@ fn decode<R: Read + Seek>(reader: R) -> Result<Vec<Image>> {
         };
         let init = read(&mut archive, file_name("dat_file")?, MAX_INIT_BYTES)?;
         let firmware = read(&mut archive, file_name("bin_file")?, MAX_FIRMWARE_BYTES)?;
-        init::validate(&init, name, firmware.len())?;
+        let version = init::validate(&init, name, firmware.len())?;
         images.push(Image {
             name,
+            version,
             init,
             firmware,
         });

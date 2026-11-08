@@ -1,12 +1,13 @@
 import { createClient } from './nfc-wasm/index.mjs';
 import { CORE } from './core-build.mjs';
 import { getResource, resourceUrl } from './assets.mjs';
+import { appUrl } from './environment.mjs';
 
 export const CORE_URL = resourceUrl('core/' + CORE.path);
 
 export async function createRuntime(
   signal,
-  workerFactory = () => new Worker('/worker.mjs', { type: 'module' })
+  workerFactory = () => new Worker(appUrl('worker.mjs'), { type: 'module' })
 ) {
   let bytes;
 

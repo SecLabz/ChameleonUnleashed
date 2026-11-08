@@ -1,6 +1,7 @@
 #include "dataframe.h"
 #include "netdata.h"
 #include "usb_main.h"
+#include "data_cmd.h"
 #include <stddef.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -202,27 +203,37 @@ void data_frame_receive_from(data_source_t source, const uint8_t *data, uint16_t
  *         This function will be distributed processing tasks through this function, which will be adjusted to notify the data processing of the data
  * If the data processing is time -consuming operation, you need to put this function in the main loop to call
  */
-void data_frame_process(void) {
-    for (data_source_t source = DATA_SOURCE_USB; source < DATA_SOURCE_COUNT; source++) {
-        receiver_t *rx = &receivers[source];
-        if (!rx->complete || (source == DATA_SOURCE_USB && !usb_cdc_tx_ready())) continue;
-        uint32_t generation = generations[source];
-        rx->processing = true;
-        if (!rx->complete || generation != generations[source] ||
-            (source == DATA_SOURCE_USB && !usb_cdc_tx_ready())) {
-            rx->processing = false;
-            continue;
-        }
-        processing_source = source;
-        processing_generation = generation;
-        if (m_frame_process_cbk) {
-            m_frame_process_cbk(rx->command, rx->status, rx->length,
-                rx->length ? rx->buffer.data : NULL);
-        }
-        rx->position = 0;
-        rx->complete = false;
+static void process_source(data_source_t source) {
+    receiver_t *rx = &receivers[source];
+    if (!rx->complete || rx->processing || (source == DATA_SOURCE_USB && !usb_cdc_tx_ready())) return;
+    uint32_t generation = generations[source];
+    rx->processing = true;
+    if (!rx->complete || generation != generations[source] ||
+        (source == DATA_SOURCE_USB && !usb_cdc_tx_ready())) {
         rx->processing = false;
+        return;
     }
+    processing_source = source;
+    processing_generation = generation;
+    if (m_frame_process_cbk) {
+        m_frame_process_cbk(rx->command, rx->status, rx->length,
+            rx->length ? rx->buffer.data : NULL);
+    }
+    rx->position = 0;
+    rx->complete = false;
+    rx->processing = false;
+}
+
+void data_frame_process(void) {
+    for (data_source_t source = DATA_SOURCE_USB; source < DATA_SOURCE_COUNT; source++)
+        process_source(source);
+}
+
+void data_frame_process_ble_control(void) {
+    for (data_source_t source = DATA_SOURCE_USB; source < DATA_SOURCE_COUNT; source++)
+        if (receivers[source].processing) return;
+    receiver_t *rx = &receivers[DATA_SOURCE_BLE];
+    if (rx->complete && rx->command == DATA_CMD_WEB_API) process_source(DATA_SOURCE_BLE);
 }
 
 /**

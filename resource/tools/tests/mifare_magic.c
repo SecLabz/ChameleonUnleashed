@@ -64,6 +64,7 @@ static bool selected_state;
 static bool halted_state;
 static bool cold_only;
 static bool halt_only;
+static unsigned plus_ats;
 
 static void pcd_14a_reader_antenna_off(void) {
     field = false;
@@ -182,6 +183,20 @@ static uint8_t pcd_14a_reader_bytes_transfer(uint8_t command, uint8_t *tx,
         *rx = key_b_write_only && authenticated_type == 0x60 ? 4 : write_reply;
         *bits = fault == 2 ? 8 : 4;
         return fault == 3 ? STATUS_HF_TAG_NO : STATUS_HF_TAG_OK;
+    }
+    if (*tx == 0xe0 && tx[1] == 0x20 && plus_ats) {
+        /* PM3 Plus X SL1 vector, with an independently generated CRC-A. */
+        const uint8_t ats[] = {12, 0x75, 0x77, 0x80, 2, 0xc1, 5, 0x2f, 0x2f, 1, 0xbc, 0xd6};
+        memcpy(rx, ats, sizeof(ats));
+        if (plus_ats == 2) rx[0]--;
+        if (plus_ats == 5) { rx[9] = 0; rx[10] = 0x35; rx[11] = 0xc7; }
+        if (plus_ats == 6) rx[11] ^= 1;
+        if (plus_ats == 7) rx[1] |= 0x80;
+        if (plus_ats == 8) rx[1] = 0x79;
+        crc_14a_append(rx, sizeof(ats));
+        if (plus_ats == 3) rx[sizeof(ats)] ^= 1;
+        *bits = plus_ats == 4 ? (sizeof(ats) + 2) * 8 - 1 : (sizeof(ats) + 2) * 8;
+        return plus_ats == 9 ? STATUS_HF_ERR_PARITY : STATUS_HF_TAG_OK;
     }
     if (*tx == 0xe0 && tx[1] == 0x20 && (enabled & MF1_MAGIC_GEN2)) {
         static const uint8_t ats[] = {9, 0x78, 0, 0x91, 2, 0xda, 0xbc, 0x19, 0x10};
@@ -324,6 +339,97 @@ static void inspect(void) {
 }
 
 
+static void inspect_ats(void) {
+    uint8_t request[28] = {4, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 4, 0, 8, 2};
+    memset(request + 15, 0xff, 6);
+    memset(request + 21, 0xa0, 6);
+    request[27] = 1;
+    uint8_t legacy[11], output[77];
+    uint16_t count;
+    selected = (picc_14a_tag_t){{1, 2, 3, 4}, 4, 8, {4, 0}, 1};
+    enabled = replace_at = fault = 0;
+    expected_key_type = 0x60;
+    plus_ats = 1;
+    scans = signature_rounds = authentications = writes = 0;
+    assert(mf1_classic_inspect(27, request, legacy, &count) == STATUS_HF_TAG_OK && count == 11);
+    unsigned legacy_scans = scans, legacy_signatures = signature_rounds;
+    unsigned legacy_authentications = authentications, legacy_writes = writes;
+    scans = signature_rounds = authentications = writes = 0;
+    assert(mf1_classic_inspect(28, request, output, &count) == STATUS_HF_TAG_OK);
+    assert(count == 27 && !memcmp(output, legacy, 11));
+    assert(scans == legacy_scans && signature_rounds == legacy_signatures &&
+        authentications == legacy_authentications && writes == legacy_writes);
+    assert(output[11] == 1 && output[12] == 14 && output[13] == 12);
+    uint8_t crc[2];
+    crc_14a_calculate(output + 13, 12, crc);
+    assert(!memcmp(crc, output + 25, 2));
+    unsigned selections = scans;
+    /* Evidence is withheld if any later reselect sees a different target. */
+    for (replace_at = 1; replace_at <= selections; replace_at++) {
+        scans = 0;
+        assert(mf1_classic_inspect(28, request, output, &count) == STATUS_HF_TAG_NO && !count);
+        assert(!field && !authenticated && !awaiting_data && timeout_ms == 25 && config.forcerats == 1);
+    }
+    replace_at = 0;
+    for (plus_ats = 2; plus_ats <= 4; plus_ats++) {
+        assert(mf1_classic_inspect(28, request, output, &count) == STATUS_HF_TAG_OK);
+        assert(count == 13 && output[11] == 1 && output[12] == 0);
+    }
+    plus_ats = 0;
+    assert(mf1_classic_inspect(28, request, output, &count) == STATUS_HF_TAG_OK && count == 13 && output[12] == 0);
+    unsigned previous = scans;
+    request[27] = 2;
+    assert(mf1_classic_inspect(28, request, output, &count) == STATUS_PAR_ERR && !count && scans == previous);
+    request[27] = 0;
+    assert(mf1_classic_inspect(28, request, output, &count) == STATUS_PAR_ERR && !count && scans == previous);
+}
+
+static void guarded_2k_capacity(void) {
+    selected = (picc_14a_tag_t){{1, 2, 3, 4}, 4, 8, {4, 0}, 1};
+    enabled = fault = replace_at = 0;
+    scans = writes = authentications = 0;
+    for (plus_ats = 1; plus_ats <= 9; plus_ats++) {
+        uint16_t status = mf1_classic_2k_sl1_check(4, selected.uid, selected.atqa, 8);
+        uint16_t expected = plus_ats == 9 ? STATUS_HF_ERR_PARITY :
+            plus_ats == 1 || plus_ats == 5 ? STATUS_HF_TAG_OK : STATUS_HF_TAG_NO;
+        assert(status == expected);
+        assert(timeout_ms == 25 && config.forcerats == 1);
+        assert(!authenticated && !awaiting_data && !writes && !authentications);
+        assert(field == (status == STATUS_HF_TAG_OK));
+    }
+    plus_ats = 1;
+    for (replace_at = 1; replace_at <= 2; replace_at++) {
+        scans = 0;
+        assert(mf1_classic_2k_sl1_check(4, selected.uid, selected.atqa, 8) == STATUS_HF_TAG_NO);
+        assert(!field && timeout_ms == 25 && config.forcerats == 1);
+    }
+    replace_at = 0;
+    for (uint8_t sak = 8; sak <= 0x28; sak += 8) {
+        if (sak == 8) continue;
+        scans = 0;
+        assert(mf1_classic_2k_sl1_check(4, selected.uid, selected.atqa, sak) == STATUS_HF_TAG_NO && !scans);
+    }
+    uint8_t wrong_atqa[] = {2, 0};
+    assert(mf1_classic_2k_sl1_check(4, selected.uid, wrong_atqa, 8) == STATUS_HF_TAG_NO);
+    plus_ats = 0;
+    assert(mf1_classic_2k_sl1_check(4, selected.uid, selected.atqa, 8) == STATUS_HF_TAG_NO);
+    enabled = MF1_MAGIC_GEN2;
+    assert(mf1_classic_2k_sl1_check(4, selected.uid, selected.atqa, 8) == STATUS_HF_TAG_NO);
+    enabled = 0;
+    plus_ats = 1;
+    selected.uid_len = 7; selected.atqa[0] = 0x44;
+    assert(mf1_classic_2k_sl1_check(7, selected.uid, selected.atqa, 8) == STATUS_HF_TAG_OK);
+    const hf14a_config_t recovery = {2, 1, 2, 2};
+    config = recovery;
+    timeout_ms = 47;
+    assert(mf1_classic_2k_sl1_check(7, selected.uid, selected.atqa, 8) == STATUS_HF_TAG_OK);
+    assert(!memcmp(&config, &recovery, sizeof(config)) && timeout_ms == 47);
+    config = (hf14a_config_t){0, 0, 0, 1}; timeout_ms = 25;
+    assert(!authenticated && !awaiting_data && !writes && !authentications);
+    pcd_14a_reader_antenna_off();
+    plus_ats = 0;
+}
+
 static void run(uint8_t *request, unsigned size, unsigned flags, unsigned evidence, unsigned status) {
     uint8_t out[3] = {0xaa, 0xaa, 0xaa};
     uint16_t count = 99;
@@ -423,5 +529,7 @@ int main(void) {
         run(request, 21, MF1_MAGIC_GEN2, MF1_MAGIC_GEN2_WRITE_ACK, 0);
     }
     inspect();
+    inspect_ats();
+    guarded_2k_capacity();
     return 0;
 }

@@ -31,8 +31,8 @@ static uint32_t app_timer_cnt_diff_compute(uint32_t now, uint32_t before) {
 }
 static uint8_t read_register_single(uint8_t address) {
     assert(address == ComIrqReg && ++irq_reads < 100);
-    if (m_short_wakeup_wait) rtc_ticks = (rtc_ticks + 8) & 0xffffff;
-    else timer.time += 10;
+    rtc_ticks = (rtc_ticks + 8) & 0xffffff;
+    timer.time = (irq_reads * 8 / APP_TIMER_TICKS(10)) * 10;
     return irq_value;
 }
 static uint8_t pcd_14a_reader_bits_transfer(uint8_t *tx, uint16_t tx_bits,
@@ -51,6 +51,7 @@ static uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
 /* CAPTURE FUNCTIONS */
 
 int main(void) {
+    assert(g_timeout_auto_timer == &timer);
     mf1_capture_stats_start(true);
     m_short_wakeup_wait = true;
     rtc_ticks = 0xfffff0; // Exercise the actual RTC counter boundary.
@@ -60,7 +61,7 @@ int main(void) {
 
     m_short_wakeup_wait = false; irq_reads = 0;
     assert(!wait_for_irq(0x30, &irq));
-    assert(irq_reads == 3 && timer.time == 30 && mf1_capture_stats.timeouts == 2);
+    assert(irq_reads == 52 && timer.time == 20 && mf1_capture_stats.timeouts == 2);
     irq_value = 0x20; irq_reads = 0;
     assert(wait_for_irq(0x30, &irq) && irq == 0x20 && irq_reads == 1);
 

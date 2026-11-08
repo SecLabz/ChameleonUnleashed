@@ -309,7 +309,7 @@ static void live_failure(bool cannot_stop) {
     assert_restored();
 }
 
-static void software_exchange(bool vicinity, uint32_t mask) {
+static void software_exchange(bool vicinity, uint32_t mask, bool deferred) {
     /* Ordinary block-read bytes; the frontend only serializes prepared data. */
     const uint8_t read_block[] = {0x08,0x00};
     const uint8_t type_b_levels[] = {
@@ -326,15 +326,22 @@ static void software_exchange(bool vicinity, uint32_t mask) {
     rc522_raw_transfer_t transfer = {
         .data = vicinity ? prepared_v : read_block,
         .length = vicinity ? sizeof(prepared_v) : sizeof(read_block),
-        .samples = samples, .sample_count = 8, .hardware_tx = false,
+        .samples = samples, .sample_count = 8, .hardware_tx = false, .live = deferred,
     };
     expected_levels = vicinity ? type_v_levels : type_b_levels;
     expected_level_count = vicinity ? sizeof(type_v_levels) : sizeof(type_b_levels);
     interrupt_mask = initial_mask = mask;
     trace_levels = true;
     rc522_raw_exchange(&transfer);
+    (void)NRF_SPIM0; /* Advance the independent peripheral completion model. */
     trace_levels = false;
-    assert(dma_starts == 1 && dma_stops == 1 && level_count == expected_level_count);
+    assert(dma_starts == 1 && dma_stops == (deferred ? 0u : 1u));
+    if (deferred) {
+        assert(spim.ENABLE && !spi.ENABLE);
+        rc522_raw_finish(false);
+        assert(dma_stops == 1 && !spim.ENABLE && spi.ENABLE);
+    }
+    assert(level_count == expected_level_count);
     assert(interrupt_mask == mask && !transmissions && rc522_raw_ready());
     assert(rc522_raw_close() && interrupt_mask == mask);
     interrupt_mask = 0;
@@ -426,10 +433,11 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "live_stop")) live_exchange(false);
     else if (!strcmp(argv[1], "live_timeout")) live_failure(false);
     else if (!strcmp(argv[1], "live_stop_failure")) live_failure(true);
-    else if (!strcmp(argv[1], "software_b")) software_exchange(false, 0);
-    else if (!strcmp(argv[1], "software_b_masked")) software_exchange(false, 1);
-    else if (!strcmp(argv[1], "software_v")) software_exchange(true, 0);
-    else if (!strcmp(argv[1], "software_v_masked")) software_exchange(true, 1);
+    else if (!strcmp(argv[1], "software_b")) software_exchange(false, 0, false);
+    else if (!strcmp(argv[1], "software_b_masked")) software_exchange(false, 1, false);
+    else if (!strcmp(argv[1], "software_v")) software_exchange(true, 0, false);
+    else if (!strcmp(argv[1], "software_v_deferred")) software_exchange(true, 0, true);
+    else if (!strcmp(argv[1], "software_v_masked")) software_exchange(true, 1, false);
     else if (!strcmp(argv[1], "dma_timeout")) dma_failure(false);
     else if (!strcmp(argv[1], "dma_stop_failure")) dma_failure(true);
     else if (!strcmp(argv[1], "tx_failure")) tx_failure_cleanup();

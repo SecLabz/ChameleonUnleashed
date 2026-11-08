@@ -34,7 +34,7 @@ class RadioTests(unittest.TestCase):
             subprocess.run([
                 'cc', '-fsanitize=address,undefined', *common_objects, str(policy), '-o', str(binary),
             ], check=True)
-            for scenario in ('profiles', 'direct', 'without_usb', 'vicinity', 'retained',
+            for scenario in ('vicinity_ble', 'vicinity_clock_failures', 'profiles', 'direct', 'without_usb', 'vicinity', 'retained',
                              'clock_fallback', 'clock_invalidate', 'live_clock_invalidate', 'deadline',
                              'crc_send', 'skipped_slot', 'tearoff_reads'):
                 with self.subTest(scenario=scenario):
