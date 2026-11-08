@@ -143,7 +143,7 @@ The CLI is not included here. Download the archive for your computer if you
 need it; its firmware.zip is identical to firmware/install.zip in this archive.
 
 You can also update in a browser on a compatible USB-connected device:
-http://192.168.16.1 > Device > Update firmware.
+http://192.168.16.1 > Device > Firmware update.
 
 FIRMWARE PACKAGES - ONE APPLICATION BUILD, DIFFERENT COMPONENTS
 
