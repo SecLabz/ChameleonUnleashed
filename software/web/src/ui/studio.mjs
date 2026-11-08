@@ -12,6 +12,7 @@ import { renderDesfire } from './desfire-view.mjs';
 import { needsHfDefaults } from '../documents/hf-image.mjs';
 import { supportsPhysicalCopy } from '../device/tag-write.mjs';
 import { classicChanges } from '../documents/classic-write.mjs';
+import { classicDocumentKeys, classicDictionaryKeys } from '../documents/classic-document-keys.mjs';
 import { renderLfChip } from './lf-chip.mjs';
 import { lfIdentity } from '../documents/lf.mjs';
 import { lfEditor } from './lf-editor.mjs';
@@ -283,6 +284,29 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
     for (const id of ['export-json', 'export-document']) {
       $(id).disabled = busy || invalidEdit || !doc;
     }
+    const keyCount = classicDictionaryKeys(doc).length;
+    const keyLabel = `${keyCount} unique ${keyCount === 1 ? 'key' : 'keys'}`;
+    let keyExportReason = '';
+    if (busy) {
+      keyExportReason = 'Wait for the current operation to finish';
+    } else if (invalidEdit) {
+      keyExportReason = 'Fix the invalid memory edit before exporting';
+    } else if (!keyCount) {
+      keyExportReason = 'No known keys to export';
+    }
+    for (const id of ['export-keys', 'keys-export']) {
+      $(id).disabled = !!keyExportReason;
+      $(id).title = keyExportReason || `Export ${keyLabel} as a dictionary`;
+    }
+    $('export-keys-format').textContent = keyCount
+      ? `.dic · ${keyCount} ${keyCount === 1 ? 'key' : 'keys'}`
+      : 'None known';
+    $('keys-export-summary').textContent = keyCount
+      ? `${keyLabel} · .dic dictionary\nOne key per line, without sector assignments.`
+      : 'No known keys to export. Read the tag or open a document with known keys.';
+    if (keyCount && keyExportReason) {
+      $('keys-export-summary').textContent += ` ${keyExportReason}.`;
+    }
     $('hf-defaults').hidden = !needsHfDefaults(doc);
     $('hf-defaults').disabled = busy;
 
@@ -352,7 +376,8 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
       (doc.kind === 'classic' && doc.card.uid.length !== 4) ||
       (doc.kind === 'st25tb' && doc.type !== ST25TB.TYPE);
     $('export-mct').hidden = doc.kind !== 'classic';
-    const jsonOnly = $('export').hidden && $('export-mct').hidden;
+    $('export-keys').hidden = !classic;
+    const jsonOnly = $('export').hidden && $('export-mct').hidden && $('export-keys').hidden;
     $('export-json').hidden = !jsonOnly;
     $('export-menu').hidden = jsonOnly;
     if (jsonOnly) {
@@ -448,41 +473,10 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
 
   function renderDocumentKeys() {
     const doc = state.document;
-    if (isClassic(doc) && doc.kind === 'identity') {
-      const row = document.createElement('tr');
-      const credentials = doc.classicObservation?.credentials || [];
-      for (const value of [
-        '0',
-        ...[false, true].map((keyB) => {
-          const found = credentials.find((credential) => credential.keyB === keyB);
-          return found ? hex(found.key) : 'Unknown';
-        })
-      ]) {
-        const cell = document.createElement('td');
-        cell.textContent = value;
-        row.append(cell);
-      }
-      $('keys').replaceChildren(row);
-      return;
-    }
-    if (doc?.kind !== 'classic' || !doc.geometry?.sectors) {
-      return;
-    }
     $('keys').replaceChildren(
-      ...doc.geometry.sectors.map((sector, index) => {
-        const trailer = doc.memory[sector.trailer];
-        const keyAt = (start) => {
-          if (trailer) {
-            const bytes = trailer.slice(start, start + 6);
-            return bytes.every((byte) => byte !== null) ? bytes : null;
-          }
-
-          const keyName = start === 0 ? 'key_a' : 'key_b';
-          return doc.recoveredKeys?.[index]?.[keyName] ?? null;
-        };
-
+      ...classicDocumentKeys(doc).map((keys, index) => {
         const row = document.createElement('tr');
-        for (const value of [index, keyAt(0), keyAt(10)]) {
+        for (const value of [index, keys.key_a, keys.key_b]) {
           const cell = document.createElement('td');
           if (Array.isArray(value)) {
             cell.textContent = hex(value);

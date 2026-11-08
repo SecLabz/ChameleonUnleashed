@@ -1115,6 +1115,27 @@ async function readClassicDocument(sak = 8) {
   return document;
 }
 
+test('Classic trailer edits retain unknown RF keys and persist explicitly changed keys without changing the read snapshot', () =>
+  runtime(async () => {
+    const document = await readClassicDocument();
+    document.recoveredKeys[0].key_b = null;
+    document.memory[3].splice(10, 6, ...Array(6).fill(0));
+    const snapshot = structuredClone(document.classicRead);
+    const trailer = [...document.memory[3]];
+    trailer[9] ^= 1;
+    editBlock(document, 3, trailer);
+    assert.equal(document.recoveredKeys[0].key_b, null);
+
+    trailer.splice(10, 6, 1, 2, 3, 4, 5, 6);
+    editBlock(document, 3, trailer);
+    assert.deepEqual(document.recoveredKeys[0].key_b, [1, 2, 3, 4, 5, 6]);
+    trailer.splice(10, 6, ...Array(6).fill(0));
+    editBlock(document, 3, trailer);
+    assert.deepEqual(document.recoveredKeys[0].key_b, Array(6).fill(0));
+    assert.deepEqual((await restoreDraft(serializeDraft(document))).recoveredKeys, document.recoveredKeys);
+    assert.deepEqual(document.classicRead, snapshot);
+  }));
+
 test('Classic changes use a session-only snapshot, skip block 0 and track undo and unknown bytes', () =>
   runtime(async () => {
     const document = await readClassicDocument(24);

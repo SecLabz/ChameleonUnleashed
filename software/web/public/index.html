@@ -276,6 +276,9 @@
                     <button id="export" type="button">Flipper file<small>.nfc</small></button>
                     <button id="export-document" type="button">JSON file<small>.json</small></button>
                     <button id="export-mct" type="button">MIFARE Classic Tool<small>.mct</small></button>
+                    <button id="export-keys" type="button" hidden disabled>
+                      Document keys<small id="export-keys-format">.dic</small>
+                    </button>
                   </div>
                 </details>
                 <details class="menu" id="more-menu">
@@ -809,8 +812,14 @@
       </div>
     </dialog>
 
-    <dialog class="app-dialog" id="keys-dialog" aria-labelledby="keys-title">
+    <dialog
+      class="app-dialog"
+      id="keys-dialog"
+      aria-labelledby="keys-title"
+      aria-describedby="keys-export-summary"
+    >
       <h2 id="keys-title">Keys in this document</h2>
+      <p class="memory-hint" id="keys-export-summary"></p>
       <div class="table">
         <table>
           <thead>
@@ -825,6 +834,7 @@
       </div>
       <div class="dialog-actions">
         <button class="secondary" type="button" data-close-dialog>Close</button>
+        <button class="primary-action" id="keys-export" type="button" disabled>Export keys</button>
       </div>
     </dialog>
 

@@ -20,6 +20,7 @@ import {
   maintainTag
 } from './ui/tag-write.mjs';
 import { classicReadSnapshot } from './documents/classic-write.mjs';
+import { classicDictionaryKeys } from './documents/classic-document-keys.mjs';
 import { $, BLE_PAUSED_TYPES, deviceViews } from './ui/device-view.mjs';
 import { offlineView } from './ui/offline.mjs';
 import { decodeSlot } from './device/slots.mjs';
@@ -45,7 +46,6 @@ import { createView } from './ui/create.mjs';
 import { writeSt25tb } from './ui/st25tb-write.mjs';
 import {
   be32,
-  bytesValid,
   decodeSlotImage,
   encodeSlotImage,
   family,
@@ -847,15 +847,7 @@ async function recoverClassic(device, expectedUid, initialCard) {
   $('keys').replaceChildren();
   $('progress').value = 0;
   const document = state.document;
-  const candidates = document.recoveredKeys?.flatMap((keys) => [keys.key_a, keys.key_b]) || [];
-  for (const credential of document.classicObservation?.credentials || []) {
-    candidates.push(credential.key);
-  }
-  for (const sector of document.geometry?.sectors || []) {
-    const trailer = document.memory[sector.trailer];
-    candidates.push(trailer?.slice(0, 6), trailer?.slice(10, 16));
-  }
-  const knownKeys = candidates.filter((key) => key?.length === 6 && bytesValid(key)).map(hex);
+  const knownKeys = classicDictionaryKeys(document);
   delete document.classicRead;
   let reading;
   try {
@@ -1147,6 +1139,23 @@ $('export-mct').onclick = () =>
   workspaceTask(async (signal) => {
     download(await exportMct(state.document, signal), `${state.document.name}.mct`);
   });
+
+for (const id of ['export-keys', 'keys-export']) {
+  $(id).onclick = () => {
+    try {
+      const doc = state.document;
+      const name = doc.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim() || 'classic';
+      const uid = hex(doc.card.uid);
+      const filename = name.toUpperCase().endsWith(uid) ? name : `${name}-${uid}`;
+      download(classicDictionaryKeys(doc).join('\n') + '\n', `${filename}.dic`);
+      if (id === 'export-keys') {
+        $('export-menu').querySelector('summary').focus();
+      }
+    } catch (error) {
+      notify(error.message, true);
+    }
+  };
+}
 
 $('save-slot').onclick = () => saveToSlot(false);
 

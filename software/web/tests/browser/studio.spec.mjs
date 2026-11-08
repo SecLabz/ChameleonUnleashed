@@ -75,7 +75,7 @@ async function keys(page) {
 
   await expect(page.locator('#keys')).toContainText('FFFFFFFFFFFF');
 
-  await page.locator('#keys-dialog button').click();
+  await page.locator('#keys-dialog').getByRole('button', { name: 'Close', exact: true }).click();
 }
 
 async function captureDetails(page) {
@@ -101,7 +101,15 @@ test('scan, edit validation, NFC/JSON/MCT downloads and recent drafts use the re
 
   await expect(memory).toHaveAttribute('aria-invalid', 'true');
 
-  for (const id of ['export', 'export-document', 'save-slot', 'emulate', 'copy-tag']) {
+  for (const id of [
+    'export',
+    'export-document',
+    'export-keys',
+    'keys-export',
+    'save-slot',
+    'emulate',
+    'copy-tag'
+  ]) {
     await expect(page.locator('#' + id)).toBeDisabled();
   }
   await memory.fill(original.replace('00000000', '01020304'));
@@ -136,6 +144,113 @@ test('scan, edit validation, NFC/JSON/MCT downloads and recent drafts use the re
   await importFile(page, 'capture.json', json);
 
   await expect(page.locator('#memory-status')).toHaveText('64/64 blocks known');
+});
+
+for (const width of [1280, 320]) {
+  test(`Classic document keys export from menu and dialog and reimport at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: width === 320 ? 568 : 720 });
+    await scan(page);
+    const memory = page.getByRole('textbox', { name: 'Memory, one block per line in hexadecimal' });
+    const lines = (await memory.inputValue()).split('\n');
+    lines[3] = 'A0A1A2A3A4A5 FF078069 FFFFFFFFFFFF';
+    await memory.fill(lines.join('\n'));
+    await expect(memory).toHaveAttribute('aria-invalid', 'false');
+
+    await page.locator('#export-menu summary').click();
+    await expect(page.locator('#export-keys-format')).toHaveText('.dic · 2 keys');
+    const menuBounds = await page.locator('#export-menu .menu-list').boundingBox();
+    expect(menuBounds.x).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: test.info().outputPath(`classic-keys-menu-${width}.png`) });
+    const menuDownload = page.waitForEvent('download');
+    await page.locator('#export-keys').click();
+    const file = await menuDownload;
+    expect(file.suggestedFilename()).toBe('Tag-01020304.dic');
+    const dictionary = await readFile(await file.path(), 'utf8');
+    expect(dictionary).toBe('A0A1A2A3A4A5\nFFFFFFFFFFFF\n');
+    await expect(page.locator('#export-menu')).not.toHaveAttribute('open', '');
+    await expect(page.locator('#export-menu summary')).toBeFocused();
+
+    await page.locator('#more-menu summary').click();
+    await page.getByRole('button', { name: 'Keys…', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Keys in this document', exact: true });
+    await expect(dialog).toContainText('2 unique keys');
+    await expect(dialog).toContainText('without sector assignments');
+    await expect(page.locator('#keys tr').first()).toContainText('A0A1A2A3A4A5');
+    const dialogBounds = await dialog.boundingBox();
+    expect(dialogBounds.x).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.x + dialogBounds.width).toBeLessThanOrEqual(width);
+    const exportButton = page.locator('#keys-export');
+    await expect(exportButton).toBeInViewport();
+    const dialogDownload = page.waitForEvent('download');
+    await exportButton.click();
+    expect(await readFile(await (await dialogDownload).path(), 'utf8')).toBe(dictionary);
+    await expect(dialog).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath(`classic-keys-${width}.png`) });
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+
+    await page.locator('#read-menu summary').click();
+    await page.locator('#dictionary-edit').click();
+    await page.locator('#dictionary-file').setInputFiles({
+      name: file.suggestedFilename(),
+      mimeType: 'text/plain',
+      buffer: Buffer.from(dictionary)
+    });
+    await expect(page.locator('#dictionary')).toHaveValue(dictionary);
+    await expect(page.locator('#dictionary-status')).toContainText('Keys imported');
+    await page.locator('#dictionary-close').click();
+  });
+}
+
+test('Classic key export explains an empty document and stays hidden for other tag families', async ({
+  page
+}) => {
+  await scan(page);
+  const draft = JSON.parse(await exported(page, '#export-json'));
+  draft.document.memory.fill(null);
+  draft.document.recoveredKeys = Array.from({ length: 16 }, () => ({ key_a: null, key_b: null }));
+  await importFile(page, 'unknown.json', JSON.stringify(draft));
+  await page.locator('#export-menu summary').click();
+  await expect(page.locator('#export-keys')).toBeDisabled();
+  await expect(page.locator('#export-keys-format')).toHaveText('None known');
+  await page.locator('#more-menu summary').click();
+  await page.getByRole('button', { name: 'Keys…', exact: true }).click();
+  await expect(page.locator('#keys-export-summary')).toContainText('No known keys to export');
+  await expect(page.locator('#keys-export')).toBeDisabled();
+  await page.locator('#keys-dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await closeDocument(page);
+  await page.locator('#create').click();
+  await page.locator('[data-create="1100"]').click();
+  await expect(page.locator('#export-keys')).toBeHidden();
+});
+
+test('Classic inspection keys can export before reading memory', async ({ page }) => {
+  await page.route('**/api/command/2040?*', (route) =>
+    route.fulfill({ body: Buffer.from([0, 0, 0, 1, 0, 1, 1, ...Array(6).fill(255)]) })
+  );
+  await scan(page, false);
+  await expect(page.locator('#memory-status')).toBeEmpty();
+  await page.context().setOffline(true);
+  expect(await exported(page, '#export-keys')).toBe('FFFFFFFFFFFF\n');
+});
+
+test('Classic key export omits RF-masked keys and retains explicit edits after reload', async ({ page }) => {
+  await scan(page);
+  const draft = JSON.parse(await exported(page, '#export-json'));
+  for (let sector = 0; sector < 16; sector++) {
+    draft.document.memory[sector * 4 + 3].splice(10, 6, ...Array(6).fill(0));
+    draft.document.recoveredKeys[sector].key_b = null;
+  }
+  await importFile(page, 'partial-keys.json', JSON.stringify(draft));
+  expect(await exported(page, '#export-keys')).toBe('FFFFFFFFFFFF\n');
+
+  const memory = page.getByRole('textbox', { name: 'Memory, one block per line in hexadecimal' });
+  const lines = (await memory.inputValue()).split('\n');
+  lines[3] = 'FFFFFFFFFFFF FF078069 B0B1B2B3B4B5';
+  await memory.fill(lines.join('\n'));
+  expect(await exported(page, '#export-keys')).toBe('FFFFFFFFFFFF\nB0B1B2B3B4B5\n');
+  await page.reload();
+  expect(await exported(page, '#export-keys')).toBe('FFFFFFFFFFFF\nB0B1B2B3B4B5\n');
 });
 
 test('fresh Plus SL1 ATS identifies 2K before reading all 128 blocks', async ({ page, request }) => {
@@ -604,6 +719,7 @@ test('Stop with no returned memory preserves recovered keys through reload and J
 
   expect(saved.recoveredKeys.some((keys) => keys.key_a)).toBe(true);
   expect(saved.memory.every((block) => block === null)).toBe(true);
+  expect(await exported(page, '#export-keys')).toBe('FFFFFFFFFFFF\n');
 });
 
 for (const technology of ['nfc', 'rfid']) {

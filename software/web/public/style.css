@@ -3403,6 +3403,27 @@ body:has(#scan-dialog[open]) {
   overflow: auto;
 }
 
+#keys-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+#keys-dialog .table {
+  min-height: 0;
+  max-height: 50dvh;
+}
+
+#keys-dialog thead {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+#keys-dialog .dialog-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
