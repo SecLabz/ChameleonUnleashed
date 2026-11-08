@@ -23,6 +23,7 @@ import { classicReadSnapshot } from './documents/classic-write.mjs';
 import { classicDictionaryKeys } from './documents/classic-document-keys.mjs';
 import { $, BLE_PAUSED_TYPES, deviceViews } from './ui/device-view.mjs';
 import { offlineView } from './ui/offline.mjs';
+import { rememberedKeysView } from './ui/remembered-keys.mjs';
 import { decodeSlot } from './device/slots.mjs';
 import {
   blankClassic,
@@ -64,8 +65,9 @@ const state = {
 let toastTimer;
 let draftTimer;
 let activeView;
+const rememberedKeys = rememberedKeysView();
 const {
-  controls,
+  controls: studioControls,
   render,
   renderMemory,
   isDirty,
@@ -85,6 +87,11 @@ let pendingMct;
 let scanTechnology = 'nfc';
 const DRAFT = 'chameleon-studio-v1';
 const DICTIONARY = 'chameleon-dictionary-v1';
+
+function controls() {
+  studioControls();
+  rememberedKeys.setBusy(!!state.controller);
+}
 
 /** @param {{ label: string, run: () => unknown }} [action] One follow-up the message offers. */
 function notify(message, error = false, action) {
@@ -186,6 +193,7 @@ function view(name) {
   if (name === 'device') {
     views.refresh();
     offline.refresh();
+    rememberedKeys.refresh();
   }
   if (name === 'slots') {
     // Without a device, the Slots page explains how to connect instead.
@@ -872,6 +880,7 @@ async function recoverClassic(device, expectedUid, initialCard) {
       }
     });
   } finally {
+    rememberedKeys.refresh();
     if (reading) {
       // Physical observations belong to this document session, never to an exported draft.
       document.classicRead = classicReadSnapshot(reading);

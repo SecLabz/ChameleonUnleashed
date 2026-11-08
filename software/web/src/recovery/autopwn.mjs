@@ -7,6 +7,7 @@ import { createHardnestedRuntime } from '../runtime/hardnested-runtime.mjs';
 import { recoverHardnested } from './hardnested.mjs';
 import { recoverDarkside } from './darkside.mjs';
 import { filterDictionary as filterCandidates } from './dictionary.mjs';
+import { classicKeyCache } from './classic-key-cache.mjs';
 
 const verified = (key) => (key ? { Verified: key } : 'NoVerifiedKey');
 
@@ -26,7 +27,8 @@ export async function runAutoPwn({
   workerFactory,
   initialCard,
   expectedUid,
-  expectedModel
+  expectedModel,
+  keyCache = classicKeyCache
 } = {}) {
   let engine;
   let hardnestedEngine;
@@ -35,13 +37,25 @@ export async function runAutoPwn({
   let geometry;
   let geometrySelector;
   let card;
+  let remembered;
+  let authenticated;
   const memory = [];
+  function rememberAuthentication(sector, key, isKeyB) {
+    const name = isKeyB ? 'key_b' : 'key_a';
+    for (const mapping of [remembered, authenticated]) {
+      mapping[sector][name] = [...key];
+      if (isKeyB) {
+        mapping[sector].origin_b = null;
+      }
+    }
+  }
   // A checked sector read both authenticates its candidate and returns memory.
   // Keep these observations only for this read operation, never across devices
   // or writes. Each credential/sector is captured once; missing blocks retain
   // the existing individual-read fallback and remain unknown on failure.
   const sectorReads = new Set();
   function rememberSector(sector, key, isKeyB, blocks) {
+    rememberAuthentication(sector, key, isKeyB);
     sectorReads.add(`${sector}:${isKeyB}:${hex(key)}`);
     blocks.forEach((block, offset) => {
       if (block) {
@@ -57,10 +71,22 @@ export async function runAutoPwn({
     }
   }
 
+  const currentSummary = () =>
+    snapshot?.summary ??
+    (authenticated && {
+      uid: card.uid,
+      sector_count: geometry.sectors.length,
+      mapping: authenticated,
+      prng: 'Unknown',
+      resolved_keys: authenticated.reduce((count, keys) => count + !!keys.key_a + !!keys.key_b, 0),
+      total_keys: geometry.sectors.length * 2
+    });
+
   const update = (extra) => {
+    const summary = currentSummary();
     geometry?.sectors.forEach((sector, index) => {
       const trailer = memory[sector.trailer];
-      const keys = snapshot?.summary.mapping[index];
+      const keys = summary?.mapping[index];
       if (trailer && keys) {
         if (keys.key_a) {
           trailer.splice(0, 6, ...keys.key_a);
@@ -72,7 +98,7 @@ export async function runAutoPwn({
       }
     });
 
-    onUpdate({ card, geometry, summary: snapshot?.summary, memory, ...extra });
+    onUpdate({ card, geometry, summary, memory, ...extra });
   };
 
   const check = () => {
@@ -111,22 +137,32 @@ export async function runAutoPwn({
     return batch;
   }
 
-  function rememberReplies(targets, key, replies) {
-    replies.forEach((reply, i) => {
-      if (reply.status === 6) {
-        readReuse.set(hex(key), false);
-        return;
-      }
-      if (reply.status !== 0) {
-        const message = reply.status === 1 ? 'Card not found or changed' : `Device status ${reply.status}`;
-        throw Object.assign(new Error(message), { status: reply.status });
-      }
-      const sector = targets[i].sector;
+  function rememberReply(target, key, reply, reading) {
+    if (reply.status === 6) {
+      return false;
+    }
+    if (reply.status !== 0) {
+      const message = reply.status === 1 ? 'Card not found or changed' : `Device status ${reply.status}`;
+      throw Object.assign(new Error(message), { status: reply.status });
+    }
+    if (reading) {
+      const sector = target.sector;
       const mask = reply.data[0] * 256 + reply.data[1];
       const blocks = Array.from({ length: geometry.sectors[sector].count }, (_, n) =>
         mask & (1 << n) ? Array.from(reply.data.slice(2 + n * 16, 18 + n * 16)) : null
       );
-      rememberSector(sector, key, false, blocks);
+      rememberSector(sector, key, target.is_key_b, blocks);
+    } else {
+      rememberAuthentication(target.sector, key, target.is_key_b);
+    }
+    return true;
+  }
+
+  function rememberReplies(targets, key, replies) {
+    replies.forEach((reply, i) => {
+      if (!rememberReply(targets[i], key, reply, true)) {
+        readReuse.set(hex(key), false);
+      }
     });
   }
 
@@ -147,6 +183,9 @@ export async function runAutoPwn({
     const keyId = hex(args.key);
     const reading = !args.is_key_b && readReuse.get(keyId) === true;
     const replyId = (target) => `${targetId(target)}:${hex(args.key)}`;
+    if (!sweepReplies.has(replyId(args)) && !untestedKeys(args, [args.key]).length) {
+      return { Sweep: { hit: false, physically_tested: true } };
+    }
     if (
       device.classicBatchesSupported &&
       typeof device.classicBatch === 'function' &&
@@ -182,6 +221,9 @@ export async function runAutoPwn({
             const tested = testedKeysByTarget.get(id) ?? new Set();
             tested.add(hex(args.key));
             testedKeysByTarget.set(id, tested);
+            if (reply.status === 0) {
+              rememberAuthentication(batch[i].sector, args.key, args.is_key_b);
+            }
           }
         });
         if (!reading && !args.is_key_b) {
@@ -247,7 +289,92 @@ export async function runAutoPwn({
         return null;
       }
     }
-    return device.findKey(target.sector, target.is_key_b, selected, geometry, tested);
+    const key = await device.findKey(target.sector, target.is_key_b, selected, geometry, tested);
+    if (key) {
+      rememberAuthentication(target.sector, key, target.is_key_b);
+    }
+    return key;
+  }
+
+  async function reuseRememberedKeys(plan) {
+    let targets = [];
+    for (const isKeyB of [false, true]) {
+      remembered.forEach((keys, sector) => {
+        const key = isKeyB ? keys.key_b : keys.key_a;
+        if (key && !(isKeyB && keys.origin_b === 'Trailer')) {
+          targets.push({ sector, is_key_b: isKeyB, key });
+        }
+      });
+    }
+    const sources = [];
+    let firstRejected;
+    const accept = (target, reply, reading) => {
+      const id = targetId(target);
+      testedKeysByTarget.set(id, new Set([hex(target.key)]));
+      if (!rememberReply(target, target.key, reply, reading)) {
+        remembered[target.sector][target.is_key_b ? 'key_b' : 'key_a'] = null;
+        if (target.is_key_b) {
+          remembered[target.sector].origin_b = null;
+        }
+        firstRejected ||= target;
+      } else {
+        sources.push(target);
+      }
+    };
+    const needsMemory = (target) => {
+      const { first, count } = geometry.sectors[target.sector];
+      return !target.is_key_b || !memory.slice(first, first + count).every(Boolean);
+    };
+    while (targets.length) {
+      check();
+      if (device.classicBatchesSupported && typeof device.classicBatch === 'function') {
+        const reading = needsMemory(targets[0]);
+        const pending = targets.filter(
+          (target) => target.is_key_b === targets[0].is_key_b && needsMemory(target) === reading
+        );
+        const batch = reading ? readBatchTargets(pending) : pending.slice(0, 8);
+        let replies;
+        try {
+          replies = await device.classicBatch(
+            Number(reading),
+            batch.map((target) => [
+              reading ? target.sector : geometry.sectors[target.sector].first,
+              target.is_key_b ? 0x61 : 0x60,
+              ...target.key
+            ])
+          );
+        } catch (error) {
+          if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
+            throw error;
+          }
+          device.classicBatchesSupported = false;
+          continue;
+        }
+        replies.forEach((reply, index) => accept(batch[index], reply, reading));
+        targets = targets.filter((target) => !batch.includes(target));
+      } else {
+        const target = targets[0];
+        const key = await verify(target, [target.key], () => {}, needsMemory(target));
+        accept(target, { status: key ? 0 : 6 }, false);
+        targets = targets.slice(1);
+      }
+      update({ phase: 'Reading memory…' });
+    }
+    // Preserve the normal quick dictionary probe before a cached anchor can
+    // route a changed key straight into nonce recovery.
+    if (firstRejected) {
+      const candidates = plan.passes
+        .filter((pass) => pass.kind !== 'Extended')
+        .flatMap((pass) => (pass.kind === 'Local' ? pass.keys.slice(0, 42) : pass.keys));
+      const key = await verify(firstRejected, [
+        ...new Map(candidates.map((key) => [hex(key), key])).values()
+      ]);
+      if (key) {
+        // Let existing sector trailers resolve B before sweeping a newly found key.
+        sources.unshift({ ...firstRejected, key });
+      }
+    }
+    return sources;
   }
 
   async function collect(source, target, count, chained = false) {
@@ -518,9 +645,15 @@ export async function runAutoPwn({
     geometry = await call({ op: 'classic_geometry', sak: geometrySelector });
     memory.length = geometry.blocks;
     memory.fill(null);
+    authenticated = geometry.sectors.map(() => ({ key_a: null, key_b: null, origin_b: null }));
+    remembered = keyCache.load(card, geometry);
+    if (!remembered.length) {
+      remembered = structuredClone(authenticated);
+    }
 
     const plan = await call({ op: 'dictionary', text: dictionary, anchor: null, profile: 'Extended' });
     nonceKeys = plan.nonce_keys;
+    const sources = await reuseRememberedKeys(plan);
 
     ({ session: recoverySession } = await call({
       op: 'autopwn_new',
@@ -533,7 +666,7 @@ export async function runAutoPwn({
         budget: 4096
       },
       passes: plan.passes,
-      sources: []
+      sources
     }));
 
     snapshot = await call({ op: 'autopwn_next', session: recoverySession });
@@ -630,7 +763,7 @@ export async function runAutoPwn({
       throw error;
     }
 
-    return { card, geometry, summary: snapshot?.summary, memory, complete: false, dump: null };
+    return { card, geometry, summary: currentSummary(), memory, complete: false, dump: null };
   } finally {
     hardnestedEngine?.dispose();
     engine?.dispose();
@@ -642,6 +775,19 @@ export async function runAutoPwn({
         phase: `Device cleanup unconfirmed: ${error.message}. The device reservation expires automatically.`,
         error: true
       });
+    }
+    if (remembered) {
+      snapshot?.summary.mapping.forEach((keys, sector) => {
+        for (const name of ['key_a', 'key_b']) {
+          if (keys[name]) {
+            remembered[sector][name] = [...keys[name]];
+            if (name === 'key_b') {
+              remembered[sector].origin_b = keys.origin_b === 'Trailer' ? 'Trailer' : null;
+            }
+          }
+        }
+      });
+      keyCache.save(card, geometry, remembered);
     }
   }
 }

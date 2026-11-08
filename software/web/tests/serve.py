@@ -317,7 +317,8 @@ class SimulatedCard(BaseHTTPRequestHandler):
             keys = [data[i : i + 6] for i in range(3, len(data), 6)]
             trailer = cls.classic_memory[data[0] // 4 * 4 + 3]
             expected_key = trailer[10:] if data[1] == 0x61 else trailer[:6]
-            if expected_key in keys:
+            readable_b = data[1] == 0x61 and trailer[6:9] == bytes([255, 7, 128])
+            if expected_key in keys and not readable_b:
                 response = b'\x01' + expected_key
             else:
                 status = 6

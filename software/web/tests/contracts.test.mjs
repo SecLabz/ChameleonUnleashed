@@ -8,6 +8,8 @@ import { CORE_URL, createRuntime } from '../../../.cache/web/assets/modules/runt
 import { TABLE, TABLE_URL } from '../src/runtime/assets.mjs';
 import { runAutoPwn } from '../../../.cache/web/assets/modules/recovery/autopwn.mjs';
 import { createEngine } from '../../../.cache/web/assets/modules/runtime/nfc-wasm/engine.mjs';
+import { createClassicKeyCache } from '../src/recovery/classic-key-cache.mjs';
+import { classicFixture } from './hardware/classic-fixture.mjs';
 
 const wasm = await readFile(
   new URL('../../../.cache/web/wasm/wasm32-unknown-unknown/release/nfc_wasm.wasm', import.meta.url)
@@ -800,6 +802,317 @@ test('cancellation terminates a stalled Worker before device ownership', async (
     assert(terminated);
     assert(!begun);
     assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function keyCacheFixture() {
+  let text = null;
+  const storage = {
+    writes: 0,
+    getItem: () => text,
+    setItem(_id, value) {
+      storage.writes++;
+      text = value;
+    },
+    removeItem() {
+      storage.writes++;
+      text = null;
+    }
+  };
+  return { keyCache: createClassicKeyCache(() => storage), storage };
+}
+
+test('remembered keys survive a new read session and avoid searches without reusing memory', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const first = await runAutoPwn({ device: new Card(), workerFactory, keyCache });
+    assert(first.complete);
+    assert.equal(storage.writes, 1, 'discoveries are saved once at the end');
+    const device = new Card();
+    device.findKey = async () => assert.fail('Known sectors need no dictionary search');
+    device.command = async () => assert.fail('A complete cache needs no PRNG probe');
+    const read = device.readBlock.bind(device);
+    device.readBlock = async (block) => {
+      const bytes = await read(block);
+      if (block === 1) {
+        bytes[0] = 42;
+      }
+      return bytes;
+    };
+    const result = await runAutoPwn({ device, workerFactory, keyCache });
+    assert(result.complete);
+    assert.equal(result.memory[1][0], 42, 'every read fetches fresh tag memory');
+    assert.equal(device.reads, 64, 'readable Key B must not be used for authentication');
+    assert.equal(storage.writes, 1, 'an unchanged cache is not rewritten');
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('rejected cached keys fall back to recovery and are replaced after the read', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const geometry = { blocks: 64, sectors: Array(16).fill(null) };
+  const old = Array.from({ length: 16 }, () => ({ key_a: Array(6).fill(42), key_b: null }));
+  const device = new Card();
+  keyCache.save(device.card, geometry, old);
+  storage.writes = 0;
+  let searches = 0;
+  const find = device.findKey.bind(device);
+  device.findKey = (...args) => {
+    searches++;
+    assert.equal(args[2].length, new Set(args[2].map((key) => key.join(','))).size);
+    return find(...args);
+  };
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({ device, workerFactory, keyCache, dictionary: 'FFFFFFFFFFFF' });
+    assert(result.complete);
+    assert(searches > 0);
+    assert.equal(storage.writes, 1);
+    assert(keyCache.load(device.card, geometry).every((keys) => keys.key_a.every((b) => b === 255)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('stopping recovery preserves discoveries with a single cache write', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const controller = new AbortController();
+  const device = new Card();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({
+      device,
+      workerFactory,
+      keyCache,
+      signal: controller.signal,
+      onUpdate(next) {
+        assert.equal(storage.writes, 0, 'storage is never written during recovery');
+        if (next.summary?.resolved_keys) {
+          controller.abort();
+        }
+      }
+    });
+    assert.equal(result.complete, false);
+    assert.equal(storage.writes, 1);
+    assert(keyCache.load(device.card, { blocks: 64, sectors: Array(16) })[0].key_a);
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+for (const batchFailure of [null, 0x67, 0x69, 404, 1]) {
+  test(`remembered sector reads handle batch support and card loss (${batchFailure})`, async () => {
+    const { keyCache, storage } = keyCacheFixture();
+    const device = new Card();
+    const geometry = {
+      blocks: 64,
+      sectors: Array.from({ length: 16 }, (_, sector) => ({
+        first: sector * 4,
+        count: 4,
+        trailer: sector * 4 + 3
+      }))
+    };
+    keyCache.save(
+      device.card,
+      geometry,
+      geometry.sectors.map(() => ({
+        key_a: Array(6).fill(255),
+        key_b: Array(6).fill(255),
+        origin_b: 'Trailer'
+      }))
+    );
+    const before = storage.getItem();
+    storage.writes = 0;
+    let batches = 0;
+    device.classicBatchesSupported = true;
+    device.classicBatch = async (kind, entries) => {
+      batches++;
+      assert.equal(kind, 1);
+      assert(entries.length <= 7);
+      if (batchFailure) {
+        throw Object.assign(
+          new Error('Batch unavailable'),
+          batchFailure === 404 ? { httpStatus: 404 } : { status: batchFailure }
+        );
+      }
+      return Promise.all(
+        entries.map(async ([sector, type, ...key]) => {
+          assert.equal(type, 0x60, 'readable B is never an authentication source');
+          const blocks = await device.readSector(sector, key, false, geometry);
+          return { status: 0, data: Uint8Array.from([0, 15, ...blocks.flat()]) };
+        })
+      );
+    };
+    device.findKey = async () => assert.fail('Cached keys need no search');
+    globalThis.fetch = async () => new Response(wasm);
+    try {
+      if (batchFailure === 1) {
+        await assert.rejects(runAutoPwn({ device, workerFactory, keyCache }), /Batch unavailable/);
+        assert.equal(storage.getItem(), before, 'card loss must not invalidate remembered keys');
+      } else {
+        const result = await runAutoPwn({ device, workerFactory, keyCache });
+        assert(result.complete);
+        assert.equal(batches, batchFailure ? 1 : 3);
+        assert.equal(device.reads, 64);
+      }
+      assert.equal(storage.writes, 0);
+      assert(device.ended);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+for (const [size, sak, type] of [
+  ['2k', 8, 1002],
+  ['4k', 24, 1003]
+]) {
+  test(`cached A/B keys read the entire ${size} geometry in bounded batches`, async () => {
+    const fixture = classicFixture(size);
+    const card = { ...fixture.model, uid: fixture.blocks[0].slice(0, 4), sak };
+    const device = new Card();
+    device.card = card;
+    const checked = new Set();
+    let blocksRead = 0;
+    device.classicBatchesSupported = true;
+    device.findKey = async () => assert.fail('Every cached key is verified by its read');
+    device.command = device.findKey;
+    device.classicBatch = async (kind, entries) => {
+      assert(entries.length <= 8);
+      assert(
+        3 +
+          entries.reduce(
+            (size, [sector]) => size + (kind ? 6 + fixture.sectors[sector].count * 16 : 11),
+            0
+          ) <=
+          512
+      );
+      return entries.map(([address, keyType, ...key]) => {
+        const sector = kind ? address : fixture.sectors.findIndex((group) => group.first === address);
+        const { first, count, trailer } = fixture.sectors[sector];
+        const offset = keyType === 0x61 ? 10 : 0;
+        assert.deepEqual(key, fixture.blocks[trailer].slice(offset, offset + 6));
+        checked.add(`${sector}:${keyType}`);
+        if (!kind) {
+          return { status: 0, data: Uint8Array.from([1, ...key]) };
+        }
+        blocksRead += count;
+        const blocks = fixture.blocks.slice(first, first + count).map((block) => [...block]);
+        blocks[count - 1].fill(0, 0, 6);
+        blocks[count - 1].fill(0, 10, 16);
+        return {
+          status: 0,
+          data: Uint8Array.from([count === 16 ? 255 : 0, count === 16 ? 255 : 15, ...blocks.flat()])
+        };
+      });
+    };
+    const geometry = {
+      blocks: fixture.sectors.reduce((sum, s) => sum + s.count, 0),
+      sectors: fixture.sectors
+    };
+    const keys = fixture.sectors.map(({ trailer }) => ({
+      key_a: fixture.blocks[trailer].slice(0, 6),
+      key_b: fixture.blocks[trailer].slice(10, 16)
+    }));
+    const { keyCache } = keyCacheFixture();
+    keyCache.save(card, geometry, keys);
+    globalThis.fetch = async () => new Response(wasm);
+    try {
+      const result = await runAutoPwn({
+        device,
+        workerFactory,
+        keyCache,
+        expectedUid: card.uid
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('')
+          .toUpperCase(),
+        expectedModel: { type, card }
+      });
+      assert(result.complete);
+      assert.equal(result.memory.length, geometry.blocks);
+      assert.equal(checked.size, keys.length * 2);
+      assert.equal(blocksRead, geometry.blocks, 'Key B checks must not reread complete sectors');
+      assert.deepEqual(result.memory.at(-1), fixture.blocks[fixture.sectors.at(-1).trailer]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('cancelling a cached read exposes only freshly verified keys and preserves the rest of the cache', async () => {
+  const { keyCache, storage } = keyCacheFixture();
+  const device = new Card();
+  const geometry = { blocks: 64, sectors: Array(16).fill(null) };
+  keyCache.save(
+    device.card,
+    geometry,
+    Array.from({ length: 16 }, () => ({
+      key_a: Array(6).fill(255),
+      key_b: null
+    }))
+  );
+  const before = storage.getItem();
+  const controller = new AbortController();
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({
+      device,
+      workerFactory,
+      keyCache,
+      signal: controller.signal,
+      onUpdate(next) {
+        if (next.memory?.some(Boolean)) {
+          controller.abort();
+        }
+      }
+    });
+    assert.equal(result.summary.resolved_keys, 1);
+    assert.equal(result.memory.filter(Boolean).length, 4);
+    assert.equal(result.memory[3][0], 255, 'RF-masked bytes are restored only from the verified key');
+    assert.equal(result.summary.mapping[1].key_a, null);
+    assert.equal(
+      storage.getItem(),
+      before,
+      'untried cached sectors are retained without being treated as verified'
+    );
+    assert(device.ended);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('cached B checks without batch support do not read memory twice', async () => {
+  const device = new Card();
+  const block = device.readBlock.bind(device);
+  device.readBlock = async (index) => {
+    const bytes = await block(index);
+    if (index % 4 === 3) {
+      bytes.splice(6, 4, 0x7f, 7, 0x88, 0x69);
+    }
+    return bytes;
+  };
+  const { keyCache } = keyCacheFixture();
+  keyCache.save(
+    device.card,
+    { blocks: 64, sectors: Array(16) },
+    Array.from({ length: 16 }, () => ({
+      key_a: Array(6).fill(255),
+      key_b: Array(6).fill(255)
+    }))
+  );
+  globalThis.fetch = async () => new Response(wasm);
+  try {
+    const result = await runAutoPwn({ device, workerFactory, keyCache });
+    assert(result.complete);
+    assert.equal(device.reads, 64);
+    assert.equal(device.sectorReads, 16);
+    assert.equal(result.summary.resolved_keys, 32);
   } finally {
     globalThis.fetch = originalFetch;
   }
