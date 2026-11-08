@@ -78,7 +78,7 @@ First installation requires S140 7.2.0.
 
 You can also update through a browser on a compatible device connected
 to the Ultra over USB. Open http://192.168.16.1 and choose
-Device > Update firmware.
+Device > Firmware update.
 
 Help:
 https://github.com/SecLabz/ChameleonUnleashed#quick-installation
