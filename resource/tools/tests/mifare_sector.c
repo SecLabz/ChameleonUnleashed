@@ -162,7 +162,7 @@ int main(void) {
                     assert(read_sector(base + 1, diagnostic, out, &size) == STATUS_HF_TAG_OK);
                     assert(size == 6 + count * 16 && authentications == 1 && reads == offset + 1);
                     assert((((unsigned)out[0] << 8) | out[1]) == (1u << offset) - 1);
-                    for (unsigned i = 2 + offset * 16; i < size - 4; i++) assert(out[i] == 0);
+                    for (unsigned i = 2 + offset * 16; i < size - 4u; i++) assert(out[i] == 0);
                     assert(out[size - 4] == 1 && out[size - 3] == offset);
                     assert(out[size - 2] == 0 && out[size - 1] == error);
                 }
