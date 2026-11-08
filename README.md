@@ -9,7 +9,7 @@
 </p>
 
 An opinionated Chameleon Ultra fork with faster MIFARE Classic recovery and
-emulation, a web interface over USB, and experimental NFC-B/NFC-V support.
+emulation, a web interface over USB or Bluetooth, and experimental NFC-B/NFC-V support.
 
 None of this would exist without [ChameleonUltra](https://github.com/RfidResearchGroup/ChameleonUltra)
 and the people who built its firmware, hardware, tools and research. They deserve
@@ -17,7 +17,7 @@ the credit for the foundation this fork stands on.
 
 [Features](#whats-different) · [Screenshots](#see-it-in-action) ·
 [Performance](docs/performance.md) · [Before you flash](#before-you-flash) ·
-[Install](#quick-installation) · [Documentation](docs/README.md)
+[Install](#quick-installation) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md)
 
 ## What's different?
 
@@ -28,9 +28,11 @@ the credit for the foundation this fork stands on.
   [See timing measurements →](docs/performance.md#mifare-classic-emulation-timing)
 - **Faster MIFARE Classic AutoPwn.** Optimized key recovery and card reading
   through the CLI and web interface.
-- **A web interface over USB.** Scan cards, inspect captures and manage emulation
-  slots from a browser, including on compatible smartphones. Save resources for
-  offline use.
+- **A web interface over USB or Bluetooth.** Scan cards, inspect captures and
+  manage emulation slots from a browser, including on compatible smartphones.
+  Save resources for offline use.
+- **Browser updates and USB web recovery.** Install a release or local firmware ZIP;
+  recover over USB if the application will not start.
 - **A native Rust CLI.** An interactive console for reading cards, managing slots
   and updating firmware over USB.
 - **Experimental NFC-B and NFC-V reading and emulation.** Support for selected
@@ -46,17 +48,23 @@ the credit for the foundation this fork stands on.
 | :---: | :---: | :---: |
 | <a href="docs/images/readme/web-scan.png"><img src="docs/images/readme/web-scan.png" alt="Mobile web interface ready to scan a tag" width="240"></a> | <a href="docs/images/readme/web-studio.png"><img src="docs/images/readme/web-studio.png" alt="Mobile Studio showing a MIFARE Classic capture" width="240"></a> | <a href="docs/images/readme/web-slots.png"><img src="docs/images/readme/web-slots.png" alt="Mobile interface showing persistent emulation slots" width="240"></a> |
 
-## USB web interface
+## Web interface
 
 Connect an Ultra running matching firmware over USB and open
 [192.168.16.1](http://192.168.16.1) in your browser. Use Scan to read a tag, Studio
 to inspect it, and Slots to save it for emulation.
 
+For Bluetooth, open the [web app](https://seclabz.github.io/ChameleonUnleashed/app/),
+wake the Ultra and choose **Connect Bluetooth** in Chrome or another browser with
+Web Bluetooth support. Safari and Firefox do not provide native Web Bluetooth.
+
 The first use needs Internet access to download matching CDN resources, which
 are saved in your browser. Before going offline, check
 **Device → Offline use → Ready offline**. [Web guide →](software/web/README.md)
 
-To update, choose **Device → Firmware update**, or use the CLI with a release archive.
+To update over USB or Bluetooth, choose **Device → Firmware update**, or use the CLI
+with a release archive. USB web recovery remains accessible with **A + USB** if the
+application will not start, after the first installation below.
 [Updates and recovery →](docs/web-updates.md)
 
 ## Native CLI
@@ -73,9 +81,8 @@ to select a device. [Hands-on CLI guide →](software/rust/README.md)
 
 ## Before you flash
 
-This fork is where I experiment with what I want my Chameleon Ultra to do. USB
-comes first, BLE takes a back seat, and the priorities are my own. Expect rough
-edges and things that change.
+This fork is where I experiment with what I want my Chameleon Ultra to do.
+The priorities are my own. Expect rough edges and things that change.
 
 I use AI heavily to develop this firmware. I try to keep control of what goes
 in, but some AI slop will probably slip through. Development moves fast, and not

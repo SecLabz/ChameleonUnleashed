@@ -32,4 +32,5 @@ For standalone firmware, HEX images or web resources, use
 
 The `dev` pre-release uses the same archives, with a `-dev.<commit>` version.
 It contains the latest build from `develop`; it may be unstable.
-The matching Bluetooth site is under `dev/` on GitHub Pages.
+Use the [stable Bluetooth app](https://seclabz.github.io/ChameleonUnleashed/app/)
+or the matching [development app](https://seclabz.github.io/ChameleonUnleashed/dev/).

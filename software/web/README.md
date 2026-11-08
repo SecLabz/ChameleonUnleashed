@@ -37,8 +37,11 @@ start with **New…**.
 
 Mobile layout with demo data. Click a screenshot to enlarge it.
 
-- **Read** acquires memory; for Classic, it also recovers keys.
+- **Read** acquires memory; for Classic, it also recovers and remembers keys in this browser.
+  Clear them in **Device → Remembered tag keys → Clear**.
 - **Export → JSON file** saves a backup, including partial reads and device settings.
+- **Export → Document keys** saves known Classic keys as a `.dic` dictionary,
+  with one unique key per line and no sector assignments.
 - **Send to** saves to a **Slot…**, starts **Slot & emulate**, or guides copying
   to a physical tag (**Copy to a tag…** / **Program a tag…**).
 

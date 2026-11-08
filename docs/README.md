@@ -3,9 +3,10 @@
 - [Quick installation and USB flashing](../README.md#quick-installation)
 - [Browser updates and permanent recovery](web-updates.md)
 - [Native CLI](../software/rust/README.md)
-- [Web interface](../software/web/README.md)
+- [USB and Bluetooth web interface](../software/web/README.md)
 - [Performance & measurements](performance.md)
 - [Release packages](releases.md)
+- [Changelog](../CHANGELOG.md)
 - [Upstream wiki](https://github.com/RfidResearchGroup/ChameleonUltra/wiki) for hardware and the original Python client
 
 ## Local development
@@ -27,6 +28,7 @@ Requirements:
 ./dev flash --full   # Include bootloader and SoftDevice
 ./dev flash --install-recovery # Bootloader v5 + Nordic ZIP web recovery installation
 ./dev serve          # Local web interface at http://127.0.0.1:8080
+./dev serve ble      # Local Bluetooth web app at the same address, without USB
 ./dev cdn            # CDN ZIP in .cache/web/chameleon-unleashed-cdn.zip
 ```
 

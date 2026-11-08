@@ -10,7 +10,8 @@ The CLI keeps an already matching Unleashed bootloader. Use
 
 ## Update through a browser
 
-1. Open [192.168.16.1](http://192.168.16.1) over USB, or connect through the HTTPS Bluetooth app.
+1. Open [192.168.16.1](http://192.168.16.1) over USB, or connect through the
+   [Bluetooth web app](https://seclabz.github.io/ChameleonUnleashed/app/).
 2. Choose **Device → Firmware update**.
 3. Select the firmware and version, then install. Over Bluetooth, select the Ultra in DFU when prompted,
    then choose **Reconnect and verify** once it restarts.
