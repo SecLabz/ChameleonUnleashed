@@ -50,3 +50,26 @@ test('dictionary filtering stops when capture fails instead of using incomplete 
     (error) => error === failure
   );
 });
+
+test('dictionary filtering reuses a sweep prefix and still collects fresh evidence', async () => {
+  const prefix = [{ nt1: 1 }, { nt1: 2 }];
+  const batches = [];
+  await filterDictionary({
+    uid: [1, 2, 3, 4],
+    keys: [],
+    observations: prefix,
+    collect: async (count) => {
+      batches.push(count);
+      return [{ nt1: 3 }];
+    },
+    call: async (request) => {
+      if (request.op === 'recovery_plan') {
+        return { dictionary_start_count: 3 };
+      }
+      assert.deepEqual(request.observations, [...prefix, { nt1: 3 }]);
+      return { next_count: 0, candidates: [], exhausted: true };
+    }
+  });
+  assert.deepEqual(batches, [1]);
+  assert.equal(prefix.length, 2, 'the caller retains its original evidence');
+});

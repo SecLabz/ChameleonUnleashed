@@ -23,6 +23,7 @@ pub const NFCA_RAW: u16 = 2010;
 pub const HF_FIELD_OFF: u16 = 2101;
 pub const READ_SECTOR: u16 = 2027;
 pub const CHECK_KEYS: u16 = 2015;
+pub const CLASSIC_BATCH: u16 = 2042;
 pub const COLLECT_OBSERVATIONS: u16 = 2023;
 pub const NFCA_SESSION: u16 = 2026;
 pub const DARKSIDE_STEP: u16 = 2029;

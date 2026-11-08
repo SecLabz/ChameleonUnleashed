@@ -1,6 +1,8 @@
 //! NFC-A identity, memory access and MIFARE Classic recovery.
 use crate::{Client, DeviceError, Result, command::*};
 mod classic;
+mod recovery;
+pub use recovery::ClassicRecovery;
 mod type2;
 use nfc_native::{
     RecoveryReader,
@@ -415,6 +417,62 @@ impl<'a> Reader<'a> {
         }
         Ok(())
     }
+    fn verify_keys(
+        &mut self,
+        sector: usize,
+        key_b: bool,
+        candidates: &[[u8; 6]],
+        mut progress: impl FnMut(usize, usize),
+        retain: bool,
+    ) -> Result<Option<[u8; 6]>> {
+        self.validate_sector(sector)?;
+        if !retain
+            || self.reading_memory
+            || self
+                .session
+                .is_some_and(|last| last.elapsed() >= Duration::from_secs(1))
+        {
+            self.close_session()?;
+        }
+        if retain && self.session.is_none() {
+            self.session = Some(Instant::now());
+            let bytes = self
+                .client
+                .command(NFCA_SESSION, &[1], Duration::from_secs(3))?;
+            if !bytes.is_empty() {
+                return Err("Invalid capture session reply".into());
+            }
+        }
+        progress(0, candidates.len());
+        for (index, batch) in candidates.chunks(42).enumerate() {
+            let mut payload = vec![first_block(sector), key_type(key_b), batch.len() as u8];
+            payload.extend(batch.iter().flatten());
+            let (status, data) =
+                self.client
+                    .request(CHECK_KEYS, &payload, Duration::from_secs(15))?;
+            if self.session.is_some() {
+                self.session = Some(Instant::now());
+            }
+            if status == 6 {
+                progress(index * 42 + batch.len(), candidates.len());
+                continue;
+            }
+            if status != 0 {
+                return Err(DeviceError(status).into());
+            }
+            if data.len() != 7 || data[0] != 1 {
+                return Err("Invalid verification reply".into());
+            }
+            let key: [u8; 6] = data[1..].try_into()?;
+            let matched = batch
+                .iter()
+                .position(|candidate| *candidate == key)
+                .ok_or("Verification returned an unsubmitted key")?;
+            progress(index * 42 + matched + 1, candidates.len());
+            return Ok(Some(key));
+        }
+        Ok(None)
+    }
     fn collect_full_parity(
         &mut self,
         source: &RecoverySource,
@@ -602,36 +660,9 @@ impl RecoveryReader for Reader<'_> {
         sector: usize,
         key_b: bool,
         candidates: &[[u8; 6]],
-        mut progress: impl FnMut(usize, usize),
+        progress: impl FnMut(usize, usize),
     ) -> Result<Option<[u8; 6]>> {
-        self.validate_sector(sector)?;
-        self.close_session()?;
-        progress(0, candidates.len());
-        for (index, batch) in candidates.chunks(42).enumerate() {
-            let mut payload = vec![first_block(sector), key_type(key_b), batch.len() as u8];
-            payload.extend(batch.iter().flatten());
-            let (status, data) =
-                self.client
-                    .request(CHECK_KEYS, &payload, Duration::from_secs(15))?;
-            if status == 6 {
-                progress(index * 42 + batch.len(), candidates.len());
-                continue;
-            }
-            if status != 0 {
-                return Err(DeviceError(status).into());
-            }
-            if data.len() != 7 || data[0] != 1 {
-                return Err("Invalid verification reply".into());
-            }
-            let key: [u8; 6] = data[1..].try_into()?;
-            let matched = batch
-                .iter()
-                .position(|candidate| *candidate == key)
-                .ok_or("Verification returned an unsubmitted key")?;
-            progress(index * 42 + matched + 1, candidates.len());
-            return Ok(Some(key));
-        }
-        Ok(None)
+        self.verify_keys(sector, key_b, candidates, progress, false)
     }
     fn cancellation_flag(&self) -> Arc<AtomicBool> {
         self.client.cancelled.clone()

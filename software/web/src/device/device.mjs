@@ -14,8 +14,6 @@ export class Device extends DeviceSession {
     super(signal);
     this.nfcvPassword = null;
     this.keySessionAt = 0;
-    this.keySessionsSupported = true;
-    this.classicBatchesSupported = true;
   }
 
   async begin(onFamily) {
@@ -235,17 +233,9 @@ export class Device extends DeviceSession {
       return null;
     }
 
-    if (this.keySessionsSupported && (!this.keySessionAt || performance.now() - this.keySessionAt >= 1000)) {
-      try {
-        await this.command(COMMAND.CAPTURE_SESSION, [1]);
-        this.keySessionAt = performance.now();
-      } catch (error) {
-        if (![0x67, 0x69].includes(error.status) && error.httpStatus !== 404) {
-          throw error;
-        }
-
-        this.keySessionsSupported = false;
-      }
+    if (!this.keySessionAt || performance.now() - this.keySessionAt >= 1000) {
+      await this.command(COMMAND.CAPTURE_SESSION, [1]);
+      this.keySessionAt = performance.now();
     }
 
     for (let offset = 0; offset < candidates.length; offset += 42) {

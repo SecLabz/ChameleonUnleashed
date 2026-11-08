@@ -1,7 +1,7 @@
-export async function filterDictionary({ call, uid, keys, collect }) {
-  const observations = [];
+export async function filterDictionary({ call, uid, keys, collect, observations: prefix = [] }) {
+  const observations = [...prefix];
   const plan = await call({ op: 'recovery_plan', static_nonce: false, prefix_count: 0 });
-  let count = plan.dictionary_start_count;
+  let count = Math.max(1, plan.dictionary_start_count - observations.length);
 
   for (;;) {
     observations.push(...(await collect(count)));
