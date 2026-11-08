@@ -73,7 +73,7 @@ chameleon flash firmware/system.zip --yes
 ```
 
 Use the release archive's `firmware.zip` for installation, reinstallation and updates.
-You can also use **Device → Update firmware** in the USB web interface.
+You can also use **Device → Firmware update** in the USB or Bluetooth web interface.
 [Packages](../../docs/releases.md) · [Updates and recovery](../../docs/web-updates.md).
 
 **Export slots before flashing a full/system package:** the stock bootloader can
