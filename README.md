@@ -44,6 +44,10 @@ the credit for the foundation this fork stands on.
 
 ## See it in action
 
+https://github.com/user-attachments/assets/4e90ea87-0865-404f-b6f6-2a17a963468e
+
+
+
 | Scan | Studio | Slots |
 | :---: | :---: | :---: |
 | <a href="docs/images/readme/web-scan.png"><img src="docs/images/readme/web-scan.png" alt="Mobile web interface ready to scan a tag" width="240"></a> | <a href="docs/images/readme/web-studio.png"><img src="docs/images/readme/web-studio.png" alt="Mobile Studio showing a MIFARE Classic capture" width="240"></a> | <a href="docs/images/readme/web-slots.png"><img src="docs/images/readme/web-slots.png" alt="Mobile interface showing persistent emulation slots" width="240"></a> |
