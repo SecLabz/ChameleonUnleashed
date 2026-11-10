@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn reading_then_capture_reopens_the_capture_lease_once() {
         let mut capture = request(0, false);
-        capture.extend([0x60, 0, 0, 1]);
+        capture.extend([0x60, 0, 0, 1, 4, 1, 2, 3, 4]);
         let (mut client, worker) = device(vec![
             (READ_SECTOR, request(0, true), 0, reply(4, 15)),
             (NFCA_SESSION, vec![0], 0, vec![]),

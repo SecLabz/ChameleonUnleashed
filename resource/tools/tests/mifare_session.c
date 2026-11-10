@@ -61,7 +61,8 @@ static data_frame_tx_t *data_frame_make(uint16_t cmd, uint16_t status, uint16_t 
 static void auto_response_data(data_frame_tx_t *response) { assert(response == &frame); }
 static uint64_t bytes_to_num(uint8_t *bytes, uint8_t length) { return 0; }
 static uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
-    uint64_t key, uint8_t target_block, uint8_t target_type, bool chained, uint8_t count, uint8_t *output) {
+    uint64_t key, uint8_t target_block, uint8_t target_type, bool chained, uint8_t count, uint8_t *output,
+    const uint8_t *expected_uid, uint8_t uid_length) {
     if (!capture_status) mf1_capture_stats.observations += count;
     return capture_status;
 }

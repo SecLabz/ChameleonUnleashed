@@ -55,6 +55,15 @@ export async function runAutoPwn({
   // or writes. Each credential/sector is captured once; missing blocks retain
   // the existing individual-read fallback and remain unknown on failure.
   const sectorReads = new Set();
+  const hasSectorMemory = (sector) => {
+    const { first, count } = geometry.sectors[sector];
+    for (let block = first; block < first + count; block++) {
+      if (!memory[block]) {
+        return false;
+      }
+    }
+    return true;
+  };
   function rememberSector(sector, key, isKeyB, blocks) {
     rememberAuthentication(sector, key, isKeyB);
     sectorReads.add(`${sector}:${isKeyB}:${hex(key)}`);
@@ -279,10 +288,20 @@ export async function runAutoPwn({
       onTested(keys);
     };
     if (capture && selected.length === 1) {
+      const [key] = selected;
+      if (target.is_key_b && hasSectorMemory(target.sector)) {
+        // Check B without rereading a complete sector; fall back to hardware auth on a miss.
+        const [reply] = await device.classicBatch(0, [[geometry.sectors[target.sector].first, 0x61, ...key]]);
+        if (rememberReply(target, key, reply, false)) {
+          tested(selected);
+          return key;
+        }
+        check();
+      }
       try {
-        await readSector(target.sector, selected[0], target.is_key_b);
+        await readSector(target.sector, key, target.is_key_b);
         tested(selected);
-        return selected[0];
+        return key;
       } catch (error) {
         if (error.status !== 6) {
           throw error;
@@ -323,10 +342,7 @@ export async function runAutoPwn({
         sources.push(target);
       }
     };
-    const needsMemory = (target) => {
-      const { first, count } = geometry.sectors[target.sector];
-      return !target.is_key_b || !memory.slice(first, first + count).every(Boolean);
-    };
+    const needsMemory = (target) => !target.is_key_b || !hasSectorMemory(target.sector);
     while (targets.length) {
       check();
       const reading = needsMemory(targets[0]);
@@ -692,7 +708,7 @@ export async function runAutoPwn({
 
         check();
 
-        if (memory.slice(sectorGeometry.first, sectorGeometry.first + sectorGeometry.count).every(Boolean)) {
+        if (hasSectorMemory(sector)) {
           break;
         }
 

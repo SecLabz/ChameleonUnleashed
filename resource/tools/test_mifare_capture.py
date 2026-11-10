@@ -48,6 +48,11 @@ static data_frame_tx_t *cmd_processor_mf1_collect_observations(uint16_t cmd,
 """
 
 class CaptureContract(unittest.TestCase):
+    def test_dictionary_retries_silent_keys_and_stops_on_lost_card(self):
+        source = function((HF / 'mf1_toolbox.c').read_text(), 'mf1_toolbox_check_keys_on_block')
+        fixture = (Path(__file__).parent / 'tests/mifare_dictionary.c').read_text()
+        run_fixture(fixture.replace('/* DICTIONARY FUNCTION */', source))
+
     def test_bounded_and_legacy_darkside_capture(self):
         source = (HF / 'mf1_toolbox.c').read_text()
         start = source.index('/* Legacy serial and bounded')
@@ -111,7 +116,7 @@ class CaptureContract(unittest.TestCase):
     def test_wakeup_deadlines_and_slow_fallback(self):
         source = (HF / 'rc522.c').read_text()
         functions = '\n'.join(function(source, name) for name in [
-            'wait_for_irq', 'pcd_14a_reader_atqa_request',
+            'wait_for_irq', 'atqa_request',
             'pcd_14a_reader_scan_auto', 'pcd_14a_reader_scan_poll',
         ])
         fixture = (Path(__file__).parent / 'tests/mifare_wakeup.c').read_text()

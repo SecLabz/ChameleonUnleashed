@@ -131,10 +131,17 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: python3 resource/tools/package_release.py --artifacts release-artifacts --output release-packages --tag "$RELEASE_TAG"
+      - name: Write release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          awk -v tag="$RELEASE_TAG" '/^## / { if (found) exit; found = ($2 == tag) } found' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          cat .github/release-description.txt >> release-notes.md
       - name: Upload to tagged release
         uses: softprops/action-gh-release@v3
         with:
-          body_path: .github/release-description.txt
+          body_path: release-notes.md
           name: Release ${{ github.ref_name }}
           draft: false
           target_commitish: ${{ github.sha }}

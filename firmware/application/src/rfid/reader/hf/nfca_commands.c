@@ -54,15 +54,19 @@ void nfca_finish(uint16_t command) {
 uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output, uint16_t *output_length) {
     *output_length = 0;
 
-    if ((length != 12 && length != 13) || (length == 13 && data[12] != 1) ||
+    // The optional suffix is either the metrics flag or the expected UID.
+    bool profiled = length == 13 && data[12] == 1;
+    uint8_t uid_length = length > 13 ? data[12] : 0;
+    bool checked = (uid_length == 4 || uid_length == 7 || uid_length == 10) && length == 13 + uid_length;
+    if ((length != 12 && !profiled && !checked) ||
         data[10] > 1 || data[11] == 0 || data[11] > 16) {
         nfca_session_close();
         return STATUS_PAR_ERR;
     }
-    uint8_t offset = length == 13 ? MF1_CAPTURE_STATS_BYTES : 0;
-    memset(output, 0, offset + data[11] * 12);
+    uint8_t offset = profiled ? MF1_CAPTURE_STATS_BYTES : 0;
     uint16_t status = mf1_collect_observations(data[1], data[0], bytes_to_num(data + 2, 6),
-        data[9], data[8], data[10] != 0, data[11], output + offset);
+        data[9], data[8], data[10] != 0, data[11], output + offset,
+        checked ? data + 13 : NULL, uid_length);
     if (status != STATUS_HF_TAG_OK) nfca_session_close();
     if (offset) { mf1_capture_stats_encode(output); *output_length = offset; }
     if (status == STATUS_HF_TAG_OK) *output_length = offset + data[11] * 12;

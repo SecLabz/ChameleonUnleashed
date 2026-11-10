@@ -174,7 +174,8 @@ static uint8_t send_cmd(struct Crypto1State *pcs, uint8_t encrypted, uint8_t cmd
 * @retval   : Verification returns 0, the verification is unsuccessful to return the non -0 value
 *
 */
-int authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyType, uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr) {
+static uint8_t authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyType,
+    uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr, bool *retry_silence) {
     static uint8_t status;                                      // tag response status
     static uint16_t len;                                        // tag response length
     static uint32_t pos, nt, ntpp;                              // Supplied tag nonce
@@ -229,16 +230,20 @@ int authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyT
         par[pos] = filter(pcs->odd) ^ oddparity8(nt);
     }
 
-    // We don't need Status, because normal communication will return 32bit data
-    pcd_14a_reader_bits_transfer(mf_nr_ar, 64, par, answer, parity, &len, U8ARR_BIT_LEN(answer));
-    if (len == 32) {
+    // A fast dictionary pass shortens only the wait after the reader's proof.
+    // A silent card may still be slow, so this miss can be retried at full speed.
+    uint16_t timeout = retry_silence ? pcd_14a_reader_timeout_get() : 0;
+    if (timeout > 4) pcd_14a_reader_timeout_set(4);
+    status = pcd_14a_reader_bits_transfer(mf_nr_ar, 64, par, answer, parity, &len, U8ARR_BIT_LEN(answer));
+    if (timeout > 4) {
+        pcd_14a_reader_timeout_set(timeout);
+        *retry_silence = status == STATUS_HF_TAG_NO;
+    }
+    if (status == STATUS_HF_TAG_OK && len == 32) {
         ntpp = prng_successor(nt, 32) ^ crypto1_word(pcs, 0, 0);
         if (ntpp == BYTES4_TO_U32(answer)) {
             // Successful verification!
             return STATUS_HF_TAG_OK;
-        } else {
-            // fail
-            return STATUS_MF_ERR_AUTH;
         }
     }
 
@@ -263,10 +268,10 @@ static uint8_t mf1_capture_observation(uint32_t uid, uint8_t source_block,
     struct Crypto1State cipher = {0, 0};
     uint32_t started = mf1_capture_clock();
     uint8_t status = authex(&cipher, uid, source_block, source_type, source_key,
-                            AUTH_FIRST, &observation->source_nonce);
+                            AUTH_FIRST, &observation->source_nonce, NULL);
     if (status == STATUS_HF_TAG_OK && chained) {
         status = authex(&cipher, uid, source_block, source_type, source_key,
-                        AUTH_NESTED, &observation->chained_nonce);
+                        AUTH_NESTED, &observation->chained_nonce, NULL);
     }
     mf1_capture_stats.auth_cycles += mf1_capture_elapsed(started);
     if (status == STATUS_HF_TAG_OK) {
@@ -844,12 +849,12 @@ static uint8_t measure_distance(uint64_t u64Key, uint8_t block, uint8_t type, ui
             return STATUS_HF_TAG_NO;
         }
         // Perform the first verification in order to obtain the unblocked NT1
-        if (authex(pcs, uid, block, type, u64Key, AUTH_FIRST, &nt1) != STATUS_HF_TAG_OK) {
+        if (authex(pcs, uid, block, type, u64Key, AUTH_FIRST, &nt1, NULL) != STATUS_HF_TAG_OK) {
             NRF_LOG_INFO("Auth failed 1\r\n");
             return STATUS_MF_ERR_AUTH;
         }
         // Met the nested verification to obtain the encrypted NT2_ENC
-        if (authex(pcs, uid, block, type, u64Key, AUTH_NESTED, &nt2) != STATUS_HF_TAG_OK) {
+        if (authex(pcs, uid, block, type, u64Key, AUTH_NESTED, &nt2, NULL) != STATUS_HF_TAG_OK) {
             NRF_LOG_INFO("Auth failed 2\r\n");
             return STATUS_MF_ERR_AUTH;
         }
@@ -1205,7 +1210,7 @@ uint8_t mf1_hardnested_nonces_acquire(bool slow, uint8_t blkKnown, uint8_t typKn
 
 uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
-    uint8_t count, uint8_t *output) {
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length) {
     if (!output || count == 0 || count > 16 ||
         (source_type != PICC_AUTHENT1A && source_type != PICC_AUTHENT1B) ||
         (target_type != PICC_AUTHENT1A && target_type != PICC_AUTHENT1B)) {
@@ -1216,6 +1221,8 @@ uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint8_t status = pcd_14a_reader_scan_auto(p_tag_info);
     mf1_capture_stats.select_cycles += mf1_capture_elapsed(started);
     if (status != STATUS_HF_TAG_OK) return status;
+    if (uid_length && (p_tag_info->uid_len != uid_length || memcmp(p_tag_info->uid, expected_uid, uid_length)))
+        return STATUS_HF_TAG_NO;
 
     uint32_t cuid = get_u32_tag_uid(p_tag_info);
     for (uint8_t index = 0; index < count; index++) {
@@ -1224,7 +1231,8 @@ uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
         mf1_capture_stats.housekeeping_cycles += mf1_capture_elapsed(started);
         if (index != 0) {
             started = mf1_capture_clock();
-            status = pcd_14a_reader_fast_select(p_tag_info);
+            status = uid_length ? pcd_14a_reader_reselect_after_nested(p_tag_info)
+                                : pcd_14a_reader_fast_select(p_tag_info);
             mf1_capture_stats.select_cycles += mf1_capture_elapsed(started);
             if (status != STATUS_HF_TAG_OK) break;
         }
@@ -1281,7 +1289,7 @@ uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_co
             }
 
             uint32_t nt1 = 0;
-            if (authex(pcs, cuid, blockNo, 0x60 + keyType + 4, keyKnown, AUTH_FIRST, &nt1) != STATUS_HF_TAG_OK) {
+            if (authex(pcs, cuid, blockNo, 0x60 + keyType + 4, keyKnown, AUTH_FIRST, &nt1, NULL) != STATUS_HF_TAG_OK) {
                 return STATUS_MF_ERR_AUTH;
             }
 
@@ -1301,7 +1309,7 @@ uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_co
                 return STATUS_HF_TAG_NO;
             }
 
-            if (authex(pcs, cuid, blockNo, 0x60 + keyType + 4, keyKnown, AUTH_FIRST, &nt1) != STATUS_HF_TAG_OK) {
+            if (authex(pcs, cuid, blockNo, 0x60 + keyType + 4, keyKnown, AUTH_FIRST, &nt1, NULL) != STATUS_HF_TAG_OK) {
                 return STATUS_MF_ERR_AUTH;
             }
 
@@ -1343,41 +1351,40 @@ uint16_t mf1_toolbox_check_keys_on_block(
     mf1_toolbox_check_keys_on_block_in_t *in,
     mf1_toolbox_check_keys_on_block_out_t *out
 ) {
-    memset(out, 0, sizeof(mf1_toolbox_check_keys_on_block_out_t));
+    memset(out, 0, sizeof(*out));
+    if (!in->keys_len) return STATUS_MF_ERR_AUTH;
+    mf1_toolbox_report_healthy();
+    uint8_t status = pcd_14a_reader_scan_auto(p_tag_info);
+    if (status != STATUS_HF_TAG_OK) return status;
+    uint32_t cuid = get_u32_tag_uid(p_tag_info);
+    struct Crypto1State cipher = {0, 0};
 
-    struct Crypto1State mpcs = {0, 0};
-    struct Crypto1State *pcs = &mpcs;
-    uint16_t status = STATUS_HF_TAG_OK;
-    uint32_t cuid = 0;
-    bool have_uid = false;
-
-    for (int i = 0; i < in->keys_len; i++) {
-        mf1_toolbox_report_healthy();
-
-        if (have_uid == false) {
-            status = pcd_14a_reader_scan_auto(p_tag_info);
-            if (status != STATUS_HF_TAG_OK) {
-                return status;
+    // Only multi-key searches benefit. A single candidate needs the full
+    // timeout up front, since there is no next key to try during a fast pass.
+    bool fast = in->keys_len > 1 && pcd_14a_reader_timeout_get() > 4;
+    uint8_t retry[32] = {0}; // keys_len is a byte.
+    for (unsigned pass = 0; pass <= (unsigned)fast; pass++) {
+        for (unsigned i = 0; i < in->keys_len; i++) {
+            unsigned mask = 1u << (i % 8);
+            if (pass && !(retry[i / 8] & mask)) continue;
+            if (pass || i) {
+                mf1_toolbox_report_healthy();
+                status = pcd_14a_reader_fast_select(p_tag_info);
+                if (status != STATUS_HF_TAG_OK) return status;
             }
-            cuid = get_u32_tag_uid(p_tag_info);
-            have_uid = true;
-        } else {
-            status = pcd_14a_reader_fast_select(p_tag_info);
-            if (status != STATUS_HF_TAG_OK) {
-                return status;
-            }
-        }
 
-        uint32_t nt1 = 0;
-        uint64_t key_u64 = bytes_to_num(in->keys[i].key, 6);
-        status = authex(pcs, cuid, in->block, in->key_type, key_u64, AUTH_FIRST, &nt1);
-        if (status != STATUS_HF_TAG_OK) {
-            if (status == STATUS_HF_TAG_NO) return STATUS_HF_TAG_NO;
-            continue;
+            bool retry_silence = false;
+            uint64_t key_u64 = bytes_to_num(in->keys[i].key, 6);
+            status = authex(&cipher, cuid, in->block, in->key_type, key_u64, AUTH_FIRST,
+                NULL, fast && !pass ? &retry_silence : NULL);
+            if (status != STATUS_HF_TAG_OK) {
+                if (retry_silence) retry[i / 8] |= mask;
+                continue;
+            }
+            out->found = 1;
+            out->key = in->keys[i];
+            return STATUS_HF_TAG_OK;
         }
-        out->found = 1;
-        out->key = in->keys[i];
-        return STATUS_HF_TAG_OK;
     }
 
     return STATUS_MF_ERR_AUTH;

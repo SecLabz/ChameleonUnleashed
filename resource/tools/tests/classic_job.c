@@ -5,7 +5,7 @@
 #include "classic_job.h"
 #include "app_status.h"
 #include "data_cmd.h"
-static unsigned calls, resets, captured;
+static unsigned calls, resets, captured, scans;
 static uint16_t fail;
 static bool mismatch;
 void nfca_session_close(void) { resets++; }
@@ -15,12 +15,15 @@ void nfca_finish(uint16_t c) {}
 uint16_t nfca_command(uint16_t c, uint16_t n, uint8_t *p, uint8_t *out, uint16_t *size) {
     *size=0;
     if (c == DATA_CMD_HF14A_SCAN) {
+        scans++;
         *size=5; memcpy(out,(uint8_t[]){4,1,2,3,4},5); out[1]^=mismatch; return 0;
     }
     calls++;
     if (fail) return fail;
     if (c == DATA_CMD_MF1_COLLECT_OBSERVATIONS) {
-        assert(n==12 && p[11]<=16); captured+=p[11]; *size=p[11]*12;
+        assert(n==17 && p[11]<=16 && !memcmp(p+12,(uint8_t[]){4,1,2,3,4},5));
+        if (mismatch) return STATUS_HF_TAG_NO;
+        captured+=p[11]; *size=p[11]*12;
     } else if (c == DATA_CMD_MF1_READ_SECTOR) {
         assert(n==13); *size=66;
     } else { assert(c==DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK); *size=7; }
@@ -57,7 +60,7 @@ int main(void) {
     uint8_t capture[]={1,2,4,1,2,3,4,0x60,0,255,255,255,255,255,255,0x60,4,0,16,0,42};
     assert(classic_job_start(capture,sizeof(capture),&id));
     for (unsigned i=0;i<5;i++) classic_job_poll();
-    assert(captured==42);
+    assert(captured==42 && scans==1); // Only the check job needs a separate identity scan.
     for (unsigned i=0;i<3;i++) assert(classic_job_read(id,out,sizeof(out))==13+(i==2?10:16)*12);
     assert(!classic_job_active() && out[7]==1 && out[12]==42);
     assert(classic_job_start(capture,sizeof(capture),&id));

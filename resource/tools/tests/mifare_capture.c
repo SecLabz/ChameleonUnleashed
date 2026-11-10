@@ -17,20 +17,20 @@ uint32_t SystemCoreClock = 64000000;
 #define NRF_LOG_INFO(...) ((void)0)
 /* CAPTURE DECLARATIONS */
 
-typedef struct { uint32_t uid; } picc_14a_tag_t;
-static picc_14a_tag_t tag = {0x12345678};
+typedef struct { uint8_t uid[10], uid_len; } picc_14a_tag_t;
+static picc_14a_tag_t tag = {{0x12, 0x34, 0x56, 0x78}, 4};
 static picc_14a_tag_t *p_tag_info = &tag;
-static int auth_calls, send_calls, selects, scans, halts, cleanups, delays;
+static int auth_calls, send_calls, selects, nested_selects, scans, halts, cleanups, delays;
 static int auth_failure, auth_failure_call, target_bits = 32, target_status, selection_status;
 static void nfca_session_close(void) {}
 
 static void reset(void) {
-    auth_calls = send_calls = selects = scans = halts = cleanups = delays = 0;
+    auth_calls = send_calls = selects = nested_selects = scans = halts = cleanups = delays = 0;
     auth_failure = auth_failure_call = target_status = selection_status = 0;
     target_bits = 32;
     mf1_capture_stats_start(false);
 }
-static uint32_t get_u32_tag_uid(picc_14a_tag_t *info) { return info->uid; }
+static uint32_t get_u32_tag_uid(picc_14a_tag_t *info) { return bytes_to_num(info->uid, 4); }
 static uint8_t pcd_14a_reader_scan_auto(picc_14a_tag_t *info) {
     scans++;
     return selection_status;
@@ -39,12 +39,16 @@ static uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *info) {
     selects++;
     return selection_status;
 }
+static uint8_t pcd_14a_reader_reselect_after_nested(picc_14a_tag_t *info) {
+    nested_selects++;
+    return selection_status;
+}
 static void pcd_14a_reader_halt_tag(void) { halts++; }
 static void mf1_toolbox_report_healthy(void) {}
 static void bsp_delay_us(uint32_t delay) { assert(delay == 400); delays++; }
 void crypto1_deinit(struct Crypto1State *cipher) { cleanups++; }
-static int authex(struct Crypto1State *cipher, uint32_t uid, uint8_t block,
-    uint8_t type, uint64_t key, uint8_t nested, uint32_t *nonce) {
+static uint8_t authex(struct Crypto1State *cipher, uint32_t uid, uint8_t block,
+    uint8_t type, uint64_t key, uint8_t nested, uint32_t *nonce, bool *retry_silence) {
     assert(uid == 0x12345678 && block == 0 && type == 0x60 && key == 0xffffffffffff);
     auth_calls++;
     if (auth_failure && (!auth_failure_call || auth_calls == auth_failure_call)) return auth_failure;
@@ -75,10 +79,26 @@ static data_frame_tx_t *data_frame_make(uint16_t command, uint16_t status,
 /* CAPTURE FUNCTIONS */
 
 static uint8_t *request(uint8_t chained, uint8_t count) {
-    static uint8_t bytes[] = {0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 0, 1};
+    static uint8_t bytes[23] = {0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 0, 1};
     bytes[10] = chained;
     bytes[11] = count;
     return bytes;
+}
+
+static void checked_capture(void) {
+    reset();
+    uint8_t data[17];
+    memcpy(data, request(0, 2), 12);
+    data[12] = 4;
+    memcpy(data + 13, tag.uid, 4);
+    data_frame_tx_t *reply = cmd_processor_mf1_collect_observations(2023, 0, sizeof(data), data);
+    assert(reply->status == STATUS_HF_TAG_OK && reply->length == 24 && scans == 1 && auth_calls == 2);
+    assert(nested_selects == 1 && selects == 0);
+
+    reset();
+    data[13] ^= 1;
+    reply = cmd_processor_mf1_collect_observations(2023, 0, sizeof(data), data);
+    assert(reply->status == STATUS_HF_TAG_NO && reply->length == 0 && scans == 1 && auth_calls == 0);
 }
 static void normalized_capture(void) {
     reset();
@@ -186,6 +206,7 @@ static void legacy_formats(void) {
 }
 int main(void) {
     normalized_capture();
+    checked_capture();
     rejected_requests();
     profiled_capture();
     legacy_formats();

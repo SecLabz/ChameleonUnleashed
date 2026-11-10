@@ -5,6 +5,56 @@ import { createNonceStream } from '../src/device/nonce-stream.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+test('Hardnested drains buffered USB pages before starting another capture', { timeout: 1000 }, async () => {
+  let captured = 0;
+  let processed = 0;
+  let releaseFirstPush;
+  const firstPush = new Promise((resolve) => {
+    releaseFirstPush = resolve;
+  });
+  const result = await recoverHardnested({
+    device: {
+      async command() {},
+      async collectNonces(_source, _target, count) {
+        const records = Array.from({ length: count }, () => ({ ciphertext: captured++ }));
+        if (captured === 48) {
+          releaseFirstPush();
+        }
+        return records;
+      }
+    },
+    source: {},
+    target: { sector: 0, is_key_b: false },
+    geometry: { sectors: [{ first: 0 }] },
+    uid: [1, 2, 3, 4],
+    budget: 96,
+    check() {},
+    update() {},
+    verify: async (_target, [key]) => key,
+    async call({ op, observations }) {
+      if (op === 'hardnested_new') {
+        return { job: 1 };
+      }
+      if (op === 'hardnested_push') {
+        if (!processed) {
+          await firstPush;
+        }
+        if (processed === 32) {
+          assert.equal(captured, 48, 'the Worker should catch up without requesting an extra RF batch');
+        }
+        processed += observations.length;
+        return { count: processed, diverse: true, covered: 256, early: processed === 48 };
+      }
+      if (op === 'hardnested_early') {
+        return { key: '010203040506' };
+      }
+      assert.equal(op, 'hardnested_dispose');
+      return {};
+    }
+  });
+  assert.deepEqual(result, { Verified: [1, 2, 3, 4, 5, 6] });
+});
+
 function fixture({ workerFailure = false, rfFailure = false, abort = false, streaming = false } = {}) {
   const controller = new AbortController();
   const state = {

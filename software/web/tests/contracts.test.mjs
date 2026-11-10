@@ -861,7 +861,7 @@ function keyCacheFixture() {
   return { keyCache: createClassicKeyCache(() => storage), storage };
 }
 
-test('reuse parity filtering uses the shared WASM and retains matching candidates for authentication', async () => {
+test('one weak nonce screens reuse in shared WASM and retains matches for authentication', async () => {
   const engine = await createEngine(wasm);
   const key = [0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f];
   const wrong = Array(6).fill(255);
@@ -869,9 +869,10 @@ test('reuse parity filtering uses the shared WASM and retains matching candidate
   const filter = createKeyReuseFilter({
     uid: () => [0x53, 0xbf, 0x9c, 0x43],
     call: async (request) => engine(request),
-    collect: async () => {
+    collect: async (_source, _target, count) => {
       captures++;
-      return Array(2).fill({ nt1: 0x85430819, ciphertext: 0xaf9a42f6, parity: [1, 1, 0, 0] });
+      assert.equal(count, 1);
+      return [{ nt1: 0x85430819, ciphertext: 0xaf9a42f6, parity: [1, 1, 0, 0] }];
     }
   });
   const summary = {
@@ -902,6 +903,8 @@ for (const [prng, badPrefix] of [
     const same = (a, b) => a.every((byte, i) => byte === b[i]);
     const expected = (sector, isKeyB) => (isKeyB ? keysB[sector] : keyA);
     const physical = new Set();
+    const checkReadFallback = prng === 'Weak' && !badPrefix;
+    const bReads = new Set();
     device.command = async () => [prng === 'Weak' ? 1 : 2];
     device.accepts = (sector, isKeyB, key) => {
       physical.add(`${sector}:${isKeyB}:${key.join(',')}`);
@@ -915,6 +918,28 @@ for (const [prng, badPrefix] of [
       }
       return bytes;
     };
+    if (checkReadFallback) {
+      const readSector = device.readSector.bind(device);
+      device.readSector = async (sector, key, isKeyB, geometry) => {
+        const blocks = await readSector(sector, key, isKeyB, geometry);
+        if (isKeyB) {
+          bReads.add(sector);
+        } else if (sector === 13) {
+          // A leaves a hole that only reading with B will fill.
+          blocks[1] = null;
+        }
+        return blocks;
+      };
+      const classicBatch = device.classicBatch.bind(device);
+      device.classicBatch = async (kind, entries) => {
+        const replies = await classicBatch(kind, entries);
+        return replies.map((reply, i) =>
+          kind === 0 && entries[i][0] === 14 * 4 && entries[i][1] === 0x61 && reply.status === 0
+            ? { status: 6, data: Uint8Array.of(0, 0, 0, 0, 0, 0, 0) }
+            : reply
+        );
+      };
+    }
     const captures = new Map();
     device.collectNonces = async (_source, target, count) => {
       const id = `${target.sector}:${target.is_key_b}`;
@@ -960,6 +985,10 @@ for (const [prng, badPrefix] of [
           .join('\n')
       });
       assert(result.complete);
+      if (checkReadFallback) {
+        assert(result.memory[13 * 4 + 1], 'B fills memory missing after the read with A');
+        assert.deepEqual([...bReads].sort(), [13, 14], 'B reads only for missing data or a rejected check');
+      }
       assert(localMisses > 20, 'local exclusions are not reported as failed RF authentications');
       for (let sector = 0; sector < 16; sector++) {
         assert.deepEqual(result.summary.mapping[sector].key_b, keysB[sector]);

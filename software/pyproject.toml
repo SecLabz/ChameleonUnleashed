@@ -1,6 +1,6 @@
 [project]
 name = "Chameleon_Ultra_CLI"
-version = "2.1.0"
+version = "2.1.1"
 description = "The official CLI for the Chameleon Ultra"
 readme = "README.md"
 requires-python = ">=3.9"

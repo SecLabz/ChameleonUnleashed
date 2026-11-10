@@ -697,7 +697,7 @@ mod tests {
         let key = [0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f];
         let mut collect = vec![0x60, 4];
         collect.extend([1; 6]);
-        collect.extend([0x61, 4, 0, 2]);
+        collect.extend([0x61, 4, 0, 2, 4, 0x53, 0xbf, 0x9c, 0x43]);
         let mut records = Vec::new();
         for _ in 0..2 {
             records.extend(0x85430819u32.to_be_bytes());

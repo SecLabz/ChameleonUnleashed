@@ -15,7 +15,7 @@ static bool initialized;
 static struct {
     uint32_t id;
     uint16_t sequence, completed, total;
-    uint8_t request[REQUEST_MAX], uid_length, kind, head, count;
+    uint8_t request[REQUEST_MAX], uid_length, kind, head;
     uint8_t events[QUEUE_DEPTH][CLASSIC_JOB_EVENT_MAX];
     uint16_t sizes[QUEUE_DEPTH];
     uint8_t first, queued;
@@ -37,7 +37,7 @@ bool classic_job_start(const uint8_t *p, size_t size, uint32_t *id) {
     initialize();
     if (job.running || job.queued || !p || size < 7 || size > REQUEST_MAX || p[0] != 1 || p[1] > 2 ||
         (p[2] != 4 && p[2] != 7 && p[2] != 10) || next_id == UINT32_MAX) return false;
-    unsigned head = 4 + p[2], count = 0, total;
+    unsigned head = 4 + p[2], total;
     if (p[1] == 2) {
         head--;
         if (size != head + 14 || p[head + 10] > 1 || !p[head + 11] || p[head + 11] > 16 ||
@@ -47,9 +47,9 @@ bool classic_job_start(const uint8_t *p, size_t size, uint32_t *id) {
         if (!total || total > 4096) return false;
     } else {
         if (size < head) return false;
-        count = total = p[head - 1];
-        if (!count || count > (p[1] ? 40u : 80u) || size != head + count * 8u) return false;
-        for (unsigned i = 0; i < count; i++) {
+        total = p[head - 1];
+        if (!total || total > (p[1] ? 40u : 80u) || size != head + total * 8u) return false;
+        for (unsigned i = 0; i < total; i++) {
             const uint8_t *entry = p + head + i * 8u;
             if ((entry[1] != 0x60 && entry[1] != 0x61) || (p[1] && entry[0] >= 40)) return false;
         }
@@ -57,7 +57,7 @@ bool classic_job_start(const uint8_t *p, size_t size, uint32_t *id) {
     memset(&job, 0, sizeof(job));
     memcpy(job.request, p, size);
     job.id = ++next_id; *id = job.id;
-    job.kind = p[1]; job.uid_length = p[2]; job.head = head; job.count = count;
+    job.kind = p[1]; job.uid_length = p[2]; job.head = head;
     job.total = total; job.running = true;
     return true;
 }
@@ -102,19 +102,21 @@ void classic_job_poll(void) {
         if (job.kind != 1) nfca_session_open();
         return;
     }
-    uint8_t request[19] = {0};
+    uint8_t request[13 + 10];
     uint16_t command, request_size, advance = 1;
     if (job.kind == 2) {
-        command = DATA_CMD_MF1_COLLECT_OBSERVATIONS; request_size = 12;
+        command = DATA_CMD_MF1_COLLECT_OBSERVATIONS; request_size = 13 + job.uid_length;
         memcpy(request, job.request + job.head, 12);
+        request[12] = job.uid_length;
+        memcpy(request + 13, job.request + 3, job.uid_length);
         if (request[11] > job.total - job.completed) request[11] = job.total - job.completed;
         advance = request[11];
     } else {
         const uint8_t *entry = job.request + job.head + job.completed * 8u;
-        memcpy(request + 2, entry + 2, 6);
         if (job.kind) {
             command = DATA_CMD_MF1_READ_SECTOR; request_size = 9 + job.uid_length;
             request[0] = entry[1]; request[1] = entry[0];
+            memcpy(request + 2, entry + 2, 6);
             request[8] = job.uid_length; memcpy(request + 9, job.request + 3, job.uid_length);
         } else {
             command = DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK; request_size = 9;
@@ -123,9 +125,8 @@ void classic_job_poll(void) {
         }
     }
     status = nfca_prepare(command, request_size, request);
-    if (status == STATUS_SUCCESS && job.kind != 1) {
-        /* Reads already check UID before authenticating each sector. Checks
-         * and nonce acquisition also bind every RF step to this job's UID. */
+    if (status == STATUS_SUCCESS && job.kind == 0) {
+        /* Reads and nonce captures check the UID during their own selection. */
         status = nfca_command(DATA_CMD_HF14A_SCAN, 0, NULL, output, &size);
         if (status == STATUS_HF_TAG_OK && (size < 1u + job.uid_length || output[0] != job.uid_length ||
             memcmp(output + 1, job.request + 3, job.uid_length))) status = STATUS_HF_TAG_NO;

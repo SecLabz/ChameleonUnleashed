@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.1 — 2026-11-10
+
+- Faster Classic AutoPwn dictionary checks and Hardnested capture.
+- Hardnested capture checks the tag UID and requires firmware 2.1.1 or later.
+- The web app skips redundant sector reads when verifying recovered keys.
+
 ## v2.1.0 — 2026-11-08
 
 - Faster Classic AutoPwn in the native CLI and USB/Bluetooth web app.
