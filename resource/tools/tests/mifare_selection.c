@@ -25,8 +25,8 @@ static uint16_t anti_bits, sak_bits;
 static unsigned cascades, anti_calls, select_calls;
 static bool nak, bad_bcc;
 
-static uint8_t pcd_14a_reader_atqa_request(uint8_t *out, void *unused, size_t capacity) {
-    assert(!unused && capacity == 16);
+static uint8_t atqa_request(uint8_t *out, uint16_t capacity, bool after_nested) {
+    assert(!after_nested && capacity == 16);
     out[0] = 4; out[1] = 0;
     return STATUS_HF_TAG_OK;
 }

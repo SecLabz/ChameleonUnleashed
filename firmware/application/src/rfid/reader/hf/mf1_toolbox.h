@@ -155,10 +155,11 @@ uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_co
 
 /* Records are source nonce BE32, target ciphertext BE32, then four wire-parity
  * bytes. count is 1..16; output has count * 12 bytes. No partial result on error.
- * chained authenticates the source once more before requesting the target. */
+ * chained authenticates the source once more before requesting the target.
+ * A nonzero uid_length binds capture to that full UID. */
 uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
-    uint8_t count, uint8_t *output);
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length);
 
 #include "mf1_darkside.h"
 

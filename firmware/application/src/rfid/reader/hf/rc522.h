@@ -230,8 +230,8 @@ void pcd_14a_reader_parity_off(void);
 uint8_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag);
 uint8_t pcd_14a_reader_scan_poll(picc_14a_tag_t *tag);
 uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag);
+uint8_t pcd_14a_reader_reselect_after_nested(picc_14a_tag_t *tag);
 uint8_t pcd_14a_reader_ats_request(uint8_t *pAts, uint16_t *szAts, uint16_t szAtsBitMax);
-uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t resp_max_bit);
 
 // M1 tag operation
 uint16_t pcd_14a_reader_mf1_auth(picc_14a_tag_t *tag, uint8_t type, uint8_t addr, uint8_t *pKey);

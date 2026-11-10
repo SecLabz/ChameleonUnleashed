@@ -3,8 +3,8 @@ import { hex } from '../device/transport.mjs';
 const targetId = (target) => `${target.sector}:${target.is_key_b}`;
 
 // Screen reuse once several distinct keys make failed RF authentications
-// expensive. Parity filtering works for both weak and hard PRNGs. Evidence belongs to
-// this read session; a local miss is never a physical authentication failure.
+// expensive. For a weak PRNG one nonce also tests the LFSR structure; hard
+// PRNGs use two parity observations. Local misses never count as RF failures.
 export function createKeyReuseFilter({ call, collect, uid }) {
   const records = new Map();
   const disabled = new Set();
@@ -36,10 +36,11 @@ export function createKeyReuseFilter({ call, collect, uid }) {
       if (!source) {
         return null;
       }
+      const weakPrng = summary.prng === 'Weak';
       const id = targetId(target);
       if (!records.has(id)) {
         try {
-          records.set(id, await collect(source, target, 2));
+          records.set(id, await collect(source, target, weakPrng ? 1 : 2));
         } catch (error) {
           if (error.status !== 6 && error.status !== 0x69) {
             throw error;
@@ -53,7 +54,7 @@ export function createKeyReuseFilter({ call, collect, uid }) {
         uid: uid(),
         keys: [key],
         observations: records.get(id),
-        weak_prng: false
+        weak_prng: weakPrng
       });
       return result.candidates.length > 0;
     },

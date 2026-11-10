@@ -324,8 +324,8 @@ export class Device extends DeviceSession {
     });
   }
 
-  async collectNonces(source, target, count, geometry, chained = false) {
-    const bytes = await this.command(COMMAND.CLASSIC_COLLECT, [
+  async collectNonces(source, target, count, geometry, chained = false, expectedUid = null) {
+    const request = [
       source.is_key_b ? 0x61 : 0x60,
       geometry.sectors[source.sector].first,
       ...source.key,
@@ -333,7 +333,11 @@ export class Device extends DeviceSession {
       geometry.sectors[target.sector].first,
       Number(chained),
       count
-    ]);
+    ];
+    if (expectedUid) {
+      request.push(expectedUid.length, ...expectedUid);
+    }
+    const bytes = await this.command(COMMAND.CLASSIC_COLLECT, request);
 
     if (bytes.length !== count * 12) {
       throw new Error('Invalid capture length');

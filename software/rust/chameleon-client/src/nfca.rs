@@ -473,6 +473,7 @@ impl<'a> Reader<'a> {
         }
         Ok(None)
     }
+
     fn collect_full_parity(
         &mut self,
         source: &RecoverySource,
@@ -510,6 +511,9 @@ impl<'a> Reader<'a> {
         let profiled = self.capture_metrics.is_some();
         if profiled {
             payload.push(1);
+        } else if self.session.is_some() && matches!(self.card.uid.len(), 4 | 7 | 10) {
+            payload.push(self.card.uid.len() as u8);
+            payload.extend_from_slice(&self.card.uid);
         }
         let started = Instant::now();
         let mut firmware = None;

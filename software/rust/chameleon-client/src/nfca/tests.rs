@@ -194,7 +194,9 @@ fn hardnested_session_reuses_batches_and_closes_before_verification() {
         sector: 1,
         is_key_b: true,
     };
-    let payload = vec![0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 1];
+    let payload = vec![
+        0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 1, 4, 1, 2, 3, 4,
+    ];
     let mut verify = vec![4, 0x61, 1];
     verify.extend([0xff; 6]);
     let (mut client, worker) = device(vec![
@@ -233,7 +235,9 @@ fn capture_failure_and_cancelled_drop_close_the_session() {
             sector: 1,
             is_key_b: true,
         };
-        let payload = vec![0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 1];
+        let payload = vec![
+            0x60, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x61, 4, 0, 1, 4, 1, 2, 3, 4,
+        ];
         let (mut client, worker) = device(vec![
             (2026, vec![1], 0x68, vec![]),
             (
@@ -596,7 +600,7 @@ fn recovery_end_keeps_reader_mode_until_the_operation_finishes() {
 fn capture_and_session_close_failures_are_reported_before_restoring_emulation() {
     let mut request = vec![0x60, 0];
     request.extend([0xff; 6]);
-    request.extend([0x60, 4, 0, 1]);
+    request.extend([0x60, 4, 0, 1, 4, 1, 2, 3, 4]);
     let (mut client, worker) = device(vec![
         (GET_MODE, vec![], 0x68, vec![0]),
         (SET_MODE, vec![1], 0x68, vec![]),

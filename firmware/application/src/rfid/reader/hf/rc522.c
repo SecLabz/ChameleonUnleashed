@@ -39,7 +39,7 @@ static bool m_reader_is_init = false;
 // Communication timeout
 static uint16_t g_com_timeout_ms = DEF_COM_TIMEOUT;
 static autotimer *g_timeout_auto_timer;
-static bool m_short_wakeup_wait;
+static uint32_t m_wakeup_timeout_ticks;
 static bool m_scan_polling;
 
 // RC522 SPI
@@ -269,12 +269,12 @@ uint16_t pcd_14a_reader_timeout_get() {
 
 /* Measure each transaction from the RTC. The shared BSP clock advances by
  * 10 ms and its next callback can occur immediately after a counter reset.
- * First wake-ups keep their 1 ms budget; all other waits use the configured
- * budget. A latched completion remains valid if an interrupt delayed polling. */
+ * A latched completion remains valid if an interrupt delayed polling. */
 static bool wait_for_irq(uint8_t wait_for, uint8_t *irq) {
     uint32_t wait_started = mf1_capture_clock();
     uint32_t started_ticks = app_timer_cnt_get();
-    uint32_t timeout_ticks = APP_TIMER_TICKS(m_short_wakeup_wait ? 1 : g_com_timeout_ms);
+    uint32_t timeout_ticks = m_wakeup_timeout_ticks;
+    if (!timeout_ticks) timeout_ticks = APP_TIMER_TICKS(g_com_timeout_ms);
     bool completed;
     do {
         *irq = read_register_single(ComIrqReg);
@@ -646,19 +646,21 @@ uint8_t pcd_14a_reader_bytes_transfer_flags(uint8_t Command, uint8_t *pIn, uint8
     return status;
 }
 
+static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit, bool after_nested);
+
 /**
 * @brief  : ISO14443-A Fast Select
 * @param  :tag: tag info buffer
 * @retval : if return STATUS_HF_TAG_OK, the tag is selected.
 */
-uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag) {
+static uint8_t fast_select(picc_14a_tag_t *tag, bool after_nested) {
     uint8_t dat_buff[9] = { 0x00 };
     uint8_t status = STATUS_HF_TAG_OK;
     uint8_t cascade_level = 0;
     uint16_t dat_len;
 
     // Wakeup
-    if (pcd_14a_reader_atqa_request(dat_buff, NULL, U8ARR_BIT_LEN(dat_buff)) != STATUS_HF_TAG_OK) {
+    if (atqa_request(dat_buff, U8ARR_BIT_LEN(dat_buff), after_nested) != STATUS_HF_TAG_OK) {
         return STATUS_HF_TAG_NO;
     }
 
@@ -691,6 +693,14 @@ uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag) {
     return STATUS_HF_TAG_OK;
 }
 
+uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag) {
+    return fast_select(tag, false);
+}
+
+uint8_t pcd_14a_reader_reselect_after_nested(picc_14a_tag_t *tag) {
+    return fast_select(tag, true);
+}
+
 /**
 * @brief  : ISO14443-A Find a card, only execute once!
 * @param  : tag: Buffer that stores card information
@@ -707,8 +717,7 @@ uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
     }
 
     // wake
-    if (pcd_14a_reader_atqa_request(tag->atqa, NULL, U8ARR_BIT_LEN(tag->atqa)) != STATUS_HF_TAG_OK) {
-        // NRF_LOG_INFO("pcd_14a_reader_atqa_request STATUS_HF_TAG_NO\r\n");
+    if (atqa_request(tag->atqa, U8ARR_BIT_LEN(tag->atqa), false) != STATUS_HF_TAG_OK) {
         return STATUS_HF_TAG_NO;
     }
 
@@ -918,12 +927,7 @@ uint8_t pcd_14a_reader_ats_request(uint8_t *pAts, uint16_t *szAts, uint16_t szAt
     return STATUS_HF_TAG_OK;
 }
 
-/**
-* @brief  : Get answering request, type A
-* @param  : PSNR: Card serial number, n -bytes
-* @retval : Status value hf_tag_ok, success
-*/
-uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t resp_max_bit) {
+static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit, bool after_nested) {
     uint16_t len = 0;
     uint8_t retry = 0;
     uint8_t status = STATUS_HF_TAG_OK;
@@ -933,22 +937,14 @@ uint8_t pcd_14a_reader_atqa_request(uint8_t *resp, uint8_t *resp_par, uint16_t r
     do {
         // Broadcast for a card, WUPA (0x52) will force response from all cards in the field and Receive the ATQA
         if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
-        bool previous_wait = m_short_wakeup_wait;
-        // Keep the original timeout from the third attempt for slower cards.
-        m_short_wakeup_wait = retry < 2;
-        status = pcd_14a_reader_bits_transfer(wupa, 7, NULL, resp, resp_par, &len, resp_max_bit);
-        m_short_wakeup_wait = previous_wait;
-        // NRF_LOG_INFO("pcd_14a_reader_atqa_request len: %d\n", len);
-    } while (len != 16 && !m_scan_polling && (retry++ < 10));
-
-    // normal ATQA It is 2 bytes, that is, 16bit,
-    // We need to judge whether the data received is correct
-    if (status == STATUS_HF_TAG_OK && len == 16) {
-        // You can confirm that at least one 14A card exists in the current field
-        return STATUS_HF_TAG_OK;
-    }
-
-    // No card
+        // The first wakeup after unfinished nested auth may only abort it.
+        // From the third attempt onward, allow the full configured timeout.
+        m_wakeup_timeout_ticks = retry < 2 ? APP_TIMER_TICKS(1) : 0;
+        if (after_nested && retry == 0) m_wakeup_timeout_ticks /= 2;
+        status = pcd_14a_reader_bits_transfer(wupa, 7, NULL, resp, NULL, &len, resp_max_bit);
+        m_wakeup_timeout_ticks = 0;
+        if (status == STATUS_HF_TAG_OK && len == 16) return STATUS_HF_TAG_OK;
+    } while (!m_scan_polling && retry++ < 10);
     return STATUS_HF_TAG_NO;
 }
 

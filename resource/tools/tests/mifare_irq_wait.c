@@ -10,7 +10,7 @@ test_debug_t test_debug;
 uint32_t SystemCoreClock = 64000000;
 #define ComIrqReg 4
 #define APP_TIMER_TICKS(ms) (((uint32_t)(ms) * 32768 + 1000) / 2000)
-static bool m_short_wakeup_wait;
+static uint32_t m_wakeup_timeout_ticks;
 static autotimer timer;
 static autotimer *g_timeout_auto_timer = &timer;
 static uint16_t g_com_timeout_ms;
@@ -38,7 +38,7 @@ static uint8_t read_register_single(uint8_t address) {
 /* WAIT FUNCTION */
 
 static void reset(void) {
-    m_short_wakeup_wait = false;
+    m_wakeup_timeout_ticks = 0;
     g_com_timeout_ms = 5;
     rtc_ticks = 0xfffff8;
     step = 8;
@@ -65,7 +65,7 @@ int main(void) {
     assert(polls == (APP_TIMER_TICKS(5) + step - 1) / step);
     assert(mf1_capture_stats.timeouts == 1);
 
-    reset(); m_short_wakeup_wait = true; ready_at = UINT32_MAX;
+    reset(); m_wakeup_timeout_ticks = APP_TIMER_TICKS(1); ready_at = UINT32_MAX;
     assert(!wait_for_irq(0x30, &irq));
     assert(polls == (APP_TIMER_TICKS(1) + step - 1) / step);
 

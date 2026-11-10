@@ -73,7 +73,7 @@ export async function recoverHardnested({
     const count = Math.min(16, budget - capturedCount);
     const records = stream
       ? await stream.read()
-      : await device.collectNonces(source, target, count, geometry);
+      : await device.collectNonces(source, target, count, geometry, false, uid);
     retain(records);
     check();
     if (!records.length) {
@@ -124,10 +124,6 @@ export async function recoverHardnested({
     return result.value;
   }
 
-  function pushObservations(records, acquiring = true) {
-    return processWithAcquisition({ op: 'hardnested_push', job, observations: records }, acquiring);
-  }
-
   try {
     await setCaptureSession(true);
     let status;
@@ -139,7 +135,12 @@ export async function recoverHardnested({
         await acquire();
       }
 
-      status = await pushObservations(pendingObservations.splice(0, 16));
+      const observations = pendingObservations.splice(0, 16);
+      // Let reduction catch up before acquiring another page.
+      status = await processWithAcquisition(
+        { op: 'hardnested_push', job, observations },
+        pendingObservations.length < 16
+      );
 
       // Old buffered observations cannot establish that reselection failed.
       const observedAfterReselection = reselectedAfterCount === null || status.count > reselectedAfterCount;
