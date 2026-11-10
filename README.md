@@ -47,6 +47,11 @@ the credit for the foundation this fork stands on.
 https://github.com/user-attachments/assets/4e90ea87-0865-404f-b6f6-2a17a963468e
 
 
+https://github.com/user-attachments/assets/5050537e-745b-4a24-8149-56e8dfa24712
+
+
+
+
 
 | Scan | Studio | Slots |
 | :---: | :---: | :---: |
