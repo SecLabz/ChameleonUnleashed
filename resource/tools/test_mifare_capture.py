@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from native_test import function
+from native_test import function, run_c
 
 ROOT = Path(__file__).resolve().parents[2]
 HF = ROOT / 'firmware/application/src/rfid/reader/hf'
@@ -66,6 +66,11 @@ class CaptureContract(unittest.TestCase):
         source = function((HF / 'rc522.c').read_text(), 'pcd_14a_reader_init')
         fixture = (Path(__file__).parent / 'tests/mifare_reader_init.c').read_text()
         run_fixture(fixture.replace('/* READER INIT FUNCTION */', source))
+
+    def test_reader_reset_checks_register_defaults_and_keeps_field_off_delay(self):
+        source = function((HF / 'rc522.c').read_text(), 'pcd_14a_reader_reset')
+        fixture = (Path(__file__).parent / 'tests/rc522_reset.c').read_text()
+        run_c(fixture.replace('/* READER RESET FUNCTION */', source))
 
     def test_sector_read_geometry_permissions_and_single_authentication(self):
         source = function((HF / 'nfca_commands.c').read_text(), 'read_sector')

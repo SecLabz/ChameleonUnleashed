@@ -44,9 +44,9 @@ static uint8_t pcd_14a_reader_bits_transfer(uint8_t *tx, uint16_t tx_bits,
     return *bits == 16 ? STATUS_HF_TAG_OK : STATUS_HF_TAG_NO;
 }
 typedef struct { uint8_t atqa[2]; } picc_14a_tag_t;
-static uint8_t atqa_request(uint8_t *, uint16_t, bool);
+static uint8_t atqa_request(uint8_t *, uint16_t);
 static uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
-    return atqa_request(tag->atqa, 16, false);
+    return atqa_request(tag->atqa, 16);
 }
 /* CAPTURE FUNCTIONS */
 
@@ -67,15 +67,15 @@ int main(void) {
     uint8_t response[2];
     for (response_after = 0; response_after < 3; response_after++) {
         wakeup_calls = 0;
-        assert(atqa_request(response, 16, false) == STATUS_HF_TAG_OK);
+        assert(atqa_request(response, 16) == STATUS_HF_TAG_OK);
         assert(wakeup_calls == response_after + 1 && !m_wakeup_timeout_ticks);
         assert(waits[0] && (response_after < 1 || waits[1]));
         if (response_after == 2) assert(!waits[2]);
     }
     wakeup_calls = 0; response_after = -1;
-    assert(atqa_request(response, 16, true) == STATUS_HF_TAG_NO);
+    assert(atqa_request(response, 16) == STATUS_HF_TAG_NO);
     assert(wakeup_calls == 11 && !m_wakeup_timeout_ticks);
-    assert(waits[0] == APP_TIMER_TICKS(1) / 2 && waits[1] == APP_TIMER_TICKS(1));
+    assert(waits[0] == APP_TIMER_TICKS(1) && waits[1] == APP_TIMER_TICKS(1));
     for (int index = 2; index < 11; index++) assert(!waits[index]);
 
     picc_14a_tag_t tag;

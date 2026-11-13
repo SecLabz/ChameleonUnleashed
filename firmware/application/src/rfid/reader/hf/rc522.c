@@ -206,33 +206,29 @@ void pcd_14a_reader_init(void) {
     }
 }
 
-/**
-* @brief  : Reset the card reader
-* @retval : Status value hf_tag_ok, success
-*/
 void pcd_14a_reader_reset(void) {
-    // Make sure it has been initialized before communicating and soft reset
-    if (m_reader_is_init) {
-        // Softening 522
-        write_register_single(CommandReg, PCD_IDLE);
-        write_register_single(CommandReg, PCD_RESET);
+    if (!m_reader_is_init) return;
 
-        bsp_delay_ms(10);
+    write_register_single(CommandReg, PCD_IDLE);
+    write_register_single(CommandReg, PCD_RESET);
 
-        // Then default does not allow the antenna
-        // Please don't continue to make high -frequency antennas
-        pcd_14a_reader_antenna_off();
+    /* Wait for Idle with RcvOff set and the default ModeReg. If the reset
+     * values are unavailable, keep the original 10 ms settling time. */
+    uint32_t started = app_timer_cnt_get();
+    do {
+        if (read_register_single(CommandReg) == 0x20 && read_register_single(ModeReg) == 0x3F) {
+            break;
+        }
+        bsp_delay_us(25);
+    } while (app_timer_cnt_diff_compute(app_timer_cnt_get(), started) < APP_TIMER_TICKS(10));
 
-        // Disable the timer of 522, use the MCU timer timeout time
-        write_register_single(TModeReg, 0x00);
+    pcd_14a_reader_antenna_off();
+    write_register_single(TModeReg, 0x00);  // Use the MCU timer.
+    write_register_single(TxAutoReg, 0x40); // Force 100% ASK.
+    write_register_single(ModeReg, 0x3D);   // Set the CRC preset to 0x6363.
 
-        // The modulation sending signal is 100%ask
-        write_register_single(TxAutoReg, 0x40);
-        // Define common mode and receive common mode and receiveMiFare cartoon communication, CRC initial value 0x6363
-        write_register_single(ModeReg, 0x3D);
-
-        bsp_delay_ms(10);
-    }
+    // Keep the PICC powered off long enough to reset its protocol state.
+    bsp_delay_ms(10);
 }
 
 /**
@@ -314,8 +310,8 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
     }
 
     write_register_single(CommandReg,       PCD_IDLE);      //  Flushbuffer clearing the internal FIFO read and writing pointer and ErRreg's Bufferovfl logo position is cleared
-    clear_register_mask(ComIrqReg,      0x80);          //  When Set1 is cleared, the shielding position of commonricqreg is clear zero
-    set_register_mask(FIFOLevelReg,     0x80);          //  Write an empty order
+    write_register_single(ComIrqReg,        0x7F);          //  Clear all seven interrupt request bits
+    write_register_single(FIFOLevelReg,     0x80);          //  FlushBuffer
 
     write_register_buffer(FIFODataReg, pIn, InLenByte); // Write data into FIFODATA
     write_register_single(CommandReg, Command);             // Write command
@@ -546,8 +542,8 @@ uint8_t pcd_14a_reader_bytes_transfer_flags(uint8_t Command, uint8_t *pIn, uint8
     }
 
     write_register_single(CommandReg,       PCD_IDLE);      //  Flushbuffer clearing the internal FIFO read and writing pointer and ErRreg's Bufferovfl logo position is cleared
-    clear_register_mask(ComIrqReg,      0x80);          //  When Set1 is cleared, the shielding position of commonricqreg is clear zero
-    set_register_mask(FIFOLevelReg,     0x80);          //  Write an empty order
+    write_register_single(ComIrqReg,        0x7F);          //  Clear all seven interrupt request bits
+    write_register_single(FIFOLevelReg,     0x80);          //  FlushBuffer
 
     write_register_buffer(FIFODataReg, pIn, InLenByte); // Write data into FIFODATA
     write_register_single(CommandReg, Command);             // Write command
@@ -646,7 +642,26 @@ uint8_t pcd_14a_reader_bytes_transfer_flags(uint8_t Command, uint8_t *pIn, uint8
     return status;
 }
 
-static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit, bool after_nested);
+static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit);
+
+static void abort_nested_auth(void) {
+    // End Crypto1 state and send one plain 7-bit WUPA to abort the tag's pending nested auth
+    // without waiting for an ATQA receive timeout.
+    clear_register_mask(Status2Reg, 0x08);
+    write_register_single(CommandReg, PCD_IDLE);
+    write_register_single(ComIrqReg, 0x7F);
+    write_register_single(FIFOLevelReg, 0x80);
+    write_register_single(FIFODataReg, PICC_REQALL);
+    write_register_single(BitFramingReg, 0x07);
+    write_register_single(CommandReg, PCD_TRANSMIT);
+    uint8_t irq = 0;
+    m_wakeup_timeout_ticks = APP_TIMER_TICKS(1);
+    wait_for_irq(0x10, &irq);
+    m_wakeup_timeout_ticks = 0;
+    clear_register_mask(BitFramingReg, 0x07);
+    if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
+    bsp_delay_us(100);
+}
 
 /**
 * @brief  : ISO14443-A Fast Select
@@ -660,7 +675,10 @@ static uint8_t fast_select(picc_14a_tag_t *tag, bool after_nested) {
     uint16_t dat_len;
 
     // Wakeup
-    if (atqa_request(dat_buff, U8ARR_BIT_LEN(dat_buff), after_nested) != STATUS_HF_TAG_OK) {
+    if (after_nested) {
+        abort_nested_auth();
+    }
+    if (atqa_request(dat_buff, U8ARR_BIT_LEN(dat_buff)) != STATUS_HF_TAG_OK) {
         return STATUS_HF_TAG_NO;
     }
 
@@ -717,7 +735,7 @@ uint8_t pcd_14a_reader_scan_once(picc_14a_tag_t *tag) {
     }
 
     // wake
-    if (atqa_request(tag->atqa, U8ARR_BIT_LEN(tag->atqa), false) != STATUS_HF_TAG_OK) {
+    if (atqa_request(tag->atqa, U8ARR_BIT_LEN(tag->atqa)) != STATUS_HF_TAG_OK) {
         return STATUS_HF_TAG_NO;
     }
 
@@ -927,7 +945,7 @@ uint8_t pcd_14a_reader_ats_request(uint8_t *pAts, uint16_t *szAts, uint16_t szAt
     return STATUS_HF_TAG_OK;
 }
 
-static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit, bool after_nested) {
+static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit) {
     uint16_t len = 0;
     uint8_t retry = 0;
     uint8_t status = STATUS_HF_TAG_OK;
@@ -937,10 +955,8 @@ static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit, bool after_nes
     do {
         // Broadcast for a card, WUPA (0x52) will force response from all cards in the field and Receive the ATQA
         if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
-        // The first wakeup after unfinished nested auth may only abort it.
         // From the third attempt onward, allow the full configured timeout.
         m_wakeup_timeout_ticks = retry < 2 ? APP_TIMER_TICKS(1) : 0;
-        if (after_nested && retry == 0) m_wakeup_timeout_ticks /= 2;
         status = pcd_14a_reader_bits_transfer(wupa, 7, NULL, resp, NULL, &len, resp_max_bit);
         m_wakeup_timeout_ticks = 0;
         if (status == STATUS_HF_TAG_OK && len == 16) return STATUS_HF_TAG_OK;
