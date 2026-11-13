@@ -1210,12 +1210,15 @@ uint8_t mf1_hardnested_nonces_acquire(bool slow, uint8_t blkKnown, uint8_t typKn
 
 uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
-    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length) {
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,
+    bool (*cancelled)(void)) {
     if (!output || count == 0 || count > 16 ||
         (source_type != PICC_AUTHENT1A && source_type != PICC_AUTHENT1B) ||
         (target_type != PICC_AUTHENT1A && target_type != PICC_AUTHENT1B)) {
         return STATUS_PAR_ERR;
     }
+
+    if (cancelled && cancelled()) return STATUS_CMD_ERR;
 
     uint32_t started = mf1_capture_clock();
     uint8_t status = pcd_14a_reader_scan_auto(p_tag_info);
@@ -1229,6 +1232,7 @@ uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
         started = mf1_capture_clock();
         mf1_toolbox_report_healthy();
         mf1_capture_stats.housekeeping_cycles += mf1_capture_elapsed(started);
+        if (cancelled && cancelled()) return STATUS_CMD_ERR;
         if (index != 0) {
             started = mf1_capture_clock();
             status = uid_length ? pcd_14a_reader_reselect_after_nested(p_tag_info)

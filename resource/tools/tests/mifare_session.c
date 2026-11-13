@@ -62,7 +62,7 @@ static void auto_response_data(data_frame_tx_t *response) { assert(response == &
 static uint64_t bytes_to_num(uint8_t *bytes, uint8_t length) { return 0; }
 static uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t key, uint8_t target_block, uint8_t target_type, bool chained, uint8_t count, uint8_t *output,
-    const uint8_t *expected_uid, uint8_t uid_length) {
+    const uint8_t *expected_uid, uint8_t uid_length, bool (*cancelled)(void)) {
     if (!capture_status) mf1_capture_stats.observations += count;
     return capture_status;
 }

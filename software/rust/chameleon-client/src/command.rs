@@ -25,6 +25,7 @@ pub const READ_SECTOR: u16 = 2027;
 pub const CHECK_KEYS: u16 = 2015;
 pub const CLASSIC_BATCH: u16 = 2042;
 pub const COLLECT_OBSERVATIONS: u16 = 2023;
+pub const COLLECT_CANCELLABLE: u16 = 2044;
 pub const NFCA_SESSION: u16 = 2026;
 pub const DARKSIDE_STEP: u16 = 2029;
 pub const TYPE2_READ: u16 = 2028;

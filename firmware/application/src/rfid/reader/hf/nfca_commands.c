@@ -13,6 +13,20 @@
 #include "app_status.h"
 #include <string.h>
 
+bool nfca_keeps_session(uint16_t command) {
+    switch (command) {
+    case DATA_CMD_MF1_COLLECT_OBSERVATIONS:
+    case DATA_CMD_MF1_COLLECT_CANCELLABLE:
+    case DATA_CMD_TYPE2_READ:
+    case DATA_CMD_MF1_READ_SECTOR:
+    case DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK:
+    case DATA_CMD_MF1_DARKSIDE_STEP:
+        return true;
+    default:
+        return false;
+    }
+}
+
 uint16_t nfca_prepare(uint16_t command, uint16_t length, const uint8_t *data) {
     if (get_device_mode() != DEVICE_MODE_READER) return STATUS_DEVICE_MODE_ERROR;
     if (!hf_radio_release()) {
@@ -24,7 +38,6 @@ uint16_t nfca_prepare(uint16_t command, uint16_t length, const uint8_t *data) {
     }
     if (command == DATA_CMD_MF1_READ_SECTOR && length != 8) {
         if (!nfca_session_reading()) nfca_session_read_open();
-        if (nfca_session_ready()) return STATUS_SUCCESS;
     } else if (nfca_session_reading() || command == DATA_CMD_MF1_READ_SECTOR) {
         nfca_session_close();
     }
@@ -32,8 +45,7 @@ uint16_t nfca_prepare(uint16_t command, uint16_t length, const uint8_t *data) {
     if (command == DATA_CMD_MF1_COLLECT_OBSERVATIONS) {
         mf1_capture_stats_start(length == 13 && data[12] == 1);
     }
-    if ((command == DATA_CMD_MF1_COLLECT_OBSERVATIONS || command == DATA_CMD_TYPE2_READ ||
-         command == DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK || command == DATA_CMD_MF1_DARKSIDE_STEP) && nfca_session_ready()) return STATUS_SUCCESS;
+    if (nfca_keeps_session(command) && nfca_session_ready()) return STATUS_SUCCESS;
     uint32_t started = mf1_capture_clock();
     pcd_14a_reader_reset();
     pcd_14a_reader_antenna_on();
@@ -43,22 +55,22 @@ uint16_t nfca_prepare(uint16_t command, uint16_t length, const uint8_t *data) {
 }
 
 void nfca_finish(uint16_t command) {
-    if ((command != DATA_CMD_MF1_COLLECT_OBSERVATIONS && command != DATA_CMD_TYPE2_READ &&
-         command != DATA_CMD_MF1_READ_SECTOR &&
-         command != DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK && command != DATA_CMD_MF1_DARKSIDE_STEP) || !nfca_session_finish()) {
+    if (!nfca_keeps_session(command) || !nfca_session_finish()) {
         pcd_14a_reader_antenna_off();
     }
     mf1_capture_stats.enabled = false;
 }
 
-uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output, uint16_t *output_length) {
+uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output,
+                             uint16_t *output_length, bool (*cancelled)(void)) {
     *output_length = 0;
 
     // The optional suffix is either the metrics flag or the expected UID.
-    bool profiled = length == 13 && data[12] == 1;
-    uint8_t uid_length = length > 13 ? data[12] : 0;
+    bool profiled = data && length == 13 && data[12] == 1;
+    uint8_t uid_length = data && length > 13 ? data[12] : 0;
     bool checked = (uid_length == 4 || uid_length == 7 || uid_length == 10) && length == 13 + uid_length;
-    if ((length != 12 && !profiled && !checked) ||
+    if (!data || (length != 12 && !profiled && !checked) ||
+        (cancelled && (!checked || data[10] != 0)) ||
         data[10] > 1 || data[11] == 0 || data[11] > 16) {
         nfca_session_close();
         return STATUS_PAR_ERR;
@@ -66,7 +78,7 @@ uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output, ui
     uint8_t offset = profiled ? MF1_CAPTURE_STATS_BYTES : 0;
     uint16_t status = mf1_collect_observations(data[1], data[0], bytes_to_num(data + 2, 6),
         data[9], data[8], data[10] != 0, data[11], output + offset,
-        checked ? data + 13 : NULL, uid_length);
+        checked ? data + 13 : NULL, uid_length, cancelled);
     if (status != STATUS_HF_TAG_OK) nfca_session_close();
     if (offset) { mf1_capture_stats_encode(output); *output_length = offset; }
     if (status == STATUS_HF_TAG_OK) *output_length = offset + data[11] * 12;
@@ -1044,7 +1056,7 @@ uint16_t nfca_command(uint16_t command, uint16_t length, uint8_t *data,
     case DATA_CMD_MF1_UID_SET:
         return uid_set(length, data, output, output_length);
     case DATA_CMD_MF1_COLLECT_OBSERVATIONS:
-        return mf1_collect_command(length, data, output, output_length);
+        return mf1_collect_command(length, data, output, output_length, NULL);
     case DATA_CMD_MF1_READ_SECTOR:
         return read_sector(length, data, output, output_length);
     default: return STATUS_INVALID_CMD;

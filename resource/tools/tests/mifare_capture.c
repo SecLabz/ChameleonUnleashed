@@ -100,6 +100,35 @@ static void checked_capture(void) {
     reply = cmd_processor_mf1_collect_observations(2023, 0, sizeof(data), data);
     assert(reply->status == STATUS_HF_TAG_NO && reply->length == 0 && scans == 1 && auth_calls == 0);
 }
+static int cancel_after;
+static bool capture_cancelled(void) { return send_calls >= cancel_after; }
+
+static void cancellable_capture(void) {
+    uint8_t data[17];
+    memcpy(data, request(0, 2), 12);
+    data[12] = 4;
+    memcpy(data + 13, tag.uid, 4);
+    uint8_t output[24];
+    uint16_t length;
+
+    reset();
+    cancel_after = 3;
+    assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_HF_TAG_OK);
+    assert(length == sizeof(output) && send_calls == 2);
+
+    for (int completed = 0; completed <= 1; completed++) {
+        reset();
+        cancel_after = completed;
+        assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_CMD_ERR);
+        assert(length == 0 && send_calls == completed && scans == completed);
+    }
+
+    reset();
+    data[10] = 1;
+    assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_PAR_ERR);
+    assert(length == 0 && scans == 0);
+}
+
 static void normalized_capture(void) {
     reset();
     uint8_t *payload = request(0, 2);
@@ -207,6 +236,7 @@ static void legacy_formats(void) {
 int main(void) {
     normalized_capture();
     checked_capture();
+    cancellable_capture();
     rejected_requests();
     profiled_capture();
     legacy_formats();

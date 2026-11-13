@@ -1,23 +1,17 @@
-//! ST25TB progress transport and its existing cancellation sequence.
+//! USB progress frames and the existing out-of-band cancellation sequence.
 use crate::{
     Result,
-    frame::{MAX_PAYLOAD, checksum, encode},
+    frame::{encode, read_frame},
 };
 use std::{
     io::{Read, Write},
-    ops::Range,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
-const FRAME_HEADER_BYTES: usize = 9;
-const FRAME_START: [u8; 2] = [0x11, 0xef];
-const FRAME_COMMAND: Range<usize> = 2..4;
-const FRAME_STATUS: Range<usize> = 4..6;
-const FRAME_LENGTH: Range<usize> = 6..8;
 const STATUS_REQUEST: u16 = 0;
 const STATUS_PROGRESS: u16 = 0x79;
-const CANCEL_SEQUENCE: &[u8] = b"\x03ST25STOP";
+pub(crate) const CANCEL_SEQUENCE: &[u8] = b"\x03ST25STOP";
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn exchange(
@@ -33,25 +27,9 @@ pub fn exchange(
     let mut deadline = Instant::now() + timeout;
     let mut stop_sent = false;
     loop {
-        let mut header = [0u8; FRAME_HEADER_BYTES];
-        read_stream(port, &mut header, &mut deadline, cancelled, &mut stop_sent)?;
-        if header[..FRAME_START.len()] != FRAME_START
-            || checksum(&header) != 0
-            || u16::from_be_bytes(header[FRAME_COMMAND].try_into()?) != command
-        {
-            return Err("Invalid streaming response header".into());
-        }
-        let status = u16::from_be_bytes(header[FRAME_STATUS].try_into()?);
-        let length = u16::from_be_bytes(header[FRAME_LENGTH].try_into()?) as usize;
-        if length > MAX_PAYLOAD {
-            return Err("Streaming response exceeds 4096 bytes".into());
-        }
-        let mut payload = vec![0; length + 1];
-        read_stream(port, &mut payload, &mut deadline, cancelled, &mut stop_sent)?;
-        if checksum(&payload) != 0 {
-            return Err("Invalid streaming response payload".into());
-        }
-        payload.pop();
+        let (status, payload) = read_frame(command, |bytes| {
+            read_stream(port, bytes, &mut deadline, cancelled, &mut stop_sent)
+        })?;
         if status != STATUS_PROGRESS {
             return Ok((status, payload));
         }

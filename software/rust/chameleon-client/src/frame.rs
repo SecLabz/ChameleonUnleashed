@@ -20,7 +20,7 @@ pub fn encode(command: u16, status: u16, data: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(crate) fn checksum(bytes: &[u8]) -> u8 {
+fn checksum(bytes: &[u8]) -> u8 {
     0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)))
 }
 
@@ -33,8 +33,15 @@ pub fn exchange(
     let deadline = Instant::now() + timeout;
     port.write_all(&encode(command, 0, data)?)?;
     port.flush()?;
+    read_frame(command, |bytes| read_before(port, bytes, deadline))
+}
+
+pub(crate) fn read_frame(
+    command: u16,
+    mut read_exact: impl FnMut(&mut [u8]) -> Result<()>,
+) -> Result<(u16, Vec<u8>)> {
     let mut header = [0u8; 9];
-    read_before(port, &mut header, deadline)?;
+    read_exact(&mut header)?;
     if header[..2] != [0x11, 0xef] || checksum(&header) != 0 {
         return Err("Invalid response header checksum".into());
     }
@@ -46,7 +53,7 @@ pub fn exchange(
         return Err("Response exceeds 4096 bytes".into());
     }
     let mut payload = vec![0; length + 1];
-    read_before(port, &mut payload, deadline)?;
+    read_exact(&mut payload)?;
     if checksum(&payload) != 0 {
         return Err("Invalid response payload checksum".into());
     }

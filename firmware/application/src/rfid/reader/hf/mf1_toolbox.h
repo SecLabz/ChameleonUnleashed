@@ -161,7 +161,8 @@ uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_co
  * A nonzero uid_length binds capture to that full UID. */
 uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
-    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length);
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,
+    bool (*cancelled)(void));
 
 #include "mf1_darkside.h"
 

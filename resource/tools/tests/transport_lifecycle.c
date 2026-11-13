@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
+#include "data_cmd.h"
 #include "usb_main.h"
 #include "usb_tearoff.h"
 
@@ -47,11 +48,12 @@ static unsigned tud_cdc_available(void) {return incoming;}
 static unsigned tud_cdc_read(void *data, unsigned size) {(void)data;(void)size;unsigned n=incoming;incoming=0;return n;}
 static void tud_cdc_read_flush(void) {incoming=0;rx_flushed++;}
 static void tud_cdc_write_clear(void) {usb_queued=0;tx_flushed++;}
-static bool inside, pending;
+static bool inside;
+static uint16_t pending;
 static uint8_t received[128];
 static unsigned received_length;
 bool data_frame_usb_inside_frame(void) { return inside; }
-bool data_frame_usb_pending(uint16_t command) { assert(command==2310); return pending; }
+bool data_frame_usb_pending(uint16_t command) { return command == pending; }
 void data_frame_receive(const uint8_t *data,uint16_t size) {
     assert(received_length+size<=sizeof(received));
     memcpy(received+received_length,data,size);received_length+=size;
@@ -123,13 +125,18 @@ int main(void) {
     tud_cdc_line_state_cb(0,false,false);
     assert(usb_cdc_tearoff_cancelled() && !final_length);
     usb_tearoff_end();
-    pending=true;usb_cdc_request_end();
+    pending=DATA_CMD_ST25TB_TEAROFF;usb_cdc_request_end();
     usb_tearoff_receive(marker,sizeof(marker));assert(usb_cdc_tearoff_cancelled());
     uint8_t rejected[10]={0};
     data_frame_tx_t rejected_response={.buffer=rejected,.length=sizeof(rejected)};
     response_source=DATA_SOURCE_BLE;auto_response_data(&rejected_response);assert(usb_cdc_tearoff_cancelled());
     response_source=DATA_SOURCE_USB;auto_response_data(&rejected_response);assert(!usb_cdc_tearoff_cancelled());
-    pending=false;usb_cdc_tearoff_begin();assert(!usb_cdc_tearoff_cancelled());
+    pending = DATA_CMD_MF1_COLLECT_CANCELLABLE;
+    usb_tearoff_receive(marker, sizeof(marker));
+    usb_cdc_tearoff_begin();
+    assert(usb_cdc_tearoff_cancelled());
+    usb_tearoff_end();
+    pending=0;usb_cdc_tearoff_begin();assert(!usb_cdc_tearoff_cancelled());
     usb_cdc_tearoff_end();
     usb_cdc_tearoff_begin();
     tud_event_hook_cb(0,DCD_EVENT_BUS_RESET,true);

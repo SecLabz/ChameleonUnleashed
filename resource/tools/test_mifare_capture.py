@@ -42,7 +42,7 @@ def capture_wrapper():
 static data_frame_tx_t *cmd_processor_mf1_collect_observations(uint16_t cmd,
     uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t output[272]; uint16_t count;
-    status = mf1_collect_command(length, data, output, &count);
+    status = mf1_collect_command(length, data, output, &count, NULL);
     return data_frame_make(cmd, status, count, output);
 }
 """
@@ -137,7 +137,7 @@ class CaptureContract(unittest.TestCase):
         ])
         shared = (HF / 'nfca_commands.c').read_text()
         functions = '\n'.join(function(shared, name) for name in [
-            'nfca_prepare', 'nfca_finish', 'mf1_collect_command']) + '\n' + capture_wrapper() + '\n' + functions
+            'nfca_keeps_session', 'nfca_prepare', 'nfca_finish', 'mf1_collect_command']) + '\n' + capture_wrapper() + '\n' + functions
         functions += '\n' + function((HF / 'hf_reader.c').read_text(), 'hf_reader_supports')
         fixture = (Path(__file__).parent / 'tests/mifare_session.c').read_text()
         fixture = fixture.replace('/* SESSION FUNCTIONS */', 'static bool ble_slave_rf_only(void) { return false; }\n' + session)

@@ -162,7 +162,7 @@ impl Client {
             }
         }
     }
-    /// Exchange ST25TB progress frames using the existing cancellation sequence.
+    /// Exchange cancellable USB frames and deliver progress until the terminal reply.
     pub fn request_stream(
         &mut self,
         command: u16,
