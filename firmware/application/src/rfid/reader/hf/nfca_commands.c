@@ -962,6 +962,25 @@ static uint16_t maintenance(uint16_t size, const uint8_t *data,
     return status;
 }
 
+uint16_t nfca_check_keys_on_block(uint16_t length, uint8_t *data, uint8_t *output,
+                                  uint16_t *output_length, const uint8_t *expected_uid,
+                                  uint8_t uid_length) {
+    *output_length = 0;
+    if (length < 9 || data[2] * 6 + 3 != length) return STATUS_PAR_ERR;
+    mf1_toolbox_check_keys_on_block_in_t in = {
+        .block = data[0], .key_type = data[1], .keys_len = data[2],
+        .keys = (mf1_key_t *)(data + 3),
+        .expected_uid = expected_uid, .uid_length = uid_length
+    };
+    mf1_toolbox_check_keys_on_block_out_t out;
+    uint16_t status = mf1_toolbox_check_keys_on_block(&in, &out);
+    if (!uid_length || status == STATUS_HF_TAG_OK || status == STATUS_MF_ERR_AUTH) {
+        memcpy(output, &out, sizeof(out));
+        *output_length = sizeof(out);
+    }
+    return status;
+}
+
 uint16_t nfca_command(uint16_t command, uint16_t length, uint8_t *data,
                      uint8_t *output, uint16_t *output_length) {
     *output_length = 0;
@@ -1008,17 +1027,8 @@ uint16_t nfca_command(uint16_t command, uint16_t length, uint8_t *data,
         output[0] = type; *output_length = 1;
         return status;
     }
-    case DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK: {
-        if (length < 9 || data[2] * 6 + 3 != length) return STATUS_PAR_ERR;
-        mf1_toolbox_check_keys_on_block_in_t in = {
-            .block = data[0], .key_type = data[1], .keys_len = data[2],
-            .keys = (mf1_key_t *)(data + 3)
-        };
-        mf1_toolbox_check_keys_on_block_out_t out;
-        uint16_t status = mf1_toolbox_check_keys_on_block(&in, &out);
-        memcpy(output, &out, sizeof(out)); *output_length = sizeof(out);
-        return status;
-    }
+    case DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK:
+        return nfca_check_keys_on_block(length, data, output, output_length, NULL, 0);
     case DATA_CMD_MF1_READ_ONE_BLOCK: {
         if (length != 8) return STATUS_PAR_ERR;
         uint16_t status = auth_key_use_522_hw(data[1], data[0], data + 2);

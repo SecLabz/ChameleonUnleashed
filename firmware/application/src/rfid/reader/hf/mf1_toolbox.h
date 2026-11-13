@@ -83,6 +83,8 @@ typedef struct {
     uint8_t key_type;
     uint8_t keys_len;
     mf1_key_t *keys;
+    const uint8_t *expected_uid;
+    uint8_t uid_length;
 } mf1_toolbox_check_keys_on_block_in_t;
 
 typedef struct {

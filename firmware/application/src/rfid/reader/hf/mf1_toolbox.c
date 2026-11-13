@@ -1356,6 +1356,10 @@ uint16_t mf1_toolbox_check_keys_on_block(
     mf1_toolbox_report_healthy();
     uint8_t status = pcd_14a_reader_scan_auto(p_tag_info);
     if (status != STATUS_HF_TAG_OK) return status;
+    if (in->uid_length && (p_tag_info->uid_len != in->uid_length ||
+        memcmp(p_tag_info->uid, in->expected_uid, in->uid_length) != 0)) {
+        return STATUS_HF_TAG_NO;
+    }
     uint32_t cuid = get_u32_tag_uid(p_tag_info);
     struct Crypto1State cipher = {0, 0};
 
