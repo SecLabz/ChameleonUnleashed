@@ -150,6 +150,8 @@ mf1_toolbox_check_keys_on_block_in_t *in,
 mf1_toolbox_check_keys_on_block_out_t *out
 );
 
+const picc_14a_tag_t *mf1_toolbox_last_tag(void);
+
 uint8_t mf1_hardnested_nonces_acquire(bool slow, uint8_t blkKnown, uint8_t typKnown, uint64_t keyKnown,
 uint8_t targetBlk, uint8_t targetTyp, uint8_t *nonces, uint16_t noncesMax, uint8_t *num_nonces);
 
@@ -159,6 +161,13 @@ uint8_t mf1_static_encrypted_nonces_acquire(uint64_t keyKnown, uint8_t sector_co
  * bytes. count is 1..16; output has count * 12 bytes. No partial result on error.
  * chained authenticates the source once more before requesting the target.
  * A nonzero uid_length binds capture to that full UID. */
+/* Collect up to 16 observations, optionally skipping the initial discovery scan
+ * when a session tag is already known. */
+uint8_t mf1_collect_observations_cached(uint8_t source_block, uint8_t source_type,
+    uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,
+    const picc_14a_tag_t *cached_tag, bool after_nested, bool (*cancelled)(void));
+
 uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
     uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,

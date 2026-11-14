@@ -4,17 +4,19 @@
 #include "desfire_reader.h"
 
 static bool active, prepared, reading;
-static uint32_t updated;
+static uint32_t updated, generation;
 
 void nfca_session_close(void) {
     desfire_reader_invalidate();
     if (active) pcd_14a_reader_antenna_off();
+    if (active || prepared || reading) generation++;
     active = prepared = reading = false;
 }
 
 void nfca_session_open(void) {
     nfca_session_close();
     active = true;
+    generation++;
     updated = app_timer_cnt_get();
 }
 
@@ -40,6 +42,10 @@ bool nfca_session_finish(void) {
     prepared = true;
     updated = app_timer_cnt_get();
     return true;
+}
+
+uint32_t nfca_session_generation(void) {
+    return generation;
 }
 
 void nfca_session_poll(void) {

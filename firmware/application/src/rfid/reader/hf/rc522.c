@@ -67,12 +67,12 @@ uint8_t read_register_single(uint8_t Address) {
 
     Address = (uint8_t)(((Address << 1) & 0x7E) | 0x80);
 
+    NRF_SPI0->EVENTS_READY = 0;
+    NRF_SPI0->TXD = Address;
     NRF_SPI0->TXD = Address;
     while (NRF_SPI0->EVENTS_READY == 0);
     NRF_SPI0->EVENTS_READY = 0;
     (void)NRF_SPI0->RXD;
-
-    NRF_SPI0->TXD = Address;
     while (NRF_SPI0->EVENTS_READY == 0);
     NRF_SPI0->EVENTS_READY = 0;
     Address = NRF_SPI0->RXD;
@@ -83,23 +83,29 @@ uint8_t read_register_single(uint8_t Address) {
 }
 
 void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len) {
+    if (len == 0) {
+        return;
+    }
     RC522_DOSEL;
 
-    Address = (((Address << 1) & 0x7E) | 0x80);
+    Address = (uint8_t)(((Address << 1) & 0x7E) | 0x80);
 
-    NRF_SPI0->TXD = Address;
-    while (NRF_SPI0->EVENTS_READY == 0);    // Waiting for transmission ends
     NRF_SPI0->EVENTS_READY = 0;
-    (void)NRF_SPI0->RXD;    //Read once and give a level
+    NRF_SPI0->TXD = Address;
+    NRF_SPI0->TXD = Address;
+    while (NRF_SPI0->EVENTS_READY == 0);
+    NRF_SPI0->EVENTS_READY = 0;
+    (void)NRF_SPI0->RXD;
 
-    uint8_t i = 0;
-    do {
-        //Then start receiving data
+    for (uint8_t i = 0; i + 1 < len; i++) {
         NRF_SPI0->TXD = Address;
-        while (NRF_SPI0->EVENTS_READY == 0);    //Waiting for transmission
+        while (NRF_SPI0->EVENTS_READY == 0);
         NRF_SPI0->EVENTS_READY = 0;
-        pInBuffer[i] = NRF_SPI0->RXD;    // Read once and give a level
-    } while (++i < len);
+        pInBuffer[i] = NRF_SPI0->RXD;
+    }
+    while (NRF_SPI0->EVENTS_READY == 0);
+    NRF_SPI0->EVENTS_READY = 0;
+    pInBuffer[len - 1] = NRF_SPI0->RXD;
 
     RC522_UNSEL;
 }
@@ -112,16 +118,12 @@ void read_register_buffer(uint8_t Address, uint8_t *pInBuffer, uint8_t len) {
 void ONCE_OPT write_register_single(uint8_t Address, uint8_t value) {
     RC522_DOSEL;
 
-    Address = ((Address << 1) & 0x7E);
-
-    // First pass the address first pass the address
-    NRF_SPI0->TXD = Address;
+    NRF_SPI0->EVENTS_READY = 0;
+    NRF_SPI0->TXD = (uint8_t)((Address << 1) & 0x7E);
+    NRF_SPI0->TXD = value;
     while (NRF_SPI0->EVENTS_READY == 0);
     NRF_SPI0->EVENTS_READY = 0;
     (void)NRF_SPI0->RXD;
-
-    //  Passing address
-    NRF_SPI0->TXD = value;
     while (NRF_SPI0->EVENTS_READY == 0);
     NRF_SPI0->EVENTS_READY = 0;
     (void)NRF_SPI0->RXD;
@@ -130,23 +132,27 @@ void ONCE_OPT write_register_single(uint8_t Address, uint8_t value) {
 }
 
 void write_register_buffer(uint8_t Address, uint8_t *values, uint8_t len) {
+    if (len == 0) {
+        return;
+    }
     RC522_DOSEL;
 
-    Address = ((Address << 1) & 0x7E);
-
-    NRF_SPI0->TXD = Address;
-    while (NRF_SPI0->EVENTS_READY == 0);
     NRF_SPI0->EVENTS_READY = 0;
-    (void)NRF_SPI0->RXD;
+    NRF_SPI0->TXD = (uint8_t)((Address << 1) & 0x7E);
+    NRF_SPI0->TXD = values[0];
 
-    uint8_t i = 0;
-    do {
-        // Passing address
-        NRF_SPI0->TXD = values[i];
+    for (uint8_t i = 1; i < len; i++) {
         while (NRF_SPI0->EVENTS_READY == 0);
         NRF_SPI0->EVENTS_READY = 0;
         (void)NRF_SPI0->RXD;
-    } while (++i < len);
+        NRF_SPI0->TXD = values[i];
+    }
+    while (NRF_SPI0->EVENTS_READY == 0);
+    NRF_SPI0->EVENTS_READY = 0;
+    (void)NRF_SPI0->RXD;
+    while (NRF_SPI0->EVENTS_READY == 0);
+    NRF_SPI0->EVENTS_READY = 0;
+    (void)NRF_SPI0->RXD;
 
     RC522_UNSEL;
 }
@@ -282,16 +288,9 @@ static bool wait_for_irq(uint8_t wait_for, uint8_t *irq) {
     return completed;
 }
 
-/**
-* @brief  : Through RC522 and ISO14443 cartoon communication
-* @param  : Command: RC522 command word
-*          PIN: Data sent to the card through RC522
-*          Inlenbyte: The byte length of sending the data
-*          POUT: The receiving card returns the data
-*          POUTLENBIT: Bit the length of the data
-* @retval : Status value mi_ok, successful
-*/
-uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InLenByte, uint8_t *pOut, uint16_t *pOutLenBit, uint16_t maxOutLenBit) {
+static uint8_t bytes_transfer_framed(uint8_t Command, uint8_t *pIn, uint8_t InLenByte, uint8_t *pOut,
+                                     uint16_t *pOutLenBit, uint16_t maxOutLenBit,
+                                     bool explicit_framing, uint8_t framing, uint8_t restore_framing) {
     uint8_t status      = STATUS_HF_ERR_STAT;
     uint8_t waitFor     = 0x00;
     uint8_t lastBits    = 0;
@@ -309,20 +308,27 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
             break;
     }
 
-    write_register_single(CommandReg,       PCD_IDLE);      //  Flushbuffer clearing the internal FIFO read and writing pointer and ErRreg's Bufferovfl logo position is cleared
-    write_register_single(ComIrqReg,        0x7F);          //  Clear all seven interrupt request bits
-    write_register_single(FIFOLevelReg,     0x80);          //  FlushBuffer
+    write_register_single(CommandReg,   PCD_IDLE);    //  Flushbuffer clearing the internal FIFO read and writing pointer and ErRreg's Bufferovfl logo position is cleared
+    write_register_single(ComIrqReg,    0x7F);        //  Clear all seven interrupt request bits
+    write_register_single(FIFOLevelReg, 0x80);        //  FlushBuffer
 
     write_register_buffer(FIFODataReg, pIn, InLenByte); // Write data into FIFODATA
-    write_register_single(CommandReg, Command);             // Write command
+    write_register_single(CommandReg, Command);               // Write command
 
     if (Command == PCD_TRANSCEIVE) {
-        set_register_mask(BitFramingReg, 0x80);     // StartSend places to start the data to send this bit and send and receive commands when it is valid
+        if (explicit_framing) {
+            write_register_single(BitFramingReg, framing | 0x80);
+        } else {
+            set_register_mask(BitFramingReg, 0x80);     // StartSend places to start the data to send this bit and send and receive commands when it is valid
+        }
     }
 
     if (pOut == NULL) {
         // If the developer does not need to receive data, then return directly after the sending!
         while ((read_register_single(Status2Reg) & 0x07) == 0x03);
+        if (Command == PCD_TRANSCEIVE && explicit_framing) {
+            write_register_single(BitFramingReg, restore_framing);
+        }
         return STATUS_HF_TAG_OK;
     }
     // Reset the length of the received data
@@ -332,7 +338,11 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
     // NRF_LOG_INFO("N = %02x\n", n);
 
     if (Command == PCD_TRANSCEIVE) {
-        clear_register_mask(BitFramingReg, 0x80);       // Clean up allows the startsend bit and the bit length position
+        if (explicit_framing) {
+            write_register_single(BitFramingReg, restore_framing);
+        } else {
+            clear_register_mask(BitFramingReg, 0x80);   // Clean up allows the startsend bit and the bit length position
+        }
     }
 
     // Whether to receive timeout
@@ -369,10 +379,10 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
             // Occasionally occur
             // NRF_LOG_INFO("COM OK\n");
             if (Command == PCD_TRANSCEIVE) {
-                n = read_register_single(FIFOLevelReg);                             // Read the number of bytes saved in FIFO
+                n = read_register_single(FIFOLevelReg);                               // Read the number of bytes saved in FIFO
                 if (n == 0) { n = 1; }
 
-                lastBits = read_register_single(Control522Reg) & 0x07;          // Finally receive the validity of the byte
+                lastBits = read_register_single(Control522Reg) & 0x07;                // Finally receive the validity of the byte
 
                 if (lastBits) { *pOutLenBit = (n - 1) * 8 + lastBits; } // N -byte number minus 1 (last byte)+ the number of bits of the last bit The total number of data readings read
                 else { *pOutLenBit = n * 8; }                           // Finally received the entire bytes received by the byte valid
@@ -399,7 +409,7 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
         // NRF_LOG_INFO("Tag lost(timeout).\n");
     }
 
-    if (status != STATUS_HF_TAG_OK) {
+    if (status != STATUS_HF_TAG_OK && (read_register_single(Status2Reg) & 0x08)) {
         // If there are certain operations,
         // We may need to remove MFCrypto1On This register logo,
         // Because it may be because of the error encryption communication caused by verification
@@ -408,6 +418,19 @@ uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InL
 
     // NRF_LOG_INFO("Com status: %d\n", status);
     return status;
+}
+
+/**
+* @brief  : Through RC522 and ISO14443 cartoon communication
+* @param  : Command: RC522 command word
+*          PIN: Data sent to the card through RC522
+*          Inlenbyte: The byte length of sending the data
+*          POUT: The receiving card returns the data
+*          POUTLENBIT: Bit the length of the data
+* @retval : Status value mi_ok, successful
+*/
+uint8_t pcd_14a_reader_bytes_transfer(uint8_t Command, uint8_t *pIn, uint8_t InLenByte, uint8_t *pOut, uint16_t *pOutLenBit, uint16_t maxOutLenBit) {
+    return bytes_transfer_framed(Command, pIn, InLenByte, pOut, pOutLenBit, maxOutLenBit, false, 0, 0);
 }
 
 /**
@@ -459,20 +482,27 @@ uint8_t pcd_14a_reader_bits_transfer(uint8_t *pTx, uint16_t  szTxBits, uint8_t *
         modulus = szTxBits;
     }
 
-    set_register_mask(BitFramingReg, modulus);  // Set the last byte transmission n bit
-    set_register_mask(MfRxReg, 0x10);  // Need to close the puppet school test to enable
+    uint8_t prev_framing = read_register_single(BitFramingReg);
+    uint8_t prev_mfrx = read_register_single(MfRxReg);
+    if (!(prev_mfrx & 0x10)) {
+        write_register_single(MfRxReg, prev_mfrx | 0x10);  // Need to close the puppet school test to enable
+    }
 
-    status = pcd_14a_reader_bytes_transfer(
+    status = bytes_transfer_framed(
                  PCD_TRANSCEIVE,
                  buffer,
                  dataLen,                // Data byte count
                  buffer,                 // Receiving buffer
                  pRxLenBit,              // The length of the received data, note that it is the length of the special stream
-                 U8ARR_BIT_LEN(buffer)   // The upper limit of the data that can be collected
+                 U8ARR_BIT_LEN(buffer),  // The upper limit of the data that can be collected
+                 true,
+                 prev_framing | modulus,
+                 prev_framing
              );
 
-    clear_register_mask(BitFramingReg, modulus);
-    clear_register_mask(MfRxReg, 0x10);  // Enable Qiqi school inspection
+    if (!(prev_mfrx & 0x10)) {
+        write_register_single(MfRxReg, prev_mfrx);  // Enable Qiqi school inspection
+    }
 
     // Simply judge the length of data transmission
     if (status != STATUS_HF_TAG_OK) {
@@ -647,7 +677,10 @@ static uint8_t atqa_request(uint8_t *resp, uint16_t resp_max_bit);
 static void abort_nested_auth(void) {
     // End Crypto1 state and send one plain 7-bit WUPA to abort the tag's pending nested auth
     // without waiting for an ATQA receive timeout.
-    clear_register_mask(Status2Reg, 0x08);
+    uint8_t status2 = read_register_single(Status2Reg);
+    if (status2 & 0x08) {
+        write_register_single(Status2Reg, status2 & ~0x08u);
+    }
     write_register_single(CommandReg, PCD_IDLE);
     write_register_single(ComIrqReg, 0x7F);
     write_register_single(FIFOLevelReg, 0x80);
@@ -658,9 +691,20 @@ static void abort_nested_auth(void) {
     m_wakeup_timeout_ticks = APP_TIMER_TICKS(1);
     wait_for_irq(0x10, &irq);
     m_wakeup_timeout_ticks = 0;
-    clear_register_mask(BitFramingReg, 0x07);
     if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
     bsp_delay_us(100);
+}
+
+static uint8_t fast_atqa_once(uint8_t *resp, uint16_t resp_max_bit) {
+    uint16_t len = 0;
+    uint8_t wupa = PICC_REQALL;
+    if (mf1_capture_stats.enabled) mf1_capture_stats.wakeups++;
+    m_wakeup_timeout_ticks = APP_TIMER_TICKS(1);
+    uint8_t status = bytes_transfer_framed(
+        PCD_TRANSCEIVE, &wupa, 1, resp, &len, resp_max_bit, true, 0x07, 0x00);
+    m_wakeup_timeout_ticks = 0;
+    if (status == STATUS_HF_TAG_OK && len == 16) return STATUS_HF_TAG_OK;
+    return atqa_request(resp, resp_max_bit);
 }
 
 /**
@@ -678,7 +722,7 @@ static uint8_t fast_select(picc_14a_tag_t *tag, bool after_nested) {
     if (after_nested) {
         abort_nested_auth();
     }
-    if (atqa_request(dat_buff, U8ARR_BIT_LEN(dat_buff)) != STATUS_HF_TAG_OK) {
+    if (fast_atqa_once(dat_buff, U8ARR_BIT_LEN(dat_buff)) != STATUS_HF_TAG_OK) {
         return STATUS_HF_TAG_NO;
     }
 
@@ -701,7 +745,7 @@ static uint8_t fast_select(picc_14a_tag_t *tag, bool after_nested) {
 
         dat_buff[6] = dat_buff[2] ^ dat_buff[3] ^ dat_buff[4] ^ dat_buff[5];  // calculate BCC
         crc_14a_append(dat_buff, 7);                                      // calculate and add CRC
-        status = pcd_14a_reader_bytes_transfer(PCD_TRANSCEIVE, dat_buff, sizeof(dat_buff), dat_buff, &dat_len, U8ARR_BIT_LEN(dat_buff));
+        status = bytes_transfer_framed(PCD_TRANSCEIVE, dat_buff, sizeof(dat_buff), dat_buff, &dat_len, U8ARR_BIT_LEN(dat_buff), true, 0x00, 0x00);
         // Receive the SAK
         if (status != STATUS_HF_TAG_OK || !dat_len) {
             // printf("SAK Err: %d, %d\r\n", status, dat_len);
@@ -980,7 +1024,7 @@ uint8_t pcd_14a_reader_magic_unlock(bool second) {
     uint8_t recvbuf[1] = { 0x00 };
 
     // Restart communication (very important)
-    pcd_14a_reader_halt_tag();
+    pcd_14a_reader_fast_halt_tag();
 
     // Unlock the first step, send 7bit 0x40
     unlock = PICC_MAGICWUPC1;
@@ -1068,7 +1112,10 @@ uint16_t pcd_14a_reader_mf1_auth(picc_14a_tag_t *tag, uint8_t type, uint8_t addr
     memcpy(&dat_buff[2], pKey, 6);
     get_4byte_tag_uid(tag, &dat_buff[8]);
 
+    uint16_t saved_timeout = g_com_timeout_ms;
+    if (saved_timeout > 4) g_com_timeout_ms = 4;
     pcd_14a_reader_bytes_transfer(PCD_AUTHENT, dat_buff, 12, dat_buff, &data_len, U8ARR_BIT_LEN(dat_buff));
+    g_com_timeout_ms = saved_timeout;
 
     // In order to improve compatibility, we directly judge the implementation of the execution PCD_AUTHENT
     // After the instruction, whether the communication plus position in Status2reg is placed.

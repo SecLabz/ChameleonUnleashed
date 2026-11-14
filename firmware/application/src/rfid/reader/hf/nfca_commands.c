@@ -36,9 +36,13 @@ uint16_t nfca_prepare(uint16_t command, uint16_t length, const uint8_t *data) {
     if (command == DATA_CMD_MF1_MAGIC_PROBE || command == DATA_CMD_MF1_INSPECT || command == DATA_CMD_MF1_MAINTENANCE) {
         nfca_session_close();
     }
-    if (command == DATA_CMD_MF1_READ_SECTOR && length != 8) {
-        if (!nfca_session_reading()) nfca_session_read_open();
-    } else if (nfca_session_reading() || command == DATA_CMD_MF1_READ_SECTOR) {
+    if (command == DATA_CMD_MF1_READ_SECTOR) {
+        if (length == 8) {
+            nfca_session_close();
+        } else if (!nfca_session_reading()) {
+            nfca_session_read_open();
+        }
+    } else if (nfca_session_reading()) {
         nfca_session_close();
     }
     if (command == DATA_CMD_MF1_DARKSIDE_STEP && length >= 3 && data[2] == 0) nfca_session_close();
@@ -61,6 +65,13 @@ void nfca_finish(uint16_t command) {
     mf1_capture_stats.enabled = false;
 }
 
+static void sync_session_tag_cache(uint16_t command);
+static void session_tag_save(const picc_14a_tag_t *tag);
+static void session_tag_load(picc_14a_tag_t *tag);
+static bool session_tag_matches(const uint8_t *uid, uint8_t uid_len);
+static bool session_tag_nested(void);
+static void session_tag_set_nested(bool nested);
+
 uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output,
                              uint16_t *output_length, bool (*cancelled)(void)) {
     *output_length = 0;
@@ -75,11 +86,39 @@ uint16_t mf1_collect_command(uint16_t length, uint8_t *data, uint8_t *output,
         nfca_session_close();
         return STATUS_PAR_ERR;
     }
+    sync_session_tag_cache(cancelled ? DATA_CMD_MF1_COLLECT_CANCELLABLE : DATA_CMD_MF1_COLLECT_OBSERVATIONS);
+
+    hf14a_config_t saved_cfg = *get_hf14a_config();
+    bool restore_cfg = saved_cfg.forcerats != 2;
+    if (restore_cfg) {
+        hf14a_config_t fast_cfg = saved_cfg;
+        fast_cfg.forcerats = 2;
+        set_hf14a_config(&fast_cfg);
+    }
+
+    picc_14a_tag_t cached_tag;
+    bool use_cached = checked && session_tag_matches(data + 13, uid_length);
+    bool was_nested = use_cached && session_tag_nested();
+    if (use_cached) {
+        session_tag_load(&cached_tag);
+    }
+
     uint8_t offset = profiled ? MF1_CAPTURE_STATS_BYTES : 0;
-    uint16_t status = mf1_collect_observations(data[1], data[0], bytes_to_num(data + 2, 6),
+    uint16_t status = mf1_collect_observations_cached(data[1], data[0], bytes_to_num(data + 2, 6),
         data[9], data[8], data[10] != 0, data[11], output + offset,
-        checked ? data + 13 : NULL, uid_length, cancelled);
-    if (status != STATUS_HF_TAG_OK) nfca_session_close();
+        checked ? data + 13 : NULL, uid_length,
+        use_cached ? &cached_tag : NULL, was_nested, cancelled);
+    if (restore_cfg) set_hf14a_config(&saved_cfg);
+    if (status != STATUS_HF_TAG_OK) {
+        nfca_session_close();
+        session_tag_set_nested(false);
+    } else if (nfca_session_active()) {
+        const picc_14a_tag_t *last = mf1_toolbox_last_tag();
+        if (last && last->uid_len) {
+            session_tag_save(last);
+            session_tag_set_nested(true);
+        }
+    }
     if (offset) { mf1_capture_stats_encode(output); *output_length = offset; }
     if (status == STATUS_HF_TAG_OK) *output_length = offset + data[11] * 12;
     return status;
@@ -974,11 +1013,203 @@ static uint16_t maintenance(uint16_t size, const uint8_t *data,
     return status;
 }
 
+static struct {
+    uint8_t uid[10];
+    uint8_t uid_len;
+    uint8_t cascade;
+    uint8_t sak;
+    uint8_t atqa[2];
+    uint32_t gen;
+    bool valid;
+    bool active;
+    bool nested;
+} m_session_tag;
+
+static void session_tag_save(const picc_14a_tag_t *tag) {
+    memcpy(m_session_tag.uid, tag->uid, 10);
+    m_session_tag.uid_len = tag->uid_len;
+    m_session_tag.cascade = tag->cascade;
+    m_session_tag.sak = tag->sak;
+    memcpy(m_session_tag.atqa, tag->atqa, 2);
+    m_session_tag.valid = true;
+    m_session_tag.active = false;
+    m_session_tag.nested = false;
+    m_session_tag.gen = nfca_session_generation();
+}
+
+static void session_tag_load(picc_14a_tag_t *tag) {
+    memcpy(tag->uid, m_session_tag.uid, 10);
+    tag->uid_len = m_session_tag.uid_len;
+    tag->cascade = m_session_tag.cascade;
+    tag->sak = m_session_tag.sak;
+    memcpy(tag->atqa, m_session_tag.atqa, 2);
+    tag->ats_len = 0;
+}
+
+static bool session_tag_matches(const uint8_t *uid, uint8_t uid_len) {
+    return nfca_session_active() && m_session_tag.valid && uid_len > 0 &&
+           m_session_tag.uid_len == uid_len &&
+           memcmp(m_session_tag.uid, uid, uid_len) == 0;
+}
+
+static void session_tag_set_nested(bool nested) {
+    m_session_tag.nested = nested;
+}
+
+static bool session_tag_nested(void) {
+    return m_session_tag.nested;
+}
+
+static void sync_session_tag_cache(uint16_t command) {
+    uint32_t gen = nfca_session_generation();
+    if (!nfca_session_active() || gen != m_session_tag.gen) {
+        m_session_tag.valid = false;
+        m_session_tag.active = false;
+        m_session_tag.nested = false;
+        m_session_tag.gen = gen;
+    }
+    if (command != DATA_CMD_MF1_READ_SECTOR && m_session_tag.active) {
+        pcd_14a_reader_mf1_unauth();
+        m_session_tag.active = false;
+    }
+    if (command != DATA_CMD_MF1_COLLECT_OBSERVATIONS &&
+        command != DATA_CMD_MF1_COLLECT_CANCELLABLE) {
+        m_session_tag.nested = false;
+    }
+}
+
+static uint16_t read_sector_fast(uint16_t length, uint8_t *data, uint8_t *output,
+                                 uint16_t *output_length) {
+    *output_length = 0;
+    bool diagnostic = length >= 9 && length == 10 + data[8] && data[length - 1] == 1;
+    if (length < 8 || (data[0] != 0x60 && data[0] != 0x61) || data[1] >= 40 ||
+        (length != 8 && ((data[8] != 4 && data[8] != 7 && data[8] != 10) ||
+                         (length != 9 + data[8] && !diagnostic)))) {
+        nfca_session_close();
+        return STATUS_PAR_ERR;
+    }
+    if (length == 8) {
+        return read_sector(length, data, output, output_length);
+    }
+    uint8_t first = data[1] < 32 ? data[1] * 4 : 128 + (data[1] - 32) * 16;
+    uint8_t count = data[1] < 32 ? 4 : 16;
+    uint16_t status;
+    picc_14a_tag_t tag;
+    tag.ats_len = 0;
+    bool uid_cached = m_session_tag.valid && m_session_tag.uid_len == data[8] &&
+                      memcmp(m_session_tag.uid, data + 9, data[8]) == 0;
+    if (uid_cached) {
+        session_tag_load(&tag);
+    }
+    if (uid_cached && m_session_tag.active) {
+        status = pcd_14a_reader_mf1_auth(&tag, data[0], first, data + 2);
+        if (status != STATUS_HF_TAG_OK) {
+            pcd_14a_reader_mf1_unauth();
+            m_session_tag.active = false;
+            uid_cached = false;
+        }
+    }
+    if (!uid_cached || !m_session_tag.active) {
+        if (uid_cached) {
+            status = pcd_14a_reader_fast_select(&tag);
+            if (status != STATUS_HF_TAG_OK) uid_cached = false;
+        }
+        if (!uid_cached) {
+            status = pcd_14a_reader_scan_auto(&tag);
+            if (status == STATUS_HF_TAG_OK &&
+                (tag.uid_len != data[8] || memcmp(tag.uid, data + 9, data[8]))) {
+                status = STATUS_HF_TAG_NO;
+            }
+            if (status != STATUS_HF_TAG_OK) {
+                m_session_tag.valid = false;
+                m_session_tag.active = false;
+                nfca_session_close();
+                return status;
+            }
+            session_tag_save(&tag);
+        }
+        status = pcd_14a_reader_mf1_auth(&tag, data[0], first, data + 2);
+    }
+    if (status != STATUS_HF_TAG_OK) {
+        m_session_tag.active = false;
+        if (status == STATUS_MF_ERR_AUTH) {
+            pcd_14a_reader_mf1_unauth();
+        } else {
+            m_session_tag.valid = false;
+            nfca_session_close();
+        }
+        return status;
+    }
+    memset(output, 0, 2 + count * 16);
+    uint16_t mask = 0;
+    uint8_t failed = 0xff;
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t block[16];
+        status = pcd_14a_reader_mf1_read(first + i, block);
+        if (status != STATUS_HF_TAG_OK) {
+            failed = i;
+            break;
+        }
+        memcpy(output + 2 + i * 16, block, 16);
+        mask |= 1u << i;
+    }
+    output[0] = mask >> 8;
+    output[1] = mask;
+    *output_length = 2 + count * 16;
+    if (diagnostic) {
+        uint8_t *tail = output + *output_length;
+        tail[0] = 1;
+        tail[1] = failed;
+        tail[2] = status >> 8;
+        tail[3] = status;
+        *output_length += 4;
+    }
+    if (status != STATUS_HF_TAG_OK) {
+        pcd_14a_reader_mf1_unauth();
+        m_session_tag.active = false;
+        m_session_tag.valid = false;
+        nfca_session_close();
+    } else if (nfca_session_active()) {
+        // Keep the tag active and cipher on so the next sector read chains via HW nested auth.
+        m_session_tag.active = true;
+    } else {
+        pcd_14a_reader_fast_halt_tag();
+        pcd_14a_reader_mf1_unauth();
+        m_session_tag.active = false;
+    }
+    return STATUS_HF_TAG_OK;
+}
+
 uint16_t nfca_check_keys_on_block(uint16_t length, uint8_t *data, uint8_t *output,
                                   uint16_t *output_length, const uint8_t *expected_uid,
                                   uint8_t uid_length) {
     *output_length = 0;
     if (length < 9 || data[2] * 6 + 3 != length) return STATUS_PAR_ERR;
+    sync_session_tag_cache(DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK);
+    if (nfca_session_active() && m_session_tag.valid && data[2] == 1 &&
+        (!uid_length || (m_session_tag.uid_len == uid_length &&
+                         memcmp(m_session_tag.uid, expected_uid, uid_length) == 0))) {
+        picc_14a_tag_t tag;
+        session_tag_load(&tag);
+        if (pcd_14a_reader_fast_select(&tag) == STATUS_HF_TAG_OK) {
+            uint16_t status = pcd_14a_reader_mf1_auth(&tag, data[1], data[0], data + 3);
+            if (status == STATUS_HF_TAG_OK) {
+                pcd_14a_reader_fast_halt_tag();
+                pcd_14a_reader_mf1_unauth();
+                output[0] = 1;
+                memcpy(output + 1, data + 3, 6);
+                *output_length = 7;
+                return STATUS_HF_TAG_OK;
+            }
+            pcd_14a_reader_mf1_unauth();
+            if (status == STATUS_MF_ERR_AUTH) {
+                memset(output, 0, 7);
+                *output_length = 7;
+                return STATUS_MF_ERR_AUTH;
+            }
+        }
+        m_session_tag.valid = false;
+    }
     mf1_toolbox_check_keys_on_block_in_t in = {
         .block = data[0], .key_type = data[1], .keys_len = data[2],
         .keys = (mf1_key_t *)(data + 3),
@@ -986,6 +1217,9 @@ uint16_t nfca_check_keys_on_block(uint16_t length, uint8_t *data, uint8_t *outpu
     };
     mf1_toolbox_check_keys_on_block_out_t out;
     uint16_t status = mf1_toolbox_check_keys_on_block(&in, &out);
+    if (nfca_session_active() && (status == STATUS_HF_TAG_OK || status == STATUS_MF_ERR_AUTH)) {
+        session_tag_save(mf1_toolbox_last_tag());
+    }
     if (!uid_length || status == STATUS_HF_TAG_OK || status == STATUS_MF_ERR_AUTH) {
         memcpy(output, &out, sizeof(out));
         *output_length = sizeof(out);
@@ -996,32 +1230,57 @@ uint16_t nfca_check_keys_on_block(uint16_t length, uint8_t *data, uint8_t *outpu
 uint16_t nfca_command(uint16_t command, uint16_t length, uint8_t *data,
                      uint8_t *output, uint16_t *output_length) {
     *output_length = 0;
+    sync_session_tag_cache(command);
+    bool skip_rats = command == DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK ||
+                     command == DATA_CMD_MF1_COLLECT_OBSERVATIONS ||
+                     command == DATA_CMD_MF1_READ_SECTOR ||
+                     command == DATA_CMD_MF1_DETECT_PRNG ||
+                     command == DATA_CMD_TYPE2_READ ||
+                     command == DATA_CMD_MF1_DARKSIDE_STEP;
+    hf14a_config_t saved_cfg;
+    if (skip_rats) {
+        saved_cfg = *get_hf14a_config();
+        hf14a_config_t fast_cfg = saved_cfg;
+        fast_cfg.forcerats = 2;
+        set_hf14a_config(&fast_cfg);
+    }
+    uint16_t status = STATUS_INVALID_CMD;
     switch (command) {
     case DATA_CMD_MF1_UID_SPECIAL:
-        return mf1_uid_special(length, data, output, output_length);
+        status = mf1_uid_special(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_INSPECT:
-        return mf1_classic_inspect(length, data, output, output_length);
+        status = mf1_classic_inspect(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_MAINTENANCE:
-        return maintenance(length, data, output, output_length);
+        status = maintenance(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_BLOCK0_SET:
-        return block0_set(length, data, output, output_length);
+        status = block0_set(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_TRAILER_SET:
-        return trailer_set(length, data, output, output_length);
+        status = trailer_set(length, data, output, output_length);
+        break;
     case DATA_CMD_TYPE2_AUTH_READ:
-        return type2_auth_read(length, data, output, output_length);
+        status = type2_auth_read(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_DARKSIDE_STEP:
-        return mf1_darkside_step(length, data, output, output_length);
+        status = mf1_darkside_step(length, data, output, output_length);
+        break;
     case DATA_CMD_TYPE2_READ: {
-        uint16_t status = type2_read_command(length, data, output, output_length);
+        status = type2_read_command(length, data, output, output_length);
         if (status == STATUS_HF_TAG_NO || status >= STATUS_PAR_ERR) nfca_session_close();
-        return status;
+        break;
     }
     case DATA_CMD_HF14A_SCAN: {
         picc_14a_tag_t tag;
         // Opt-in discovery polling; empty requests keep the full retry policy.
-        uint16_t status = length == 1 && data[0] == 1
+        status = length == 1 && data[0] == 1
             ? pcd_14a_reader_scan_poll(&tag) : pcd_14a_reader_scan_auto(&tag);
-        if (status != STATUS_HF_TAG_OK) return status;
+        if (status != STATUS_HF_TAG_OK) break;
+        if (nfca_session_active()) {
+            session_tag_save(&tag);
+        }
         uint16_t offset = 0;
         output[offset++] = tag.uid_len;
         memcpy(output + offset, tag.uid, tag.uid_len); offset += tag.uid_len;
@@ -1030,35 +1289,45 @@ uint16_t nfca_command(uint16_t command, uint16_t length, uint8_t *data,
         output[offset++] = tag.ats_len;
         memcpy(output + offset, tag.ats, tag.ats_len); offset += tag.ats_len;
         *output_length = offset;
-        return status;
+        break;
     }
     case DATA_CMD_MF1_DETECT_PRNG: {
         uint8_t type;
-        uint16_t status = check_prng_type((mf1_prng_type_t *)&type);
-        if (status != STATUS_HF_TAG_OK) return status;
+        status = check_prng_type((mf1_prng_type_t *)&type);
+        if (status != STATUS_HF_TAG_OK) break;
         output[0] = type; *output_length = 1;
-        return status;
+        break;
     }
     case DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK:
-        return nfca_check_keys_on_block(length, data, output, output_length, NULL, 0);
+        status = nfca_check_keys_on_block(length, data, output, output_length, NULL, 0);
+        break;
     case DATA_CMD_MF1_READ_ONE_BLOCK: {
-        if (length != 8) return STATUS_PAR_ERR;
-        uint16_t status = auth_key_use_522_hw(data[1], data[0], data + 2);
-        if (status != STATUS_HF_TAG_OK) return status;
+        if (length != 8) { status = STATUS_PAR_ERR; break; }
+        status = auth_key_use_522_hw(data[1], data[0], data + 2);
+        if (status != STATUS_HF_TAG_OK) break;
         status = pcd_14a_reader_mf1_read(data[1], output);
         if (status == STATUS_HF_TAG_OK) *output_length = 16;
-        return status;
+        break;
     }
     case DATA_CMD_NFCA_WRITE_USER_UNIT:
-        return write_user_unit(length, data, output, output_length);
+        status = write_user_unit(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_MAGIC_PROBE:
-        return mf1_magic_probe(length, data, output, output_length);
+        status = mf1_magic_probe(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_UID_SET:
-        return uid_set(length, data, output, output_length);
+        status = uid_set(length, data, output, output_length);
+        break;
     case DATA_CMD_MF1_COLLECT_OBSERVATIONS:
-        return mf1_collect_command(length, data, output, output_length, NULL);
+        status = mf1_collect_command(length, data, output, output_length, NULL);
+        break;
     case DATA_CMD_MF1_READ_SECTOR:
-        return read_sector(length, data, output, output_length);
-    default: return STATUS_INVALID_CMD;
+        status = read_sector_fast(length, data, output, output_length);
+        break;
+    default:
+        status = STATUS_INVALID_CMD;
+        break;
     }
+    if (skip_rats) set_hf14a_config(&saved_cfg);
+    return status;
 }

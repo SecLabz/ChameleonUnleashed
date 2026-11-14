@@ -68,12 +68,16 @@ static void nonce_distance(uint32_t *msb, uint32_t *lsb) {
 *
 */
 static bool check_lfsr_prng(uint32_t nonce) {
-    // Give the initial coordinate value
-    uint32_t msb = nonce >> 16;
-    uint32_t lsb = nonce & 0xffff;
-    //The coordinates are passed in direct operation, and the rumors are also indirectly spread by the passing parameters.
-    nonce_distance(&msb, &lsb);
-    return ((65535 - msb + lsb) % 65535) == 16;
+    uint16_t msb = nonce >> 16;
+    uint16_t lsb = nonce & 0xffff;
+    if (msb == 0 || lsb == 0) {
+        return false;
+    }
+    uint16_t x = (uint16_t)((msb >> 8) | (msb << 8));
+    for (uint8_t i = 0; i < 16; i++) {
+        x = (uint16_t)((x >> 1) | (uint16_t)((x ^ (x >> 2) ^ (x >> 3) ^ (x >> 5)) << 15));
+    }
+    return (uint16_t)((x & 0xff) << 8 | (x >> 8)) == lsb;
 }
 
 /**
@@ -98,22 +102,16 @@ static inline void reset_radio_field_with_delay(void) {
 *
 */
 static uint8_t send_cmd(struct Crypto1State *pcs, uint8_t encrypted, uint8_t cmd, uint8_t data, uint8_t *status, uint8_t *answer, uint8_t *answer_parity, uint16_t answer_max_bit) {
-    // Here we set directly to static
-    static uint8_t pos;
-    static uint16_t len;
-    static uint8_t dcmd[4];
-    static uint8_t ecmd[4];
-    static uint8_t par[4];
+    uint8_t pos;
+    uint16_t len = 0;
+    uint8_t dcmd[4];
+    uint8_t ecmd[4];
+    uint8_t par[4];
 
-    dcmd[0] = ecmd[0] = cmd;
-    dcmd[1] = ecmd[1] = data;
+    dcmd[0] = cmd;
+    dcmd[1] = data;
 
     crc_14a_append(dcmd, 2);
-
-    ecmd[2] = dcmd[2];
-    ecmd[3] = dcmd[3];
-
-    len = 0;
 
     if (pcs && encrypted) {
         for (pos = 0; pos < 4; pos++) {
@@ -176,9 +174,9 @@ static uint8_t send_cmd(struct Crypto1State *pcs, uint8_t encrypted, uint8_t cmd
 */
 static uint8_t authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyType,
     uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr, bool *retry_silence) {
-    static uint8_t status;                                      // tag response status
-    static uint16_t len;                                        // tag response length
-    static uint32_t pos, nt, ntpp;                              // Supplied tag nonce
+    uint8_t status;                                             // tag response status
+    uint16_t len;                                               // tag response length
+    uint32_t pos, nt, ntpp;                                     // Supplied tag nonce
     static const uint8_t nr[]   = { 0x12, 0x34, 0x56, 0x78 };   // Use a fixed card to random NR, which is Nonce Reader.
     uint8_t par[]               = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     uint8_t mf_nr_ar[]          = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -230,14 +228,15 @@ static uint8_t authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, u
         par[pos] = filter(pcs->odd) ^ oddparity8(nt);
     }
 
-    // A fast dictionary pass shortens only the wait after the reader's proof.
-    // A silent card may still be slow, so this miss can be retried at full speed.
-    uint16_t timeout = retry_silence ? pcd_14a_reader_timeout_get() : 0;
-    if (timeout > 4) pcd_14a_reader_timeout_set(4);
-    status = pcd_14a_reader_bits_transfer(mf_nr_ar, 64, par, answer, parity, &len, U8ARR_BIT_LEN(answer));
-    if (timeout > 4) {
+    // Classic authentication replies to {nr, ar} within ~1.2 ms; cap the fast
+    // pass at 2 ms and slow/single retries at 4 ms instead of 25 ms per miss.
+    uint16_t timeout = pcd_14a_reader_timeout_get();
+    uint16_t cap = retry_silence ? 2 : 4;
+    if (timeout > cap) pcd_14a_reader_timeout_set(cap);
+    status = pcd_14a_reader_bits_transfer(mf_nr_ar, 64, par, answer, NULL, &len, U8ARR_BIT_LEN(answer));
+    if (timeout > cap) {
         pcd_14a_reader_timeout_set(timeout);
-        *retry_silence = status == STATUS_HF_TAG_NO;
+        if (retry_silence) *retry_silence = status == STATUS_HF_TAG_NO;
     }
     if (status == STATUS_HF_TAG_OK && len == 32) {
         ntpp = prng_successor(nt, 32) ^ crypto1_word(pcs, 0, 0);
@@ -643,7 +642,7 @@ uint8_t check_tag_response_nt(picc_14a_tag_t *tag, uint32_t *nt) {
     uint8_t status;
 
     // Reset card communication
-    pcd_14a_reader_halt_tag();
+    pcd_14a_reader_fast_halt_tag();
 
     // We will choose a fast card, and we will be compressed to verify as much as possible
     if (pcd_14a_reader_fast_select(tag) != STATUS_HF_TAG_OK) {
@@ -687,35 +686,49 @@ uint8_t check_std_mifare_nt_support(void) {
 * If support, return nested_tag_is_static, if not support,
 *
 */
-uint8_t check_static_prng(bool *is_static) {
+static uint8_t check_static_prng_nt(bool *is_static, uint32_t *nt_out) {
     uint32_t nt1, nt2;
     uint8_t status;
+    hf14a_config_t saved_cfg = *get_hf14a_config();
+    hf14a_config_t fast_cfg = saved_cfg;
+    fast_cfg.forcerats = 2;
+    set_hf14a_config(&fast_cfg);
 
     // Find card, search on the field
     if (pcd_14a_reader_scan_auto(p_tag_info) != STATUS_HF_TAG_OK) {
+        set_hf14a_config(&saved_cfg);
         return STATUS_HF_TAG_NO;
     }
 
     // Get NT in the first wave
     status = check_tag_response_nt(p_tag_info, &nt1);
     if (status != STATUS_HF_TAG_OK) {
+        set_hf14a_config(&saved_cfg);
         return status;
     }
 
-    // Remember to reset the place after getting completed
-    // If you do not re -set the field, some cards will always provide a static NT when maintaining the function in the field
-    // Therefore, resetting here is very important.
-    reset_radio_field_with_delay();
+    // Power-cycle the field long enough for passive cards to reset PRNG state.
+    pcd_14a_reader_antenna_off();
+    bsp_delay_ms(20);
+    pcd_14a_reader_antenna_on();
+    bsp_delay_ms(5);
 
     // Get NT in the second wave
     status = check_tag_response_nt(p_tag_info, &nt2);
+    set_hf14a_config(&saved_cfg);
     if (status != STATUS_HF_TAG_OK) {
         return status;
     }
 
     // Detect whether the random number is static
     *is_static = (nt1 == nt2);
+    *nt_out = nt2;
     return STATUS_HF_TAG_OK;
+}
+
+uint8_t check_static_prng(bool *is_static) {
+    uint32_t nt2 = 0;
+    return check_static_prng_nt(is_static, &nt2);
 }
 
 /**
@@ -725,10 +738,10 @@ uint8_t check_static_prng(bool *is_static) {
 */
 uint8_t check_prng_type(mf1_prng_type_t *prng_type) {
     uint8_t status;
-    uint32_t nt1;
+    uint32_t nt1 = 0;
 
     bool is_static;
-    status = check_static_prng(&is_static);
+    status = check_static_prng_nt(&is_static, &nt1);
 
     // If the judgment process is found, it is found that the StaticNested detection cannot be completed
     // Then return the state directly, no need to perform the following judgment logic.
@@ -740,25 +753,7 @@ uint8_t check_prng_type(mf1_prng_type_t *prng_type) {
         return STATUS_HF_TAG_OK;
     }
 
-    // Non -Static card, you can continue to run down logic
-    // ------------------------------------
-
-    // Before you re -operate, try a dormant label
-    // to reset the state machine where it may have problems
-    pcd_14a_reader_halt_tag();
-
-    // Card search operation
-    if (pcd_14a_reader_scan_auto(p_tag_info) != STATUS_HF_TAG_OK) {
-        return STATUS_HF_TAG_NO;
-    }
-
-    //Get NT, just get it once
-    status = check_tag_response_nt(p_tag_info, &nt1);
-    if (status != STATUS_HF_TAG_OK) {
-        return status;
-    }
-
-    //Calculate the effectiveness of NT
+    //Calculate the effectiveness of the already-captured post-reset NT
     if (check_lfsr_prng(nt1)) {
         // NRF_LOG_INFO("The tag support Nested\n");
         *prng_type = PRNG_WEAK;
@@ -767,9 +762,6 @@ uint8_t check_prng_type(mf1_prng_type_t *prng_type) {
         // NT is unpredictable and invalid.
         *prng_type = PRNG_HARD;
     }
-
-    // ------------------------------------
-    // end
 
     return STATUS_HF_TAG_OK;
 }
@@ -842,7 +834,7 @@ static uint8_t measure_distance(uint64_t u64Key, uint8_t block, uint8_t type, ui
 
     do {
         // Reset card communication
-        pcd_14a_reader_halt_tag();
+        pcd_14a_reader_fast_halt_tag();
         // We will choose a fast card, and we will be compressed to verify as much as possible
         if (pcd_14a_reader_fast_select(p_tag_info) != STATUS_HF_TAG_OK) {
             NRF_LOG_INFO("Tag can't select\r\n");
@@ -1074,7 +1066,12 @@ uint16_t mf1_toolbox_check_keys_of_sectors(
         }
     }
 
+    if (pcd_14a_reader_scan_auto(p_tag_info) != STATUS_HF_TAG_OK) {
+        return STATUS_HF_TAG_NO;
+    }
+
     uint16_t status = STATUS_HF_TAG_OK;
+    bool need_reselect = false;
     bool skipKeyB;
     for (i = 0; i < 40; i++) {
         maskShift = 6 - i % 4 * 2;
@@ -1084,10 +1081,19 @@ uint16_t mf1_toolbox_check_keys_of_sectors(
         if ((maskSector & 0b10) == 0) {
             for (j = 0; j < in->keys_len; j++) {
                 mf1_toolbox_report_healthy();
-                if (status != STATUS_HF_TAG_OK) mf1_toolbox_antenna_restart();
+                if (need_reselect) {
+                    if (pcd_14a_reader_fast_select(p_tag_info) != STATUS_HF_TAG_OK) {
+                        mf1_toolbox_antenna_restart();
+                        if (pcd_14a_reader_scan_auto(p_tag_info) != STATUS_HF_TAG_OK) {
+                            return STATUS_HF_TAG_NO;
+                        }
+                    }
+                }
 
-                status = auth_key_use_522_hw(trailerNo, PICC_AUTHENT1A, in->keys[j].key);
+                status = pcd_14a_reader_mf1_auth(p_tag_info, PICC_AUTHENT1A, trailerNo, in->keys[j].key);
+                need_reselect = true;
                 if (status != STATUS_HF_TAG_OK) { // auth failed
+                    pcd_14a_reader_mf1_unauth();
                     if (status == STATUS_HF_TAG_NO) return STATUS_HF_TAG_NO;
                     continue;
                 }
@@ -1096,6 +1102,7 @@ uint16_t mf1_toolbox_check_keys_of_sectors(
                 out->keys[i][0] = in->keys[j];
                 // try to read keyB from trailer of sector
                 status = pcd_14a_reader_mf1_read(trailerNo, trailer);
+                pcd_14a_reader_mf1_unauth();
                 // key B not in trailer
                 if (status != STATUS_HF_TAG_OK || 0 == *(uint64_t *) &trailer[10]) break;
                 // key B found
@@ -1109,9 +1116,18 @@ uint16_t mf1_toolbox_check_keys_of_sectors(
 
         for (j = 0; j < in->keys_len; j++) {
             mf1_toolbox_report_healthy();
-            if (status != STATUS_HF_TAG_OK) mf1_toolbox_antenna_restart();
+            if (need_reselect) {
+                if (pcd_14a_reader_fast_select(p_tag_info) != STATUS_HF_TAG_OK) {
+                    mf1_toolbox_antenna_restart();
+                    if (pcd_14a_reader_scan_auto(p_tag_info) != STATUS_HF_TAG_OK) {
+                        return STATUS_HF_TAG_NO;
+                    }
+                }
+            }
 
-            status = auth_key_use_522_hw(trailerNo, PICC_AUTHENT1B, in->keys[j].key);
+            status = pcd_14a_reader_mf1_auth(p_tag_info, PICC_AUTHENT1B, trailerNo, in->keys[j].key);
+            pcd_14a_reader_mf1_unauth();
+            need_reselect = true;
             if (status != STATUS_HF_TAG_OK) { // auth failed
                 if (status == STATUS_HF_TAG_NO) return STATUS_HF_TAG_NO;
                 continue;
@@ -1208,10 +1224,10 @@ uint8_t mf1_hardnested_nonces_acquire(bool slow, uint8_t blkKnown, uint8_t typKn
     return STATUS_HF_TAG_OK;
 }
 
-uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
+uint8_t mf1_collect_observations_cached(uint8_t source_block, uint8_t source_type,
     uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
     uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,
-    bool (*cancelled)(void)) {
+    const picc_14a_tag_t *cached_tag, bool after_nested, bool (*cancelled)(void)) {
     if (!output || count == 0 || count > 16 ||
         (source_type != PICC_AUTHENT1A && source_type != PICC_AUTHENT1B) ||
         (target_type != PICC_AUTHENT1A && target_type != PICC_AUTHENT1B)) {
@@ -1221,18 +1237,33 @@ uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
     if (cancelled && cancelled()) return STATUS_CMD_ERR;
 
     uint32_t started = mf1_capture_clock();
-    uint8_t status = pcd_14a_reader_scan_auto(p_tag_info);
+    uint8_t status = STATUS_HF_TAG_NO;
+    if (cached_tag && cached_tag->uid_len > 0) {
+        *p_tag_info = *cached_tag;
+        status = after_nested
+            ? pcd_14a_reader_reselect_after_nested(p_tag_info)
+            : pcd_14a_reader_fast_select(p_tag_info);
+    }
+    if (status != STATUS_HF_TAG_OK) {
+        status = pcd_14a_reader_scan_auto(p_tag_info);
+    }
     mf1_capture_stats.select_cycles += mf1_capture_elapsed(started);
     if (status != STATUS_HF_TAG_OK) return status;
     if (uid_length && (p_tag_info->uid_len != uid_length || memcmp(p_tag_info->uid, expected_uid, uid_length)))
         return STATUS_HF_TAG_NO;
+
+    uint16_t saved_timeout = pcd_14a_reader_timeout_get();
+    if (saved_timeout > 4) pcd_14a_reader_timeout_set(4);
 
     uint32_t cuid = get_u32_tag_uid(p_tag_info);
     for (uint8_t index = 0; index < count; index++) {
         started = mf1_capture_clock();
         mf1_toolbox_report_healthy();
         mf1_capture_stats.housekeeping_cycles += mf1_capture_elapsed(started);
-        if (cancelled && cancelled()) return STATUS_CMD_ERR;
+        if (cancelled && cancelled()) {
+            status = STATUS_CMD_ERR;
+            break;
+        }
         if (index != 0) {
             started = mf1_capture_clock();
             status = uid_length ? pcd_14a_reader_reselect_after_nested(p_tag_info)
@@ -1254,7 +1285,17 @@ uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
         memcpy(record + 4, observation.ciphertext, 4);
         memcpy(record + 8, observation.parity, 4);
     }
+    if (saved_timeout > 4) pcd_14a_reader_timeout_set(saved_timeout);
     return status;
+}
+
+uint8_t mf1_collect_observations(uint8_t source_block, uint8_t source_type,
+    uint64_t source_key, uint8_t target_block, uint8_t target_type, bool chained,
+    uint8_t count, uint8_t *output, const uint8_t *expected_uid, uint8_t uid_length,
+    bool (*cancelled)(void)) {
+    return mf1_collect_observations_cached(source_block, source_type, source_key,
+        target_block, target_type, chained, count, output, expected_uid, uid_length,
+        NULL, false, cancelled);
 }
 
 //-----------------------------------------------------------------------------
@@ -1396,4 +1437,8 @@ uint16_t mf1_toolbox_check_keys_on_block(
     }
 
     return STATUS_MF_ERR_AUTH;
+}
+
+const picc_14a_tag_t *mf1_toolbox_last_tag(void) {
+    return p_tag_info;
 }
