@@ -599,12 +599,12 @@ dependencies = [
 [[package]]
 name = "nfc-formats"
 version = "0.1.0"
-source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=d23cf8225a684cb72ad448038b1abec6e44d56c6#d23cf8225a684cb72ad448038b1abec6e44d56c6"
+source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=09e8e93efa2048858597546aa1a457688165ac01#09e8e93efa2048858597546aa1a457688165ac01"
 
 [[package]]
 name = "nfc-mifare"
 version = "0.1.0"
-source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=d23cf8225a684cb72ad448038b1abec6e44d56c6#d23cf8225a684cb72ad448038b1abec6e44d56c6"
+source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=09e8e93efa2048858597546aa1a457688165ac01#09e8e93efa2048858597546aa1a457688165ac01"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -614,7 +614,7 @@ dependencies = [
 [[package]]
 name = "nfc-native"
 version = "0.1.0"
-source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=d23cf8225a684cb72ad448038b1abec6e44d56c6#d23cf8225a684cb72ad448038b1abec6e44d56c6"
+source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=09e8e93efa2048858597546aa1a457688165ac01#09e8e93efa2048858597546aa1a457688165ac01"
 dependencies = [
  "nfc-formats",
  "nfc-mifare",
@@ -625,7 +625,7 @@ dependencies = [
 [[package]]
 name = "nfc-sniff"
 version = "0.1.0"
-source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=d23cf8225a684cb72ad448038b1abec6e44d56c6#d23cf8225a684cb72ad448038b1abec6e44d56c6"
+source = "git+https://github.com/SecLabz/nfc-libs-rs?rev=09e8e93efa2048858597546aa1a457688165ac01#09e8e93efa2048858597546aa1a457688165ac01"
 
 [[package]]
 name = "nix"
