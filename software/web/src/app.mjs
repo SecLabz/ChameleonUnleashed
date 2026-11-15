@@ -1500,10 +1500,12 @@ document.querySelectorAll('[data-close-dialog]').forEach((button) => {
   button.onclick = () => button.closest('dialog').close();
 });
 
-const TONIE_PRIVACY_PASSWORDS = [[0x5b, 0x6e, 0xfd, 0x7f], [0x0f, 0x0f, 0x0f, 0x0f], null];
+// The emulator stores Flipper byte order. The scan command uses RF byte order.
+const TONIE_PRIVACY_SECRET = [0x7f, 0xfd, 0x6e, 0x5b];
+const TONIE_PRIVACY_PASSWORDS = [[...TONIE_PRIVACY_SECRET].reverse(), [0x0f, 0x0f, 0x0f, 0x0f], null];
 const SLIX_PRIVACY_RETRY_STATUSES = new Set([1, 2, 3, 4, 6, 7]);
 
-async function readSlixWithPrivacy(passwords, help) {
+async function readSlixWithPrivacy(passwords, help, onComplete) {
   const document = state.document;
   if (
     state.controller ||
@@ -1537,10 +1539,14 @@ async function readSlixWithPrivacy(passwords, help) {
             },
             { requireSlixL: true, password }
           );
-          if (!signal.aborted) {
-            updateHf(captured, message);
-            markDetected();
+          if (signal.aborted) {
+            return;
           }
+          if (captured.capture.complete) {
+            onComplete?.(captured);
+          }
+          updateHf(captured, message);
+          markDetected();
           return;
         } catch (error) {
           if (!SLIX_PRIVACY_RETRY_STATUSES.has(error.status)) {
@@ -1588,9 +1594,10 @@ async function readProtectedSlix() {
 
 $('read-slix').onclick = () => readProtectedSlix();
 $('read-tonie').onclick = () =>
-  readSlixWithPrivacy(TONIE_PRIVACY_PASSWORDS, 'Hold the Tonie near the device antenna.').catch((error) =>
-    notify(error.message, true)
-  );
+  readSlixWithPrivacy(TONIE_PRIVACY_PASSWORDS, 'Hold the Tonie near the device antenna.', (document) => {
+    applyHfDefaults(document);
+    document.emulator.secrets.splice(0, TONIE_PRIVACY_SECRET.length, ...TONIE_PRIVACY_SECRET);
+  }).catch((error) => notify(error.message, true));
 
 async function readDocument() {
   if (!state.document || state.controller || !state.connected) {

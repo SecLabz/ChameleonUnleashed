@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { encodeNfcvSlot } from '../../src/documents/nfcv-slot.mjs';
 import { RESOURCE_BASE } from '../../../../.cache/web/assets/modules/runtime/assets.mjs';
 
 const draftKey = 'chameleon-studio-v1';
@@ -248,6 +249,14 @@ for (const [scenario, steps] of [
     await expect(page.locator('#status')).toHaveText('Read complete');
     await expect(page.locator('#scan-dialog')).toBeHidden();
     await expect(page.locator('#memory-status')).toHaveText('8/8 blocks known');
+    await expect(page.locator('#emulate')).toBeEnabled();
+    const draft = () => page.evaluate((key) => JSON.parse(localStorage.getItem(key))?.document, draftKey);
+    await expect
+      .poll(async () => (await draft())?.emulator?.secrets.slice(0, 4))
+      .toEqual([0x7f, 0xfd, 0x6e, 0x5b]);
+    const slot = encodeNfcvSlot(await draft());
+    expect(slot[11] & 8).toBe(0);
+    expect(slot.slice(20, 24)).toEqual(toniePassword);
     expect(count).toBe(steps.length);
   });
 }
@@ -269,11 +278,22 @@ test('NFC-V reread adopts the presented tag before dumping memory', async ({ pag
     }
     expect(command).toBe(2308);
     expect(payload.slice(0, 11)).toEqual([...activeUid, 0, blocks, 4]);
-    return dumpFails ? [0, 1] : slixDump(activeUid, blocks);
+    if (dumpFails) {
+      return [0, 1];
+    }
+    const reply = slixDump(activeUid, blocks);
+    if (activeUid === slixUid) {
+      reply[4] = 1;
+      reply.fill(0, reply.length - 6);
+    }
+    return reply;
   });
 
   await readTonie(page);
   await expect(page.locator('#card')).toContainText('01020304');
+  await expect(page.locator('#memory-status')).toHaveText('7/8 blocks known');
+  await expect(page.locator('#hf-defaults')).toBeVisible();
+  await expect(page.locator('#save-slot')).toBeDisabled();
 
   const confirmRead = page.getByRole('dialog').getByRole('button', { name: 'Read', exact: true });
   activeUid = uid2;
