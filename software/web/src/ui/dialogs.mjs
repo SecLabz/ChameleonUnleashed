@@ -1,13 +1,4 @@
-export function ask({
-  title,
-  message,
-  warning,
-  initial,
-  confirmLabel = 'Continue',
-  signal,
-  inputType = 'text',
-  validateInput
-}) {
+export function ask({ title, message, warning, initial, confirmLabel = 'Continue', signal, validateInput }) {
   if (signal?.aborted) {
     return Promise.resolve(initial === undefined ? false : null);
   }
@@ -38,7 +29,6 @@ export function ask({
   if (initial !== undefined) {
     input = document.createElement('input');
     input.value = initial;
-    input.type = inputType;
     input.className = 'dialog-input';
     input.setAttribute('aria-label', title);
     input.autocomplete = 'off';

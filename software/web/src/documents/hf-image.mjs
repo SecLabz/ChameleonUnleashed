@@ -19,6 +19,8 @@ const validLock = (value) => value === null || typeof value === 'boolean';
 
 const knownBlock = (bytes) => bytes?.length === 4 && bytes.every(isByte);
 
+export const isSlixL = (uid) => uid?.[0] === 0xe0 && uid[1] === 4 && uid[2] === 3;
+
 function hfName(card) {
   if (card.protocol === 'nfc_b') {
     return 'ISO14443-B';
@@ -29,7 +31,7 @@ function hfName(card) {
   if (card.uid?.slice(0, 3).join() === [0xe0, 4, 1].join() && card.blocks === 28 && card.block_size === 4) {
     return 'SLIX';
   }
-  if (card.uid?.slice(0, 3).join() === [0xe0, 4, 3].join() && card.blocks === 8 && card.block_size === 4) {
+  if (isSlixL(card.uid) && card.blocks === 8 && card.block_size === 4) {
     return 'SLIX-L';
   }
   return 'ISO15693';

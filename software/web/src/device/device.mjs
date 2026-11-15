@@ -12,7 +12,6 @@ export { hex } from './transport.mjs';
 export class Device extends DeviceSession {
   constructor(signal) {
     super(signal);
-    this.nfcvPassword = null;
     this.keySessionAt = 0;
   }
 
@@ -25,12 +24,6 @@ export class Device extends DeviceSession {
       await this.end().catch(() => {});
       throw error;
     }
-  }
-
-  nfcvPayload(command, payload) {
-    return this.nfcvPassword && [COMMAND.NFCV_SYSTEM_INFO, COMMAND.NFCV_DUMP].includes(command)
-      ? [...payload, ...this.nfcvPassword]
-      : payload;
   }
 
   async command(command, payload = []) {
@@ -48,10 +41,7 @@ export class Device extends DeviceSession {
       this.keySessionAt = 0;
     }
 
-    const bytes = await post(
-      `/api/command/${command}?id=${this.session}`,
-      new Uint8Array(this.nfcvPayload(command, payload))
-    );
+    const bytes = await post(`/api/command/${command}?id=${this.session}`, new Uint8Array(payload));
 
     if (command === COMMAND.CLASSIC_CHECK_KEYS && this.keySessionAt) {
       this.keySessionAt = performance.now();
@@ -180,10 +170,7 @@ export class Device extends DeviceSession {
       throw new Error('Device is not ready for a dump');
     }
 
-    const bytes = await post(
-      `/api/command/${command}?id=${this.session}`,
-      new Uint8Array(this.nfcvPayload(command, payload))
-    );
+    const bytes = await post(`/api/command/${command}?id=${this.session}`, new Uint8Array(payload));
 
     if (bytes.length < 2) {
       throw new Error('Truncated dump response');
@@ -435,7 +422,6 @@ export class Device extends DeviceSession {
   }
 
   async end() {
-    this.nfcvPassword = null;
     this.keySessionAt = 0;
     await super.end();
   }

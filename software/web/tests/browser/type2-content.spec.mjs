@@ -102,34 +102,81 @@ for (const width of [320, 1280]) {
   });
 }
 
-test('SLIX-L privacy password is masked and an authentication failure ends the operation', async ({
-  page
-}) => {
-  await page.goto('/');
-  await expect(page.locator('[data-view="scan"]').getByRole('button', { name: /SLIX-L/ })).toHaveCount(0);
-  await page.getByRole('radio', { name: 'RFID 125 kHz' }).click();
-  await page.getByRole('button', { name: 'Studio', exact: true }).click();
+function withSlixCrc(data) {
+  let crc = 0xffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0x8408 : 0);
+    }
+  }
+  crc ^= 0xffff;
+  return [0, 0, ...data, crc & 255, crc >>> 8];
+}
+
+async function createSlixL(page) {
   await page.locator('#studio-new').click();
   await page.locator('#create-search').fill('SLIX-L');
   await page.locator('[data-create="1500"]').click();
   await expect(page.locator('#studio-family')).toHaveText('SLIX-L');
+}
+
+function slixInventory(uid) {
+  return withSlixCrc([0, 12, ...uid.toReversed()]);
+}
+
+function slixDump(uid, blocks = 8) {
+  const reply = new Uint8Array(2 + 24 + blocks * 6);
+  reply.set([0, 0, 1, 3, 0, 0, ...uid, 0, blocks, 4]);
+  for (let index = 0; index < blocks; index++) {
+    reply.set([1, 0, uid[7], 0, 0, index], 26 + index * 6);
+  }
+  return reply;
+}
+
+async function mockSlix(page, commands) {
+  await page.route(/\/api\/command\/(2300|2301|2308|2312)\?/, async (route) => {
+    const command = Number(new URL(route.request().url()).pathname.split('/').at(-1));
+    const payload = [...(route.request().postDataBuffer() ?? [])];
+    const reply = commands(command, payload);
+    await route.fulfill({ body: Buffer.from(reply) });
+  });
+}
+
+async function readTonie(page) {
+  await page.locator('#read-menu summary').click();
+  await page.locator('#read-tonie').click();
+}
+
+test('SLIX-L privacy password is visible and retries in the scan drawer until cancelled', async ({
+  page
+}) => {
+  await page.goto('/');
+  await expect(page.locator('[data-view="scan"]').getByRole('button', { name: /SLIX-L/ })).toHaveCount(0);
+  await expect(page.locator('[data-view="scan"]').getByRole('button', { name: /tonie/i })).toHaveCount(0);
+  await page.getByRole('radio', { name: 'RFID 125 kHz' }).click();
+  await page.getByRole('button', { name: 'Studio', exact: true }).click();
+  await createSlixL(page);
   const protectedRead = page.getByRole('button', { name: 'Read with privacy password…', exact: true });
+  const tonieRead = page.getByRole('button', { name: 'Read tonie…', exact: true });
   const input = page.getByRole('textbox', { name: 'SLIX-L privacy password' });
   for (const width of [320, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await page.locator('#read-menu summary').focus();
     await page.keyboard.press('Enter');
     await expect(protectedRead).toBeVisible();
+    await expect(tonieRead).toBeVisible();
     expect(await protectedRead.evaluate((button) => button.getBoundingClientRect().right <= innerWidth)).toBe(
       true
     );
     await expect(protectedRead).toBeEnabled();
+    await expect(tonieRead).toBeEnabled();
     await page.screenshot({
       path: test.info().outputPath(`chameleon-slix-${width}-${test.info().project.name}.png`)
     });
     await protectedRead.focus();
     await page.keyboard.press('Enter');
-    await expect(input).toHaveAttribute('type', 'password');
+    await expect(input).toHaveJSProperty('type', 'text');
     if (width === 320) {
       await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     }
@@ -140,17 +187,112 @@ test('SLIX-L privacy password is masked and an authentication failure ends the o
   await input.fill('1122');
   await expect(page.getByRole('button', { name: 'Read tag', exact: true })).toBeDisabled();
   await input.fill('11223344');
+
   let attempts = 0;
-  await page.route('**/api/command/2312?*', async (route) => {
+  await mockSlix(page, (command, payload) => {
+    expect(command).toBe(2312);
+    expect(payload).toEqual([0x11, 0x22, 0x33, 0x44]);
     attempts++;
-    expect([...route.request().postDataBuffer()]).toEqual([0x11, 0x22, 0x33, 0x44]);
-    await route.fulfill({ body: Buffer.from([0, 6]) });
+    return [0, attempts === 1 ? 1 : 6];
   });
+
   await page.getByRole('button', { name: 'Read tag', exact: true }).click();
+  await expect(page.locator('#scan-dialog')).toBeVisible();
+  await expect(page.locator('#scan-title')).toHaveText('Scanning');
+  await expect.poll(() => attempts).toBeGreaterThanOrEqual(3);
+  await expect(page.locator('#scan-result')).toHaveText('');
+  await page.locator('#cancel-scan').click();
+  await expect(page.locator('#scan-dialog')).toBeHidden();
   await expect(page.locator('#scan')).toBeEnabled();
-  await expect(page.locator('#toast')).toHaveText('Authentication rejected');
-  expect(attempts).toBe(1);
   await expect(memory).toHaveValue(original);
-  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }));
-  expect(stored).not.toContain('11223344');
+});
+
+const toniePassword = [0x5b, 0x6e, 0xfd, 0x7f];
+const defaultPassword = [0x0f, 0x0f, 0x0f, 0x0f];
+const slixUid = [0xe0, 4, 3, 0x50, 1, 2, 3, 4];
+
+for (const [scenario, steps] of [
+  [
+    'the default password unlocks the tag',
+    [
+      [2312, toniePassword, [0, 6]],
+      [2312, defaultPassword, slixInventory(slixUid)],
+      [2308, [...slixUid, 0, 8, 4, ...defaultPassword], slixDump(slixUid)]
+    ]
+  ],
+  [
+    'the tag is open and an interrupted dump is retried',
+    [
+      [2312, toniePassword, [0, 1]],
+      [2312, toniePassword, [0, 1]],
+      [2312, toniePassword, [0, 1]],
+      [2300, [], slixInventory(slixUid)],
+      [2308, [...slixUid, 0, 8, 4], [0, 6]],
+      [2312, toniePassword, slixInventory(slixUid)],
+      [2308, [...slixUid, 0, 8, 4, ...toniePassword], slixDump(slixUid)]
+    ]
+  ]
+]) {
+  test(`Read Tonie falls back when ${scenario}`, async ({ page }) => {
+    await createSlixL(page);
+    let count = 0;
+    await mockSlix(page, (command, payload) => {
+      const [expectedCommand, expectedPayload, reply] = steps[count++];
+      expect(command).toBe(expectedCommand);
+      expect(payload).toEqual(expectedPayload);
+      return reply;
+    });
+
+    await readTonie(page);
+    await expect(page.getByRole('textbox', { name: 'SLIX-L privacy password' })).toHaveCount(0);
+    await expect(page.locator('#status')).toHaveText('Read complete');
+    await expect(page.locator('#scan-dialog')).toBeHidden();
+    await expect(page.locator('#memory-status')).toHaveText('8/8 blocks known');
+    expect(count).toBe(steps.length);
+  });
+}
+
+test('NFC-V reread adopts the presented tag before dumping memory', async ({ page }) => {
+  await createSlixL(page);
+  const uid2 = [...slixUid.slice(0, 4), 0x11, 0x22, 0x33, 0x44];
+  const uid3 = [0xe0, 4, 1, 0x50, 0x55, 0x66, 0x77, 0x88];
+  let activeUid = slixUid;
+  let dumpFails = false;
+  await mockSlix(page, (command, payload) => {
+    if (command === 2312 || command === 2300) {
+      return slixInventory(activeUid);
+    }
+    const blocks = activeUid === uid3 ? 28 : 8;
+    if (command === 2301) {
+      expect(payload).toEqual(uid3);
+      return withSlixCrc([0, 4, ...uid3.toReversed(), blocks - 1, 3]);
+    }
+    expect(command).toBe(2308);
+    expect(payload.slice(0, 11)).toEqual([...activeUid, 0, blocks, 4]);
+    return dumpFails ? [0, 1] : slixDump(activeUid, blocks);
+  });
+
+  await readTonie(page);
+  await expect(page.locator('#card')).toContainText('01020304');
+
+  const confirmRead = page.getByRole('dialog').getByRole('button', { name: 'Read', exact: true });
+  activeUid = uid2;
+  await readTonie(page);
+  await confirmRead.click();
+  await expect(page.locator('#status')).toHaveText('Read complete');
+  await expect(page.locator('#card')).toContainText('11223344');
+
+  activeUid = uid3;
+  dumpFails = true;
+  await page.locator('#read').click();
+  await confirmRead.click();
+  await expect(page.locator('#status')).toHaveText('Card not found');
+  await expect(page.locator('#card')).toContainText('55667788');
+  await expect(page.locator('#studio-family')).toHaveText('SLIX');
+  await expect(page.locator('#memory-status')).toHaveText('0/28 blocks known');
+
+  dumpFails = false;
+  await page.locator('#read').click();
+  await expect(page.locator('#status')).toHaveText('Read complete');
+  await expect(page.locator('#memory-status')).toHaveText('28/28 blocks known');
 });

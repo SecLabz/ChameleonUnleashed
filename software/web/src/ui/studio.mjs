@@ -9,7 +9,7 @@ import {
   classicObservationMatches
 } from '../documents/classic-magic.mjs';
 import { renderDesfire } from './desfire-view.mjs';
-import { needsHfDefaults } from '../documents/hf-image.mjs';
+import { isSlixL, needsHfDefaults } from '../documents/hf-image.mjs';
 import { supportsPhysicalCopy } from '../device/tag-write.mjs';
 import { classicChanges } from '../documents/classic-write.mjs';
 import { classicDocumentKeys, classicDictionaryKeys } from '../documents/classic-document-keys.mjs';
@@ -212,8 +212,11 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
       (doc?.kind === 'lf' && doc.memory.length > 0 && !knownBlock(doc.memory[0]));
 
     content.setBusy(busy || invalidEdit);
-    $('read-slix').disabled = !connected || busy;
-    $('read-slix').hidden = doc?.card?.protocol !== 'nfc_v' || doc.card.uid.slice(0, 3).join() !== '224,4,3';
+    const slixL = doc?.card?.protocol === 'nfc_v' && isSlixL(doc.card.uid);
+    for (const id of ['read-slix', 'read-tonie']) {
+      $(id).disabled = !connected || busy;
+      $(id).hidden = !slixL;
+    }
     $('scan').disabled = !connected || busy;
     $('change-uid').hidden = !isClassic(doc) || doc.card?.uid?.length !== 4;
     $('change-uid').disabled = !connected || busy;
@@ -336,7 +339,7 @@ export function studioView(state, { saveDraft, renderRecents, onLfFormat }) {
     $('read').disabled = !connected || busy || !readable;
     $('read').title = !connected ? 'Connect the Chameleon to read' : '';
 
-    const readOptions = !busy && (classic || type2 || !$('read-slix').hidden);
+    const readOptions = !busy && (classic || type2 || slixL);
     $('read-menu').hidden = !readOptions;
     if (!readOptions) {
       $('read-menu').open = false;
