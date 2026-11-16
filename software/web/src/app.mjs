@@ -2,7 +2,7 @@ import { DEVELOPMENT, appUrl } from './runtime/environment.mjs';
 import { withRuntime } from './runtime/runtime.mjs';
 import { request, withDevice } from './device/transport.mjs';
 import { readDesfire } from './device/desfire-reader.mjs';
-import { applyHfDefaults, needsHfDefaults, hfDocument, blankNfcv } from './documents/hf-image.mjs';
+import { applyHfDefaults, needsHfDefaults, hfDocument, blankNfcv, isSlixL } from './documents/hf-image.mjs';
 import { readHf, scanNfc } from './device/hf-reader.mjs';
 import { ask, download } from './ui/dialogs.mjs';
 import { scanLf } from './device/lf-reader.mjs';
@@ -645,144 +645,46 @@ function closeScanDialog() {
   );
 }
 
-async function scan() {
+async function runScanDialog(help, work, repairOnError = false) {
   if (state.controller) {
     return;
   }
 
-  const technology = scanTechnology;
-  state.controller = new AbortController();
+  const controller = new AbortController();
+  state.controller = controller;
   offline.pause();
   controls();
 
-  const device = new Device(state.controller.signal);
+  const device = new Device(controller.signal);
   $('scan-title').textContent = 'Scanning';
-  $('scan-help').textContent =
-    technology === 'rfid'
-      ? 'Hold the RFID tag near the device antenna.'
-      : 'Hold the NFC tag near the device antenna.';
+  $('scan-help').textContent = help;
   $('scan-result').textContent = '';
   $('scan-repair').hidden = true;
   $('scan-dialog').dataset.state = 'scanning';
   openScanDialog();
   startReadTime();
   $('read-elapsed').hidden = true;
-  let card;
-  let opened = false;
+  let detected = false;
 
-  try {
-    let scanned;
-    let pass = 0;
-    await device.reserve();
-    while (!state.controller.signal.aborted) {
-      try {
-        if (technology === 'rfid') {
-          scanned = await scanLf(device);
-          card = scanned.card;
-        } else {
-          // Cold cards may miss short WUPA polling. Start with the historical
-          // retry window, then retain it every fifth pass while waiting.
-          card = await scanNfc(device, undefined, pass++ % 5 !== 0);
-          device.card = card;
-          if (card.protocol) {
-            scanned = hfDocument(card);
-          }
-        }
-        break;
-      } catch (error) {
-        if (error.status !== (technology === 'rfid' ? 0x41 : 1)) {
-          throw error;
-        }
-      }
-    }
-    if (state.controller.signal.aborted) {
-      return;
-    }
-
-    const classic = !scanned && [8, 9, 16, 24].includes(card.sak & ~0x20);
-    rememberDocument();
-    state.document = scanned || {
-      name: `Tag-${hex(card.uid)}`,
-      kind: 'identity',
-      card,
-      memory: [],
-      warnings: !classic && card.sak !== 0 ? ['Memory reading is unsupported for this tag'] : []
-    };
-
-    let status = 'Identity captured · memory reading is unsupported for this tag';
-    if (card.protocol) {
-      if (scanned.memory.length) {
-        status = 'Identity captured · reading supported memory…';
-      }
-    } else if (scanned) {
-      status = '';
-    } else if (classic) {
-      status = 'Checking Classic capabilities…';
-    } else if (card.sak === 0) {
-      status = 'Detecting Type 2 model…';
-    }
-    $('status').textContent = status;
-    render();
-    saveDraft();
+  const markDetected = () => {
     $('scan-dialog').dataset.state = 'detected';
     closeScanDialog();
-    opened = true;
+    detected = true;
     $('read-elapsed').hidden = false;
-    view('studio');
-    if (scanned?.kind === 'lf' && scanned.memory.length) {
-      $('status').textContent = 'ID captured · checking the physical chip…';
-      try {
-        scanned.lf.chip ??= await inspectLfChip(device);
-        $('status').textContent = '';
-      } catch (error) {
-        scanned.lf.chip = null;
-        $('status').textContent = `ID captured · chip check unavailable: ${error.message}`;
-      }
-      render();
-      saveDraft();
-    }
-    if (card.protocol && scanned.memory.length) {
-      await readHf(device, scanned, updateHf);
-    }
-    if (!scanned && card.sak & 0x20) {
-      await readDesfire(device, card, updateDesfire);
-    }
-    if (classic) {
-      const observation = await inspectClassic(
-        device,
-        card,
-        (message) => {
-          $('status').textContent = message;
-        },
-        { modelEvidence: true }
-      );
-      if (observation.ats) {
-        card.ats = observation.ats;
-      }
-      if (observation.type === 1002) {
-        const geometry = await withRuntime(
-          (call) => call({ op: 'classic_geometry', sak: 16 }),
-          state.controller.signal
-        );
-        updateClassic({ card, geometry, memory: Array(geometry.blocks).fill(null) });
-      }
-      state.document.classicObservation = observation;
-      $('status').textContent = 'Tag identified · Memory not read';
-      render();
-      saveDraft();
-    }
-    if (!scanned && card.sak === 0) {
-      await readType2(device, card, 'auto', updateType2);
-    }
+  };
+
+  try {
+    await device.reserve();
+    await work(device, markDetected);
   } catch (error) {
-    if (!state.controller.signal.aborted) {
-      if (opened) {
-        if (state.document.kind === 'identity' && card.sak === 0) {
+    if (!controller.signal.aborted) {
+      if (detected) {
+        const doc = state.document;
+        if (doc.kind === 'identity' && doc.card.sak === 0) {
           $('status').textContent =
             `Type 2 read unavailable: ${error.message}. If the model is unidentified, choose a manual profile only when you know it.`;
-          state.document.warnings = [$('status').textContent];
-          saveDraft();
-        } else if (state.document.kind === 'type2') {
+          doc.warnings = [$('status').textContent];
+        } else if (doc.kind === 'type2') {
           $('status').textContent = `Type 2 read interrupted: ${error.message} · completed pages retained`;
         } else {
           $('status').textContent = error.message;
@@ -792,7 +694,7 @@ async function scan() {
         $('scan-dialog').dataset.state = 'error';
         $('scan-title').textContent = 'Scan unavailable';
         $('scan-result').textContent = error.message;
-        $('scan-repair').hidden = technology !== 'nfc';
+        $('scan-repair').hidden = !repairOnError;
       }
     }
   } finally {
@@ -801,18 +703,21 @@ async function scan() {
     } catch (error) {
       notify(`Cleanup unconfirmed: ${error.message}`, true);
     }
-    if (state.controller.signal.aborted && opened) {
-      if (state.document.kind === 'identity') {
-        $('status').textContent = 'Read stopped · identity retained';
-      } else if (state.document.kind === 'type2') {
-        $('status').textContent = 'Read stopped · completed pages retained';
-      } else if (state.document.card.protocol) {
-        $('status').textContent = 'Read stopped · returned blocks retained';
+    if (detected) {
+      if (controller.signal.aborted) {
+        const { kind, card } = state.document;
+        if (kind === 'identity') {
+          $('status').textContent = 'Read stopped · identity retained';
+        } else if (kind === 'type2') {
+          $('status').textContent = 'Read stopped · completed pages retained';
+        } else if (card.protocol) {
+          $('status').textContent = 'Read stopped · returned blocks retained';
+        }
       }
-    }
-    if (opened) {
       finishReadTime();
-      markClean();
+      if (!state.document.slot) {
+        markClean();
+      }
       saveDraft();
     } else {
       clearFeedback();
@@ -821,6 +726,119 @@ async function scan() {
     offline.start();
     controls();
     await views.refresh();
+  }
+}
+
+function scan() {
+  const technology = scanTechnology;
+  const help =
+    technology === 'rfid'
+      ? 'Hold the RFID tag near the device antenna.'
+      : 'Hold the NFC tag near the device antenna.';
+  return runScanDialog(
+    help,
+    (device, markDetected) => scanTag(device, markDetected, technology),
+    technology === 'nfc'
+  );
+}
+
+async function scanTag(device, markDetected, technology) {
+  let card;
+  let scanned;
+  let pass = 0;
+  while (!device.signal.aborted) {
+    try {
+      if (technology === 'rfid') {
+        scanned = await scanLf(device);
+        card = scanned.card;
+      } else {
+        // Cold cards may miss short WUPA polling. Start with the historical
+        // retry window, then retain it every fifth pass while waiting.
+        card = await scanNfc(device, undefined, pass++ % 5 !== 0);
+        device.card = card;
+        if (card.protocol) {
+          scanned = hfDocument(card);
+        }
+      }
+      break;
+    } catch (error) {
+      if (error.status !== (technology === 'rfid' ? 0x41 : 1)) {
+        throw error;
+      }
+    }
+  }
+  if (device.signal.aborted) {
+    return;
+  }
+
+  const classic = !scanned && [8, 9, 16, 24].includes(card.sak & ~0x20);
+  rememberDocument();
+  state.document = scanned || {
+    name: `Tag-${hex(card.uid)}`,
+    kind: 'identity',
+    card,
+    memory: [],
+    warnings: !classic && card.sak !== 0 ? ['Memory reading is unsupported for this tag'] : []
+  };
+
+  let status = 'Identity captured · memory reading is unsupported for this tag';
+  if (card.protocol) {
+    if (scanned.memory.length) {
+      status = 'Identity captured · reading supported memory…';
+    }
+  } else if (scanned) {
+    status = '';
+  } else if (classic) {
+    status = 'Checking Classic capabilities…';
+  } else if (card.sak === 0) {
+    status = 'Detecting Type 2 model…';
+  }
+  $('status').textContent = status;
+  render();
+  saveDraft();
+  markDetected();
+  view('studio');
+  if (scanned?.kind === 'lf' && scanned.memory.length) {
+    $('status').textContent = 'ID captured · checking the physical chip…';
+    try {
+      scanned.lf.chip ??= await inspectLfChip(device);
+      $('status').textContent = '';
+    } catch (error) {
+      scanned.lf.chip = null;
+      $('status').textContent = `ID captured · chip check unavailable: ${error.message}`;
+    }
+    render();
+    saveDraft();
+  }
+  if (card.protocol && scanned.memory.length) {
+    await readHf(device, scanned, updateHf);
+  }
+  if (!scanned && card.sak & 0x20) {
+    await readDesfire(device, card, updateDesfire);
+  }
+  if (classic) {
+    const observation = await inspectClassic(
+      device,
+      card,
+      (message) => {
+        $('status').textContent = message;
+      },
+      { modelEvidence: true }
+    );
+    if (observation.ats) {
+      card.ats = observation.ats;
+    }
+    if (observation.type === 1002) {
+      const geometry = await withRuntime((call) => call({ op: 'classic_geometry', sak: 16 }), device.signal);
+      updateClassic({ card, geometry, memory: Array(geometry.blocks).fill(null) });
+    }
+    state.document.classicObservation = observation;
+    $('status').textContent = 'Tag identified · Memory not read';
+    render();
+    saveDraft();
+  }
+  if (!scanned && card.sak === 0) {
+    await readType2(device, card, 'auto', updateType2);
   }
 }
 
@@ -1017,17 +1035,24 @@ async function readDesfireMemory() {
   });
 }
 
-async function readHfMemory(password = null) {
-  if (state.controller || !state.document) {
-    return;
-  }
-  if (
-    state.document.memory.some(Boolean) &&
-    !(await ask({
+async function confirmReplaceHfMemory(document) {
+  return (
+    !document.memory.some(Boolean) ||
+    (await ask({
       title: 'Read fresh memory?',
       message: 'This replaces the open memory. Export your edits first if you want to keep them.',
       confirmLabel: 'Read'
     }))
+  );
+}
+
+async function readHfMemory() {
+  const document = state.document;
+  if (
+    !document ||
+    state.controller ||
+    !(await confirmReplaceHfMemory(document)) ||
+    state.document !== document
   ) {
     return;
   }
@@ -1037,9 +1062,14 @@ async function readHfMemory(password = null) {
     try {
       await withDevice(device, async () => {
         await device.reserve();
-        device.nfcvPassword = password;
-        await readHf(device, state.document, updateHf);
+        const rescan = document.card.protocol === 'nfc_v';
+        await readHf(device, document, updateHf, { rescan });
       });
+    } catch (error) {
+      if (!signal.aborted) {
+        $('status').textContent = error.message;
+      }
+      throw error;
     } finally {
       finishReadTime();
     }
@@ -1470,6 +1500,69 @@ document.querySelectorAll('[data-close-dialog]').forEach((button) => {
   button.onclick = () => button.closest('dialog').close();
 });
 
+// The emulator stores Flipper byte order. The scan command uses RF byte order.
+const TONIE_PRIVACY_SECRET = [0x7f, 0xfd, 0x6e, 0x5b];
+const TONIE_PRIVACY_PASSWORDS = [[...TONIE_PRIVACY_SECRET].reverse(), [0x0f, 0x0f, 0x0f, 0x0f], null];
+const SLIX_PRIVACY_RETRY_STATUSES = new Set([1, 2, 3, 4, 6, 7]);
+
+async function readSlixWithPrivacy(passwords, help, onComplete) {
+  const document = state.document;
+  if (
+    state.controller ||
+    !state.connected ||
+    document?.card.protocol !== 'nfc_v' ||
+    !isSlixL(document.card.uid) ||
+    !(await confirmReplaceHfMemory(document)) ||
+    state.document !== document
+  ) {
+    return;
+  }
+
+  await runScanDialog(help, async (device, markDetected) => {
+    const { signal } = device;
+    for (let pass = 1; !signal.aborted; pass++) {
+      let noTag = false;
+      for (const password of passwords) {
+        if (noTag && (password !== null || pass % 3 !== 0)) {
+          continue;
+        }
+        if (signal.aborted) {
+          return;
+        }
+        let message;
+        try {
+          const captured = await readHf(
+            device,
+            document,
+            (_doc, status) => {
+              message = status;
+            },
+            { requireSlixL: true, password }
+          );
+          if (signal.aborted) {
+            return;
+          }
+          if (captured.capture.complete) {
+            onComplete?.(captured);
+          }
+          updateHf(captured, message);
+          markDetected();
+          return;
+        } catch (error) {
+          if (!SLIX_PRIVACY_RETRY_STATUSES.has(error.status)) {
+            throw error;
+          }
+          // A missing tag needs no second password. Open tags still get polled every third pass.
+          noTag = password === passwords[0] && error.status === 1;
+        }
+      }
+      if (!signal.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+  });
+}
+
 async function readProtectedSlix() {
   if (state.controller) {
     return;
@@ -1479,7 +1572,6 @@ async function readProtectedSlix() {
     message:
       'Enter four hexadecimal bytes in RF order. This password is used only for this read and is not saved.',
     initial: '',
-    inputType: 'password',
     validateInput: (value) => {
       try {
         parseHex(value, 4);
@@ -1494,13 +1586,18 @@ async function readProtectedSlix() {
     return;
   }
   try {
-    await readHfMemory(parseHex(text, 4));
+    await readSlixWithPrivacy([parseHex(text, 4)], 'Hold the SLIX-L tag near the device antenna.');
   } catch (error) {
     notify(error.message, true);
   }
 }
 
 $('read-slix').onclick = () => readProtectedSlix();
+$('read-tonie').onclick = () =>
+  readSlixWithPrivacy(TONIE_PRIVACY_PASSWORDS, 'Hold the Tonie near the device antenna.', (document) => {
+    applyHfDefaults(document);
+    document.emulator.secrets.splice(0, TONIE_PRIVACY_SECRET.length, ...TONIE_PRIVACY_SECRET);
+  }).catch((error) => notify(error.message, true));
 
 async function readDocument() {
   if (!state.document || state.controller || !state.connected) {

@@ -902,6 +902,30 @@ test('supported Type 2 Flipper files retain memory, RF counters, tearing and aut
     }
   }));
 
+test('Type 2 READ leaves pages past a protected boundary unknown', () =>
+  runtime(async () => {
+    const auth0 = 6;
+    const document = await readType2(
+      {
+        async command(command, [op, page]) {
+          if (command === 2026) {
+            return new Uint8Array();
+          }
+          assert.equal(op, 1);
+          if (page >= auth0) {
+            throw Object.assign(new Error('Protected page'), { status: 2 });
+          }
+          return Uint8Array.from({ length: 16 }, (_, offset) => (page + Math.floor(offset / 4)) % auth0);
+        }
+      },
+      type2Card,
+      'ultralight_c',
+      () => {}
+    );
+
+    assert.deepEqual(document.memory.slice(4, 8), [[4, 4, 4, 4], [5, 5, 5, 5], null, null]);
+  }));
+
 test('Type 2 interruption flushes completed pages and refuses another UID or unsupported version', () =>
   runtime(async () => {
     let lastDocument;

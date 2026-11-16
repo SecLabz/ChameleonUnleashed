@@ -637,3 +637,91 @@ fn capture_and_session_close_failures_are_reported_before_restoring_emulation() 
     drop(client);
     worker.join().unwrap();
 }
+
+#[test]
+fn bounded_capture_reuses_the_rf_session_and_drains_cancellation_before_other_commands() {
+    use crate::{frame::encode, st25tb_stream::CANCEL_SEQUENCE};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let source = RecoverySource {
+        sector: 0,
+        is_key_b: false,
+        key: [0xff; 6],
+    };
+    let target = RecoveryTarget {
+        sector: 1,
+        is_key_b: true,
+    };
+    let (host, mut dev) = UnixStream::pair().unwrap();
+    host.set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    dev.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let device_cancelled = cancelled.clone();
+    let worker = std::thread::spawn(move || {
+        let expect = |dev: &mut UnixStream, command, payload: &[u8]| {
+            let expected = encode(command, 0, payload).unwrap();
+            let mut request = vec![0; expected.len()];
+            dev.read_exact(&mut request).unwrap();
+            assert_eq!(request, expected);
+        };
+        let reply = |dev: &mut UnixStream, command, status, payload: &[u8]| {
+            dev.write_all(&encode(command, status, payload).unwrap())
+                .unwrap();
+        };
+        expect(&mut dev, NFCA_SESSION, &[1]);
+        reply(&mut dev, NFCA_SESSION, 0x68, &[]);
+
+        let mut request = vec![0x60, 0];
+        request.extend([0xff; 6]);
+        request.extend([0x61, 4, 0, 0, 4, 1, 2, 3, 4]);
+        for count in [16, 1] {
+            request[11] = count;
+            expect(&mut dev, COLLECT_CANCELLABLE, &request);
+            let mut records = vec![0; usize::from(count) * 12];
+            records[0] = count;
+            reply(&mut dev, COLLECT_CANCELLABLE, 0, &records);
+        }
+
+        expect(&mut dev, COLLECT_CANCELLABLE, &request);
+        device_cancelled.store(true, Ordering::Relaxed);
+        let mut stop = [0; CANCEL_SEQUENCE.len()];
+        dev.read_exact(&mut stop).unwrap();
+        assert_eq!(&stop, CANCEL_SEQUENCE);
+        reply(&mut dev, COLLECT_CANCELLABLE, 0x75, &[]);
+
+        expect(&mut dev, NFCA_SESSION, &[0]);
+        reply(&mut dev, NFCA_SESSION, 0x68, &[]);
+        expect(&mut dev, PROBE_PRNG, &[]);
+        reply(&mut dev, PROBE_PRNG, 0, &[2]);
+        assert_eq!(dev.read(&mut [0]).unwrap(), 0);
+    });
+
+    let mut client = Client {
+        port: Box::new(crate::test_support::Port(host)),
+        usable: true,
+        cancelled: cancelled.clone(),
+        capabilities: [
+            COLLECT_OBSERVATIONS,
+            COLLECT_CANCELLABLE,
+            CHECK_KEYS,
+            READ_BLOCK,
+            NFCA_SESSION,
+        ]
+        .into(),
+    };
+    let mut reader = reader(&mut client);
+    for count in [16, 1] {
+        let records = reader.collect(&source, &target, false, count).unwrap();
+        assert_eq!(records.len(), count);
+        assert_eq!(records[0].nt1, (count as u32) << 24);
+    }
+    let error = reader.collect(&source, &target, false, 1).unwrap_err();
+    assert!(error.is::<RequestCancelled>(), "{error}");
+    cancelled.store(false, Ordering::Relaxed);
+    assert_eq!(reader.probe_prng().unwrap(), PrngMode::Hard);
+    drop(reader);
+    drop(client);
+    worker.join().unwrap();
+}

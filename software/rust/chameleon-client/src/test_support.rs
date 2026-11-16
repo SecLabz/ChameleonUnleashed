@@ -8,10 +8,17 @@ use std::{
     time::Duration,
 };
 
-struct Port(UnixStream);
+pub(crate) struct Port(pub(crate) UnixStream);
 impl Read for Port {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        self.0.read(bytes)
+        // A blocking Unix socket reports a read timeout as WouldBlock.
+        self.0.read(bytes).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                std::io::ErrorKind::TimedOut.into()
+            } else {
+                error
+            }
+        })
     }
 }
 impl Write for Port {

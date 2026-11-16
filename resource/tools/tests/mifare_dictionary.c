@@ -16,20 +16,24 @@ typedef struct { uint8_t key[6]; } mf1_key_t;
 typedef struct {
     uint8_t block, key_type, keys_len;
     mf1_key_t *keys;
+    const uint8_t *expected_uid;
+    uint8_t uid_length;
 } mf1_toolbox_check_keys_on_block_in_t;
 typedef struct { uint8_t found; mf1_key_t key; } mf1_toolbox_check_keys_on_block_out_t;
-static int *p_tag_info;
+typedef struct { uint8_t uid[10], uid_len; } picc_14a_tag_t;
+static picc_14a_tag_t tag = {.uid = {1, 2, 3, 4, 5, 6, 7}, .uid_len = 7};
+static picc_14a_tag_t *p_tag_info = &tag;
 static unsigned calls, selections, lose_on;
 static unsigned attempted[8];
 static unsigned good;
 static bool slow;
 static uint16_t pcd_14a_reader_timeout_get(void) { return 25; }
-static uint32_t get_u32_tag_uid(const int *tag) { return 0x01020304; }
+static uint32_t get_u32_tag_uid(const picc_14a_tag_t *tag) { return 0x01020304; }
 static void mf1_toolbox_report_healthy(void) {}
-static uint8_t pcd_14a_reader_fast_select(int *tag) {
+static uint8_t pcd_14a_reader_fast_select(picc_14a_tag_t *tag) {
     return ++selections == lose_on ? STATUS_HF_TAG_NO : STATUS_HF_TAG_OK;
 }
-static uint8_t pcd_14a_reader_scan_auto(int *tag) { return pcd_14a_reader_fast_select(tag); }
+static uint8_t pcd_14a_reader_scan_auto(picc_14a_tag_t *tag) { return pcd_14a_reader_fast_select(tag); }
 static uint8_t authex(struct Crypto1State *cipher, uint32_t uid, uint8_t block,
     uint8_t type, uint64_t key, uint8_t mode, uint32_t *nonce, bool *retry_silence) {
     assert(uid == 0x01020304 && block == 4 && type == 0x60 && key <= 3 && calls < 8);
@@ -62,4 +66,16 @@ int main(void) {
     calls = selections = lose_on = 0; good = 1; in.keys_len = 1;
     assert(mf1_toolbox_check_keys_on_block(&in, &out) == STATUS_HF_TAG_OK);
     assert(out.found == 1 && calls == 1 && attempted[0] == 1);
+
+    uint8_t expected_uid[] = {1, 2, 3, 4, 5, 6, 7};
+    in.expected_uid = expected_uid;
+    in.uid_length = sizeof(expected_uid);
+    calls = selections = 0;
+    assert(mf1_toolbox_check_keys_on_block(&in, &out) == STATUS_HF_TAG_OK);
+    assert(out.found && calls == 1 && selections == 1);
+
+    calls = selections = 0;
+    expected_uid[0] ^= 1;
+    assert(mf1_toolbox_check_keys_on_block(&in, &out) == STATUS_HF_TAG_NO);
+    assert(!out.found && calls == 0 && selections == 1);
 }

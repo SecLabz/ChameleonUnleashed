@@ -1,7 +1,7 @@
 import { isByte } from '../documents/slot-image.mjs';
 import { COMMAND } from './commands.mjs';
 import { ST25TB, st25tbIdentity } from './st25tb-protocol.mjs';
-import { hfDocument, HF_NOTES } from '../documents/hf-image.mjs';
+import { hfDocument, HF_NOTES, isSlixL } from '../documents/hf-image.mjs';
 
 const knownBlock = (bytes) => bytes?.length === 4 && bytes.every(isByte);
 
@@ -86,34 +86,38 @@ export async function scanNfcA(device, polling = false) {
   };
 }
 
-export async function scanNfcV(device, password) {
+export async function scanNfcV(device, password, { slixL = false } = {}) {
   const data = await device.command(
     password ? COMMAND.SLIX_PRIVACY_SCAN : COMMAND.NFCV_INVENTORY,
     password || []
   );
-  const card = await nfcvIdentity(device, data);
-  if (password && card.uid.slice(0, 3).join() !== '224,4,3') {
-    throw new Error('The unlocked tag is not an ICODE SLIX-L.');
-  }
-  return card;
+  return nfcvIdentity(device, data, { slixL, password });
 }
 
-async function nfcvIdentity(device, data) {
+async function nfcvIdentity(device, data, { slixL = false, password } = {}) {
   if (data.length !== 12 || data[0] || !crcOk(data)) {
     throw new Error('Invalid NFC-V Inventory');
   }
 
+  const uid = Array.from(data.slice(2, 10)).reverse();
+  if (password && !isSlixL(uid)) {
+    throw new Error('The presented tag is not an ICODE SLIX-L.');
+  }
+  const knownGeometry = slixL && isSlixL(uid);
   const card = {
     protocol: 'nfc_v',
-    uid: Array.from(data.slice(2, 10)).reverse(),
+    uid,
     dsfid: data[1],
     afi: null,
     ic_ref: null,
-    blocks: null,
-    block_size: null
+    blocks: knownGeometry ? 8 : null,
+    block_size: knownGeometry ? 4 : null
   };
+  if (knownGeometry) {
+    return card;
+  }
   try {
-    systemInfo(await device.command(COMMAND.NFCV_SYSTEM_INFO, card.uid), card);
+    systemInfo(await device.command(COMMAND.NFCV_SYSTEM_INFO, [...uid, ...(password || [])]), card);
   } catch (error) {
     const systemInfoUnavailable =
       unsupportedCommand(error) ||
@@ -250,14 +254,29 @@ export function decodeSnapshot(data, card) {
   };
 }
 
-export async function readHf(device, document, onUpdate) {
-  if (document.unbound) {
-    const next = hfDocument(await scanNfcV(device, device.nfcvPassword));
-    if (next.type !== document.type) {
-      throw new Error(`The presented tag is not an ICODE ${document.geometry.name}.`);
+export async function readHf(
+  device,
+  source,
+  onUpdate,
+  { rescan = false, password = null, requireSlixL = false } = {}
+) {
+  let document = source;
+  if (source.unbound || rescan || requireSlixL) {
+    const card = await scanNfcV(device, password, { slixL: requireSlixL || source.type === 1500 });
+    document = hfDocument(card);
+    if (requireSlixL && document.type !== 1500) {
+      throw new Error('The presented tag is not an ICODE SLIX-L.');
     }
-    next.name = document.name;
-    document = next;
+    if (source.unbound && document.type !== source.type) {
+      throw new Error(`The presented tag is not an ICODE ${source.geometry.name}.`);
+    }
+    const sameUid = card.uid.join() === source.card.uid.join();
+    if (source.unbound || sameUid) {
+      document.name = source.name;
+    }
+    if (sameUid && source.slot) {
+      document.slot = source.slot;
+    }
   }
 
   const { card } = document;
@@ -267,13 +286,20 @@ export async function readHf(device, document, onUpdate) {
 
   const payload = [...card.uid];
   if (card.protocol === 'nfc_v') {
-    payload.push(card.blocks >> 8, card.blocks & 255, 4);
+    payload.push(card.blocks >> 8, card.blocks & 255, 4, ...(password || []));
   }
 
   onUpdate(document, 'Reading tag; Stop waits for this bounded dump…');
   const reply = await device.dump(card.protocol === 'st25tb' ? ST25TB.DUMP : COMMAND.NFCV_DUMP, payload);
   if (reply.data.length < 24) {
-    throw new Error(`Reader status ${reply.status}`);
+    if (reply.status === 0) {
+      throw new Error('Truncated reader snapshot');
+    }
+    const error = new Error(
+      { 1: 'Card not found', 6: 'Authentication rejected' }[reply.status] || `Reader status ${reply.status}`
+    );
+    error.status = reply.status;
+    throw error;
   }
 
   const snapshot = decodeSnapshot(reply.data, card);

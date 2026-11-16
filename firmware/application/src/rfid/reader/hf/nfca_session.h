@@ -2,6 +2,7 @@
 #define NFCA_SESSION_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Bounded NFC-A field lease shared by Classic, Type 2 and DESFire operations. */
 void nfca_session_open(void);
@@ -12,6 +13,7 @@ void nfca_session_close(void);
 bool nfca_session_active(void);
 bool nfca_session_ready(void);
 bool nfca_session_finish(void);
+uint32_t nfca_session_generation(void);
 void nfca_session_poll(void);
 
 #endif

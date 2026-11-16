@@ -1,5 +1,5 @@
 //! NFC-A identity, memory access and MIFARE Classic recovery.
-use crate::{Client, DeviceError, Result, command::*};
+use crate::{Client, DeviceError, RequestCancelled, Result, command::*};
 mod classic;
 mod recovery;
 pub use recovery::ClassicRecovery;
@@ -417,6 +417,29 @@ impl<'a> Reader<'a> {
         }
         Ok(())
     }
+    fn ensure_capture_session(&mut self, keep_field: bool) -> Result<()> {
+        // Restart conservatively before the firmware's two-second idle expiry.
+        if self.reading_memory
+            || !keep_field
+            || self
+                .session
+                .is_some_and(|last| last.elapsed() >= Duration::from_secs(1))
+        {
+            self.close_session()?;
+        }
+        if keep_field && self.session.is_none() && self.client.capabilities.contains(&NFCA_SESSION)
+        {
+            // Mark cleanup necessary before sending: malformed replies still need it.
+            self.session = Some(Instant::now());
+            let data = self
+                .client
+                .command(NFCA_SESSION, &[1], Duration::from_secs(3))?;
+            if !data.is_empty() {
+                return Err("Invalid capture session reply".into());
+            }
+        }
+        Ok(())
+    }
     fn verify_keys(
         &mut self,
         sector: usize,
@@ -426,23 +449,7 @@ impl<'a> Reader<'a> {
         retain: bool,
     ) -> Result<Option<[u8; 6]>> {
         self.validate_sector(sector)?;
-        if !retain
-            || self.reading_memory
-            || self
-                .session
-                .is_some_and(|last| last.elapsed() >= Duration::from_secs(1))
-        {
-            self.close_session()?;
-        }
-        if retain && self.session.is_none() {
-            self.session = Some(Instant::now());
-            let bytes = self
-                .client
-                .command(NFCA_SESSION, &[1], Duration::from_secs(3))?;
-            if !bytes.is_empty() {
-                return Err("Invalid capture session reply".into());
-            }
-        }
+        self.ensure_capture_session(retain)?;
         progress(0, candidates.len());
         for (index, batch) in candidates.chunks(42).enumerate() {
             let mut payload = vec![first_block(sector), key_type(key_b), batch.len() as u8];
@@ -486,51 +493,47 @@ impl<'a> Reader<'a> {
             return Err("Capture count must be 1..16".into());
         }
         self.validate_slots(source, target)?;
-        // Restart conservatively before the firmware's two-second idle expiry.
-        if self.reading_memory
-            || !keep_field
-            || self
-                .session
-                .is_some_and(|last| last.elapsed() >= Duration::from_secs(1))
-        {
-            self.close_session()?;
-        }
-        if keep_field && self.session.is_none() && self.client.capabilities.contains(&NFCA_SESSION)
-        {
-            // Mark cleanup necessary before sending: malformed replies still need it.
-            self.session = Some(Instant::now());
-            let data = self
-                .client
-                .command(NFCA_SESSION, &[1], Duration::from_secs(3))?;
-            if !data.is_empty() {
-                return Err("Invalid capture session reply".into());
-            }
-        }
+        self.ensure_capture_session(keep_field)?;
         let mut payload = source_payload(source, target);
         payload.extend([u8::from(chained), count as u8]);
         let profiled = self.capture_metrics.is_some();
+        let has_uid = matches!(self.card.uid.len(), 4 | 7 | 10);
+        let cancellable = !chained
+            && keep_field
+            && !profiled
+            && has_uid
+            && self.client.capabilities.contains(&COLLECT_CANCELLABLE);
         if profiled {
             payload.push(1);
-        } else if self.session.is_some() && matches!(self.card.uid.len(), 4 | 7 | 10) {
+        } else if has_uid && (self.session.is_some() || cancellable) {
             payload.push(self.card.uid.len() as u8);
             payload.extend_from_slice(&self.card.uid);
         }
         let started = Instant::now();
         let mut firmware = None;
-        let result = self
-            .client
-            .request(COLLECT_OBSERVATIONS, &payload, Duration::from_secs(15))
-            .and_then(|(status, data)| {
-                if status != 0 {
-                    if profiled && !data.is_empty() {
-                        firmware = Some(crate::capture::decode_metrics(&data, count)?);
-                    }
-                    return Err(DeviceError(status).into());
+        let timeout = Duration::from_secs(15);
+        let response = if cancellable {
+            self.client
+                .request_stream(COLLECT_CANCELLABLE, &payload, timeout, &mut |_| {
+                    Err("Unexpected progress frame for bounded capture".into())
+                })
+        } else {
+            self.client.request(COLLECT_OBSERVATIONS, &payload, timeout)
+        };
+        let result = response.and_then(|(status, data)| {
+            if cancellable && self.is_cancelled() {
+                return Err(RequestCancelled.into());
+            }
+            if status != 0 {
+                if profiled && !data.is_empty() {
+                    firmware = Some(crate::capture::decode_metrics(&data, count)?);
                 }
-                let (stats, records) = crate::capture::decode(&data, count, profiled)?;
-                firmware = stats;
-                Ok(records)
-            });
+                return Err(DeviceError(status).into());
+            }
+            let (stats, records) = crate::capture::decode(&data, count, profiled)?;
+            firmware = stats;
+            Ok(records)
+        });
         if let Some(metrics) = &mut self.capture_metrics {
             metrics.record(
                 count,

@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.2.0 — 2026-11-16
+
+- Read Tonies and prepare captures for emulation in the web app.
+- Improve SLIX-L scanning and speed up MIFARE Classic reads and recovery.
+- Cancel USB observation batches and keep AutoPwn progress stable.
+
 ## v2.1.1 — 2026-11-10
 
 - Faster Classic AutoPwn dictionary checks and Hardnested capture.

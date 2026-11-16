@@ -571,7 +571,9 @@ export async function runAutoPwn({
     }
 
     const [kind, args] = Object.entries(action)[0];
-    update({ phase: `${kind} · sector ${args.sector ?? args.target?.sector ?? ''}` });
+    if (kind !== 'ExtractTrailer') {
+      update({ phase: `${kind} · sector ${args.sector ?? args.target?.sector ?? ''}` });
+    }
 
     switch (kind) {
       case 'TestDictionary':
@@ -685,14 +687,17 @@ export async function runAutoPwn({
 
     while (snapshot.action) {
       check();
-      const result = await execute(snapshot.action);
+      const action = snapshot.action;
+      const result = await execute(action);
       snapshot = await call({
         op: 'autopwn_submit',
         session: recoverySession,
         action_id: snapshot.action_id,
         result
       });
-      update({ phase: 'Recovering keys…' });
+      if (!action.ExtractTrailer || !snapshot.action?.ExtractTrailer) {
+        update({ phase: 'Recovering keys…' });
+      }
     }
 
     for (let sector = 0; sector < geometry.sectors.length; sector++) {

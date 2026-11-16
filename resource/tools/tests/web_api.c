@@ -11,6 +11,7 @@
 #include "ble_api.h"
 #include "dataframe.h"
 #include "classic_job.h"
+#include "nfca_commands.h"
 static unsigned web_link_stops;
 bool tag_emulation_web_link_stop(void) { web_link_stops++; return false; }
 api_response_t web_device_request(api_operation_t operation,uint16_t argument,const uint8_t *body,
@@ -112,12 +113,17 @@ void nfca_session_open(void){}
 bool nfca_session_active(void){return false;}
 uint16_t nfca_prepare(uint16_t cmd,uint16_t size,const uint8_t *data){return STATUS_SUCCESS;}
 void nfca_finish(uint16_t cmd){}
+uint16_t nfca_check_keys_on_block(uint16_t size, uint8_t *data, uint8_t *out, uint16_t *length,
+                                  const uint8_t *uid, uint8_t uid_length) {
+    assert(job_rf && size == 9 && data[2] == 1);
+    assert(uid_length == 4 && !memcmp(uid, (uint8_t[]){1, 2, 3, 4}, uid_length));
+    *length = 7;
+    memset(out, 0, *length);
+    out[0] = 1;
+    return STATUS_HF_TAG_OK;
+}
+
 uint16_t nfca_command(uint16_t cmd,uint16_t size,uint8_t *data,uint8_t *out,uint16_t *length){
-    if (job_rf) {
-        if (cmd == DATA_CMD_HF14A_SCAN) { *length=5; memcpy(out,(uint8_t[]){4,1,2,3,4},5); }
-        else { *length=7; memset(out,0,7); out[0]=1; }
-        return STATUS_HF_TAG_OK;
-    }
     operations++;*length=1;out[0]=42;return STATUS_HF_TAG_OK;
 }
 static uint8_t output[512];

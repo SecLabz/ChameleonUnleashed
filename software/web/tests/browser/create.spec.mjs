@@ -109,8 +109,9 @@ for (const [type, name, blocks] of [
     await expect.poll(async () => (await draft(page)).card.uid).toEqual(uid);
     const saved = await draft(page);
     expect(saved.unbound).toBeUndefined();
+    expect(saved.emulator).toBeUndefined();
     expect(saved.memory[0]).toEqual([1, 2, 3, 0]);
-    expect(requests).toEqual([type === 1500 ? 2312 : 2300, 2301, 2308]);
+    expect(requests).toEqual(type === 1500 ? [2312, 2308] : [2300, 2301, 2308]);
     expect(JSON.stringify(saved)).not.toContain('11223344');
     await page.reload();
     await expect(page.locator('#memory-status')).toHaveText(`${blocks}/${blocks} blocks known`);

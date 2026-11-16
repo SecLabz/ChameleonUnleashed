@@ -125,16 +125,10 @@ void classic_job_poll(void) {
         }
     }
     status = nfca_prepare(command, request_size, request);
-    if (status == STATUS_SUCCESS && job.kind == 0) {
-        /* Reads and nonce captures check the UID during their own selection. */
-        status = nfca_command(DATA_CMD_HF14A_SCAN, 0, NULL, output, &size);
-        if (status == STATUS_HF_TAG_OK && (size < 1u + job.uid_length || output[0] != job.uid_length ||
-            memcmp(output + 1, job.request + 3, job.uid_length))) status = STATUS_HF_TAG_NO;
-        size = 0;
-        if (status == STATUS_HF_TAG_OK) status = STATUS_SUCCESS;
-    }
     if (status == STATUS_SUCCESS) {
-        status = nfca_command(command, request_size, request, output, &size);
+        status = job.kind == 0
+            ? nfca_check_keys_on_block(request_size, request, output, &size, job.request + 3, job.uid_length)
+            : nfca_command(command, request_size, request, output, &size);
         nfca_finish(command);
     }
     if (size > NFCA_COMMAND_OUTPUT_BYTES) { emit(STATUS_PAR_ERR, NULL, 0, 1); return; }

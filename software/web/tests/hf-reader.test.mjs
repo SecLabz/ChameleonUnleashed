@@ -77,7 +77,6 @@ for (const type of [1500, 1501]) {
     const password = type === 1500 ? [1, 2, 3, 4] : null;
     let current = document;
     const device = {
-      nfcvPassword: password,
       async command(command, payload) {
         calls.push([command, payload]);
         if (command === 2300 || command === 2312) {
@@ -91,9 +90,14 @@ for (const type of [1500, 1501]) {
         return { status: 2, data: snapshot(false, identity) };
       }
     };
-    const result = await readHf(device, document, (next) => {
-      current = next;
-    });
+    const result = await readHf(
+      device,
+      document,
+      (next) => {
+        current = next;
+      },
+      { password }
+    );
     assert.equal(current, result);
     assert.equal(result.name, 'My tag');
     assert.deepEqual(result.card.uid, identity.uid);
@@ -101,11 +105,12 @@ for (const type of [1500, 1501]) {
     assert.deepEqual(result.memory[0], [1, 2, 3, 0]);
     assert.equal(result.memory[1], null);
     assert.equal(result.capture.complete, false);
-    assert.deepEqual(calls, [
-      [password ? 2312 : 2300, password || []],
-      [2301, identity.uid],
-      [2308, [...identity.uid, 0, identity.blocks, 4]]
-    ]);
+    const expectedCalls = [[password ? 2312 : 2300, password || []]];
+    if (type !== 1500) {
+      expectedCalls.push([2301, identity.uid]);
+    }
+    expectedCalls.push([2308, [...identity.uid, 0, identity.blocks, 4, ...(password || [])]]);
+    assert.deepEqual(calls, expectedCalls);
     const restored = await restoreDraft(serializeDraft(result));
     assert.equal(restored.unbound, undefined);
     // A later read stays addressed to the adopted UID, including after reload.
@@ -146,7 +151,6 @@ test('a failed initial privacy authentication preserves the unbound draft withou
   await assert.rejects(
     readHf(
       {
-        nfcvPassword: [1, 2, 3, 4],
         async command(command) {
           assert.equal(command, 2312);
           attempts++;
@@ -154,7 +158,8 @@ test('a failed initial privacy authentication preserves the unbound draft withou
         }
       },
       document,
-      () => assert.fail('Authentication failure must not replace the draft')
+      () => assert.fail('Authentication failure must not replace the draft'),
+      { password: [1, 2, 3, 4] }
     ),
     /Authentication rejected/
   );
@@ -460,7 +465,7 @@ test('privacy scan binds the unlocked SLIX-L identity without persisting the pas
   assert.deepEqual(card.uid, uid);
   assert.deepEqual(calls, [
     [2312, password],
-    [2301, uid]
+    [2301, [...uid, ...password]]
   ]);
   assert.equal(JSON.stringify(card).includes('password'), false);
   uid[2] = 1;

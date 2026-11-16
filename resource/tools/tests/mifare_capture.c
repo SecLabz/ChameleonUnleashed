@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "app_status.h"
+#include "data_cmd.h"
 #include "hex_utils.h"
 #include "mf1_crapto1.h"
 #include "parity.h"
@@ -17,12 +18,21 @@ uint32_t SystemCoreClock = 64000000;
 #define NRF_LOG_INFO(...) ((void)0)
 /* CAPTURE DECLARATIONS */
 
-typedef struct { uint8_t uid[10], uid_len; } picc_14a_tag_t;
-static picc_14a_tag_t tag = {{0x12, 0x34, 0x56, 0x78}, 4};
+static picc_14a_tag_t tag = {.uid = {0x12, 0x34, 0x56, 0x78}, .uid_len = 4};
 static picc_14a_tag_t *p_tag_info = &tag;
 static int auth_calls, send_calls, selects, nested_selects, scans, halts, cleanups, delays;
 static int auth_failure, auth_failure_call, target_bits = 32, target_status, selection_status;
+static hf14a_config_t config;
+static uint16_t timeout = 25;
 static void nfca_session_close(void) {}
+static bool nfca_session_active(void) { return false; }
+static uint32_t nfca_session_generation(void) { return 0; }
+static const picc_14a_tag_t *mf1_toolbox_last_tag(void) { return p_tag_info; }
+static hf14a_config_t *get_hf14a_config(void) { return &config; }
+static void set_hf14a_config(const hf14a_config_t *value) { config = *value; }
+static void pcd_14a_reader_mf1_unauth(void) {}
+static uint16_t pcd_14a_reader_timeout_get(void) { return timeout; }
+static void pcd_14a_reader_timeout_set(uint16_t value) { timeout = value; }
 
 static void reset(void) {
     auth_calls = send_calls = selects = nested_selects = scans = halts = cleanups = delays = 0;
@@ -100,6 +110,35 @@ static void checked_capture(void) {
     reply = cmd_processor_mf1_collect_observations(2023, 0, sizeof(data), data);
     assert(reply->status == STATUS_HF_TAG_NO && reply->length == 0 && scans == 1 && auth_calls == 0);
 }
+static int cancel_after;
+static bool capture_cancelled(void) { return send_calls >= cancel_after; }
+
+static void cancellable_capture(void) {
+    uint8_t data[17];
+    memcpy(data, request(0, 2), 12);
+    data[12] = 4;
+    memcpy(data + 13, tag.uid, 4);
+    uint8_t output[24];
+    uint16_t length;
+
+    reset();
+    cancel_after = 3;
+    assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_HF_TAG_OK);
+    assert(length == sizeof(output) && send_calls == 2);
+
+    for (int completed = 0; completed <= 1; completed++) {
+        reset();
+        cancel_after = completed;
+        assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_CMD_ERR);
+        assert(length == 0 && send_calls == completed && scans == completed);
+    }
+
+    reset();
+    data[10] = 1;
+    assert(mf1_collect_command(sizeof(data), data, output, &length, capture_cancelled) == STATUS_PAR_ERR);
+    assert(length == 0 && scans == 0);
+}
+
 static void normalized_capture(void) {
     reset();
     uint8_t *payload = request(0, 2);
@@ -207,6 +246,7 @@ static void legacy_formats(void) {
 int main(void) {
     normalized_capture();
     checked_capture();
+    cancellable_capture();
     rejected_requests();
     profiled_capture();
     legacy_formats();

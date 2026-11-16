@@ -38,7 +38,8 @@ void usb_tearoff_receive(const uint8_t *data, size_t length) {
         if (value == marker[matched]) {
             matched++;
             if (matched == sizeof(marker)) {
-                if (active || data_frame_usb_pending(DATA_CMD_ST25TB_TEAROFF))
+                if (active || data_frame_usb_pending(DATA_CMD_ST25TB_TEAROFF) ||
+                    data_frame_usb_pending(DATA_CMD_MF1_COLLECT_CANCELLABLE))
                     cancelled = true;
                 matched = 0;
             }

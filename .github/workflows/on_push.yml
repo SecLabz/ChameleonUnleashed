@@ -106,7 +106,9 @@ jobs:
       - name: Fix up release tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/dev" -f sha="$GITHUB_SHA" -F force=true
+        run: |
+          git tag -f dev "$GITHUB_SHA"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf "x-access-token:%s" "$GH_TOKEN" | base64 | tr -d '\n')" push origin refs/tags/dev --force
   create_release:
     permissions:
       contents: write

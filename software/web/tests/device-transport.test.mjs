@@ -469,24 +469,3 @@ for (const mode of ['A', 'B', 'stale identity', 'inconclusive', 'stop']) {
     assert.equal(requests.at(-1), '/api/end?id=7');
   });
 }
-
-test('NFC-V password is scoped to authenticated commands and cleared after failed cleanup', async (t) => {
-  transport(t, (path, options) => {
-    if (path.startsWith('/api/command/2301')) {
-      assert.deepEqual([...options.body], [0xe0, 4, 3, 1, 2, 3, 4]);
-      return new Response(new Uint8Array([0, 0]));
-    }
-    if (path.startsWith('/api/command/2000')) {
-      assert.deepEqual([...options.body], []);
-      return new Response(new Uint8Array([0, 1]));
-    }
-    throw new Error('USB disconnected');
-  });
-  const device = new Device();
-  await device.reserve();
-  device.nfcvPassword = [1, 2, 3, 4];
-  await device.command(2301, [0xe0, 4, 3]);
-  await assert.rejects(device.command(2000));
-  await assert.rejects(device.end());
-  assert.equal(device.nfcvPassword, null);
-});

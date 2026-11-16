@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from native_test import function
+from native_test import function, run_c
 
 ROOT = Path(__file__).resolve().parents[2]
 HF = ROOT / 'firmware/application/src/rfid/reader/hf'
@@ -42,10 +42,27 @@ def capture_wrapper():
 static data_frame_tx_t *cmd_processor_mf1_collect_observations(uint16_t cmd,
     uint16_t status, uint16_t length, uint8_t *data) {
     uint8_t output[272]; uint16_t count;
-    status = mf1_collect_command(length, data, output, &count);
+    status = mf1_collect_command(length, data, output, &count, NULL);
     return data_frame_make(cmd, status, count, output);
 }
 """
+
+def reader_types():
+    header = (HF / 'rc522.h').read_text()
+    return '\n'.join(re.search(
+        r'typedef struct\s*\{[^}]*\}\s*PACKED\s+' + name + ';', header
+    ).group().replace('} PACKED ', '} ') for name in ['picc_14a_tag_t', 'hf14a_config_t'])
+
+
+def collect_command():
+    source = (HF / 'nfca_commands.c').read_text()
+    cache = re.search(r'static struct\s*\{[^}]*\}\s*m_session_tag;', source).group()
+    return '\n'.join([cache, *(function(source, name) for name in [
+        'session_tag_save', 'session_tag_load', 'session_tag_matches',
+        'session_tag_set_nested', 'session_tag_nested', 'sync_session_tag_cache',
+        'mf1_collect_command',
+    ]), capture_wrapper()])
+
 
 class CaptureContract(unittest.TestCase):
     def test_dictionary_retries_silent_keys_and_stops_on_lost_card(self):
@@ -67,6 +84,11 @@ class CaptureContract(unittest.TestCase):
         fixture = (Path(__file__).parent / 'tests/mifare_reader_init.c').read_text()
         run_fixture(fixture.replace('/* READER INIT FUNCTION */', source))
 
+    def test_reader_reset_checks_register_defaults_and_keeps_field_off_delay(self):
+        source = function((HF / 'rc522.c').read_text(), 'pcd_14a_reader_reset')
+        fixture = (Path(__file__).parent / 'tests/rc522_reset.c').read_text()
+        run_c(fixture.replace('/* READER RESET FUNCTION */', source))
+
     def test_sector_read_geometry_permissions_and_single_authentication(self):
         source = function((HF / 'nfca_commands.c').read_text(), 'read_sector')
         fixture = (Path(__file__).parent / 'tests/mifare_sector.c').read_text()
@@ -84,7 +106,7 @@ class CaptureContract(unittest.TestCase):
     def test_capture_and_legacy_wire_contracts(self):
         source = (HF / 'mf1_toolbox.c').read_text()
         header = (HF / 'mf1_toolbox.h').read_text()
-        declarations = []
+        declarations = [reader_types()]
         for name in ['mf1_nested_core_t', 'mf1_observation_t']:
             text = source if name == 'mf1_observation_t' else header
             declarations.append(re.search(
@@ -94,10 +116,9 @@ class CaptureContract(unittest.TestCase):
         functions = '\n'.join(function(source, name) for name in [
             'mf1_capture_observation', 'nested_recover_core',
             'static_nested_recover_core', 'mf1_hardnested_nonces_acquire',
-            'mf1_collect_observations',
+            'mf1_collect_observations_cached',
         ])
-        functions += '\n' + function((HF / 'nfca_commands.c').read_text(), 'mf1_collect_command')
-        functions += '\n' + capture_wrapper()
+        functions += '\n' + collect_command()
         fixture = (Path(__file__).parent / 'tests/mifare_capture.c').read_text()
         fixture = fixture.replace('/* CAPTURE DECLARATIONS */', '\n'.join(declarations))
         fixture = fixture.replace('/* CAPTURE FUNCTIONS */', functions)
@@ -132,9 +153,10 @@ class CaptureContract(unittest.TestCase):
         ])
         shared = (HF / 'nfca_commands.c').read_text()
         functions = '\n'.join(function(shared, name) for name in [
-            'nfca_prepare', 'nfca_finish', 'mf1_collect_command']) + '\n' + capture_wrapper() + '\n' + functions
+            'nfca_keeps_session', 'nfca_prepare', 'nfca_finish']) + '\n' + collect_command() + '\n' + functions
         functions += '\n' + function((HF / 'hf_reader.c').read_text(), 'hf_reader_supports')
         fixture = (Path(__file__).parent / 'tests/mifare_session.c').read_text()
+        fixture = fixture.replace('/* READER TYPES */', reader_types())
         fixture = fixture.replace('/* SESSION FUNCTIONS */', 'static bool ble_slave_rf_only(void) { return false; }\n' + session)
         fixture = fixture.replace('/* COMMAND FUNCTIONS */', functions)
         fixture = fixture.replace('/* DISPATCH FUNCTION */', function(source, 'on_data_frame_received'))

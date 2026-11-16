@@ -2,6 +2,7 @@
 #include "bsp_time.h"
 #include "bsp_delay.h"
 #include "usb_main.h"
+#include "usb_tearoff.h"
 #include "rfid_main.h"
 #include "ble_main.h"
 #include "syssleep.h"
@@ -296,6 +297,23 @@ static data_frame_tx_t *cmd_processor_nfca(uint16_t cmd, uint16_t status,
     uint8_t output[NFCA_COMMAND_OUTPUT_BYTES];
     uint16_t output_length;
     status = nfca_command(cmd, length, data, output, &output_length);
+    return data_frame_make(cmd, status, output_length, output);
+}
+
+static bool mf1_collect_cancelled(void) {
+    return usb_cdc_tearoff_cancelled() || !is_usb_working();
+}
+
+static data_frame_tx_t *cmd_processor_mf1_collect_cancellable(uint16_t cmd, uint16_t status,
+    uint16_t length, uint8_t *data) {
+    if (data_frame_source() != DATA_SOURCE_USB) {
+        return data_frame_make(cmd, STATUS_NOT_IMPLEMENTED, 0, NULL);
+    }
+    uint8_t output[NFCA_COMMAND_OUTPUT_BYTES];
+    uint16_t output_length;
+    usb_cdc_tearoff_begin();
+    status = mf1_collect_command(length, data, output, &output_length, mf1_collect_cancelled);
+    usb_tearoff_end();
     return data_frame_make(cmd, status, output_length, output);
 }
 
@@ -3366,6 +3384,7 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_MF1_HARDNESTED_ACQUIRE,       before_hf_reader_run,        cmd_processor_mf1_hardnested_nonces_acquire, after_hf_reader_run    },
     {    DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK,      before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
     {    DATA_CMD_MF1_COLLECT_OBSERVATIONS,     before_hf_reader_run,        cmd_processor_nfca,                          after_hf_reader_run    },
+    {    DATA_CMD_MF1_COLLECT_CANCELLABLE,     before_hf_reader_run,        cmd_processor_mf1_collect_cancellable,        after_hf_reader_run    },
     {    DATA_CMD_MF1_CAPTURE_SESSION,          NULL,                        cmd_processor_nfca_session,          NULL                   },
 
     {    DATA_CMD_LF_T55XX,                     before_reader_run,           cmd_processor_lf_t55xx,                      NULL                   },
@@ -3561,12 +3580,9 @@ void on_data_frame_received(uint16_t cmd, uint16_t status, uint16_t length, uint
         cmd != DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK && cmd != DATA_CMD_MF1_CAPTURE_SESSION &&
         !web_owned) mf1_darkside_reset();
     nfca_session_poll();
-    if (cmd != DATA_CMD_MF1_COLLECT_OBSERVATIONS && cmd != DATA_CMD_TYPE2_READ &&
-        cmd != DATA_CMD_DESFIRE_READER &&
-        cmd != DATA_CMD_MF1_READ_SECTOR &&
-        cmd != DATA_CMD_MF1_CHECK_KEYS_ON_BLOCK && cmd != DATA_CMD_MF1_BATCH &&
-        cmd != DATA_CMD_MF1_DARKSIDE_STEP && cmd != DATA_CMD_MF1_CAPTURE_SESSION
-        && !hf_reader_supports(cmd) && (!web_owned || cmd == DATA_CMD_ENTER_BOOTLOADER)) {
+    if (!nfca_keeps_session(cmd) && cmd != DATA_CMD_DESFIRE_READER &&
+        cmd != DATA_CMD_MF1_BATCH && cmd != DATA_CMD_MF1_CAPTURE_SESSION &&
+        !hf_reader_supports(cmd) && (!web_owned || cmd == DATA_CMD_ENTER_BOOTLOADER)) {
         nfca_session_close();
     }
 #endif
